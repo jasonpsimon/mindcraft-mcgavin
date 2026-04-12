@@ -376,6 +376,12 @@ export class Agent {
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
             if (res.trim().length === 0) {
+                // During self-prompting, don't go idle — nudge the bot to act
+                if (self_prompt && !this.self_prompter.isStopped()) {
+                    console.log('Empty response during self-prompt, nudging to take action');
+                    this.history.add('system', 'You must take an action toward your goal. Use a command like !inventory, !nearbyBlocks, !collectBlocks, !craftRecipe, or !discard to make progress. Do not idle.');
+                    continue;
+                }
                 console.warn('no response')
                 break; // empty response ends loop
             }

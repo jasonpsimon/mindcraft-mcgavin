@@ -488,7 +488,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }
         const itemId = bot.heldItem ? bot.heldItem.type : null
         if (!block.canHarvest(itemId)) {
-            log(bot, `Don't have right tools to harvest ${blockType}.`);
+            log(bot, `Don't have right tools to harvest ${blockType}. You need a pickaxe for stone/ore, axe for wood goes faster. Craft wooden tools first: collect logs → craft planks → craft sticks → craft wooden_pickaxe.`);
             return false;
         }
         try {
@@ -512,7 +512,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }
         catch (err) {
             if (err.name === 'NoChests') {
-                log(bot, `Failed to collect ${blockType}: Inventory full, no place to deposit.`);
+                log(bot, `Failed to collect ${blockType}: Inventory full. Use !discard("item_name", count) to drop unwanted items like rotten_flesh, gravel, or dirt to make room.`);
                 break;
             }
             else {
@@ -593,7 +593,7 @@ export async function breakBlockAt(bot, x, y, z) {
             await bot.tool.equipForBlock(block);
             const itemId = bot.heldItem ? bot.heldItem.type : null
             if (!block.canHarvest(itemId)) {
-                log(bot, `Don't have right tools to break ${block.name}.`);
+                log(bot, `Don't have right tools to break ${block.name}. Craft a pickaxe first: collect logs → !craftRecipe("oak_planks", 1) → !craftRecipe("stick", 1) → !craftRecipe("wooden_pickaxe", 1).`);
                 return false;
             }
         }
