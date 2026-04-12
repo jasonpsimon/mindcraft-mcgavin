@@ -648,6 +648,16 @@ export async function breakBlockAt(bot, x, y, z) {
      **/
     if (x == null || y == null || z == null) throw new Error('Invalid position to break block at.');
     let block = bot.blockAt(new Vec3(x, y, z));
+    if (!block) {
+        console.log(`[Skills] breakBlockAt: chunk not loaded at (${x}, ${y}, ${z}), waiting...`);
+        await bot.waitForChunksToLoad();
+        block = bot.blockAt(new Vec3(x, y, z));
+        if (!block) {
+            console.log(`[Skills] breakBlockAt: still null after chunk wait at (${x}, ${y}, ${z})`);
+            log(bot, `Block at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)} unavailable after waiting for chunks.`);
+            return false;
+        }
+    }
     if (block.name !== 'air' && block.name !== 'water' && block.name !== 'lava') {
         if (bot.modes.isOn('cheat')) {
             if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
@@ -673,16 +683,7 @@ export async function breakBlockAt(bot, x, y, z) {
                 return false;
             }
         }
-        // Fix mineflayer enchantments.concat crash on newer MC versions
-        // where .enchants may be an object/null instead of an array
-        if (bot.heldItem && !Array.isArray(bot.heldItem.enchants)) {
-            bot.heldItem.enchants = bot.heldItem.enchants ? Object.values(bot.heldItem.enchants) : [];
-        }
-        const headSlot = bot.getEquipmentDestSlot('head');
-        const helmet = bot.inventory.slots[headSlot];
-        if (helmet && !Array.isArray(helmet.enchants)) {
-            helmet.enchants = helmet.enchants ? Object.values(helmet.enchants) : [];
-        }
+        console.log(`[Skills] breakBlockAt: digging ${block.name} at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
         await bot.dig(block, true);
         log(bot, `Broke ${block.name} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
@@ -784,7 +785,16 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
         return false;
     }
 
-    const targetBlock = bot.blockAt(target_dest);
+    let targetBlock = bot.blockAt(target_dest);
+    if (!targetBlock) {
+        console.log(`[Skills] placeBlock: chunk not loaded at ${target_dest}, waiting...`);
+        await bot.waitForChunksToLoad();
+        targetBlock = bot.blockAt(target_dest);
+        if (!targetBlock) {
+            log(bot, `Block at ${target_dest} unavailable after waiting for chunks.`);
+            return false;
+        }
+    }
     if (targetBlock.name === blockType || (targetBlock.name === 'grass_block' && blockType === 'dirt')) {
         log(bot, `${blockType} already at ${targetBlock.position}.`);
         return false;
@@ -824,8 +834,12 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
     dirs.push(...Object.values(dir_map).filter(d => !dirs.includes(d)));
 
     for (let d of dirs) {
-        const block = bot.blockAt(target_dest.plus(d));
-        if (!empty_blocks.includes(block.name)) {
+        let block = bot.blockAt(target_dest.plus(d));
+        if (!block) {
+            await bot.waitForChunksToLoad();
+            block = bot.blockAt(target_dest.plus(d));
+        }
+        if (block && !empty_blocks.includes(block.name)) {
             buildOffBlock = block;
             faceVec = new Vec3(-d.x, -d.y, -d.z); // invert
             break;
@@ -1614,6 +1628,14 @@ export async function useDoor(bot, door_pos=null) {
     }
     
     let door_block = bot.blockAt(door_pos);
+    if (!door_block) {
+        await bot.waitForChunksToLoad();
+        door_block = bot.blockAt(door_pos);
+        if (!door_block) {
+            log(bot, `Door block unavailable after waiting for chunks.`);
+            return false;
+        }
+    }
     await bot.lookAt(door_pos);
     if (!door_block._properties.open)
         await bot.activateBlock(door_block);
@@ -1648,7 +1670,15 @@ export async function goToBed(bot) {
     }
     let loc = beds[0];
     await goToPosition(bot, loc.x, loc.y, loc.z);
-    const bed = bot.blockAt(loc);
+    let bed = bot.blockAt(loc);
+    if (!bed) {
+        await bot.waitForChunksToLoad();
+        bed = bot.blockAt(loc);
+        if (!bed) {
+            log(bot, `Bed block unavailable after waiting for chunks.`);
+            return false;
+        }
+    }
     await bot.sleep(bed);
     log(bot, `You are in bed.`);
     bot.modes.pause('unstuck');
@@ -1674,6 +1704,14 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
      **/
     let pos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
     let block = bot.blockAt(pos);
+    if (!block) {
+        await bot.waitForChunksToLoad();
+        block = bot.blockAt(pos);
+        if (!block) {
+            log(bot, `Block at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)} unavailable after waiting for chunks.`);
+            return false;
+        }
+    }
     log(bot, `Planting ${seedType} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
 
     if (bot.modes.isOn('cheat')) {
@@ -1693,7 +1731,11 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
         return false;
     }
     let above = bot.blockAt(new Vec3(x, y+1, z));
-    if (above.name !== 'air') {
+    if (!above) {
+        await bot.waitForChunksToLoad();
+        above = bot.blockAt(new Vec3(x, y+1, z));
+    }
+    if (above && above.name !== 'air') {
         if (block.name === 'farmland') {
             log(bot, `Land is already farmed with ${above.name}.`);
             return true;
@@ -1992,58 +2034,145 @@ function stringifyItem(bot, item) {
 
 export async function digDown(bot, distance = 10) {
     /**
-     * Digs down a specified distance. Will stop if it reaches lava, water, or a fall of >=4 blocks below the bot.
+     * Digs down a specified distance using a safe staircase pattern.
+     * Digs in the direction the bot is facing, creating a 1-wide, 3-high descending staircase.
+     * Will stop if it reaches lava, water, or the end of the world.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @param {int} distance, distance to dig down.
+     * @param {int} distance, the number of blocks to descend.
      * @returns {Promise<boolean>} true if successfully dug all the way down.
      * @example
      * await skills.digDown(bot, 10);
      **/
 
-    let start_block_pos = bot.blockAt(bot.entity.position).position;
-    for (let i = 1; i <= distance; i++) {
-        const targetBlock = bot.blockAt(start_block_pos.offset(0, -i, 0));
-        let belowBlock = bot.blockAt(start_block_pos.offset(0, -i-1, 0));
-
-        if (!targetBlock || !belowBlock) {
-            log(bot, `Dug down ${i-1} blocks, but reached the end of the world.`);
-            return true;
-        }
-
-        // Check for lava, water
-        if (targetBlock.name === 'lava' || targetBlock.name === 'water' || 
-            belowBlock.name === 'lava' || belowBlock.name === 'water') {
-            log(bot, `Dug down ${i-1} blocks, but reached ${belowBlock ? belowBlock.name : '(lava/water)'}`)
-            return false;
-        }
-
-        const MAX_FALL_BLOCKS = 2;
-        let num_fall_blocks = 0;
-        for (let j = 0; j <= MAX_FALL_BLOCKS; j++) {
-            if (!belowBlock || (belowBlock.name !== 'air' && belowBlock.name !== 'cave_air')) {
-                break;
-            }
-            num_fall_blocks++;
-            belowBlock = bot.blockAt(belowBlock.position.offset(0, -1, 0));
-        }
-        if (num_fall_blocks > MAX_FALL_BLOCKS) {
-            log(bot, `Dug down ${i-1} blocks, but reached a drop below the next block.`);
-            return false;
-        }
-
-        if (targetBlock.name === 'air' || targetBlock.name === 'cave_air') {
-            log(bot, 'Skipping air block');
-            console.log(targetBlock.position);
-            continue;
-        }
-
-        let dug = await breakBlockAt(bot, targetBlock.position.x, targetBlock.position.y, targetBlock.position.z);
-        if (!dug) {
-            log(bot, 'Failed to dig block at position:' + targetBlock.position);
-            return false;
-        }
+    // Get the bot's facing direction (snapped to nearest cardinal)
+    const yaw = bot.entity.yaw;
+    // Minecraft yaw: 0 = south (+Z), pi/2 = west (-X), pi = north (-Z), 3pi/2 = east (+X)
+    let dx = 0, dz = 0;
+    const normalized = ((yaw % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+    if (normalized >= 5.5 || normalized < 0.785) {
+        dz = 1;  // south
+    } else if (normalized >= 0.785 && normalized < 2.356) {
+        dx = -1; // west
+    } else if (normalized >= 2.356 && normalized < 3.927) {
+        dz = -1; // north
+    } else {
+        dx = 1;  // east
     }
-    log(bot, `Dug down ${distance} blocks.`);
+
+    let currentPos = bot.entity.position.floored();
+    let descended = 0;
+    const dirName = dz === 1 ? 'south' : dz === -1 ? 'north' : dx === -1 ? 'west' : 'east';
+    console.log(`[Skills] digDown: starting at ${currentPos}, heading ${dirName}, distance=${distance}`);
+
+    for (let i = 0; i < distance; i++) {
+        // Next position: one block forward and one block down
+        const nextX = currentPos.x + dx;
+        const nextY = currentPos.y - 1;
+        const nextZ = currentPos.z + dz;
+
+        console.log(`[Skills] digDown: step ${i+1}/${distance} -> (${nextX}, ${nextY}, ${nextZ})`);
+        // Check the three blocks we need to clear (feet, head, ceiling at next position)
+        const feetBlock = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+        const headBlock = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+        const ceilBlock = bot.blockAt(new Vec3(nextX, nextY + 2, nextZ));
+        // Also check what's below our feet destination (the block we'll stand on)
+        const floorBlock = bot.blockAt(new Vec3(nextX, nextY - 1, nextZ));
+
+        // Wait for chunks if needed
+        if (!feetBlock || !headBlock || !ceilBlock) {
+            console.log(`[Skills] digDown: waiting for chunks at (${nextX}, ${nextY}, ${nextZ}) — feet:${!!feetBlock} head:${!!headBlock} ceil:${!!ceilBlock}`);
+            await bot.waitForChunksToLoad();
+            const feetRetry = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+            const headRetry = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+            const ceilRetry = bot.blockAt(new Vec3(nextX, nextY + 2, nextZ));
+            if (!feetRetry || !headRetry || !ceilRetry) {
+                log(bot, `Dug down ${descended} blocks, but chunks not loaded ahead.`);
+                return descended > 0;
+            }
+        }
+
+        // Re-fetch after potential wait
+        const feet = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+        const head = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+        const ceil = bot.blockAt(new Vec3(nextX, nextY + 2, nextZ));
+        const floor = bot.blockAt(new Vec3(nextX, nextY - 1, nextZ));
+
+        console.log(`[Skills] digDown: blocks — ceil:${ceil?.name||'null'} head:${head?.name||'null'} feet:${feet?.name||'null'} floor:${floor?.name||'null'}`);
+        // Safety check: lava or water ahead
+        const dangerous = ['lava', 'water'];
+        if (feet && dangerous.includes(feet.name)) {
+            log(bot, `Dug down ${descended} blocks, but reached ${feet.name} ahead.`);
+            return false;
+        }
+        if (ceil && dangerous.includes(ceil.name)) {
+            log(bot, `Dug down ${descended} blocks, but ${ceil.name} above the next step.`);
+            return false;
+        }
+        if (floor && dangerous.includes(floor.name)) {
+            log(bot, `Dug down ${descended} blocks, but ${floor.name} below the next step.`);
+            return false;
+        }
+
+        // Safety check: big drop below the next step (cave/void)
+        if (floor && (floor.name === 'air' || floor.name === 'cave_air')) {
+            // Check how deep the fall is
+            let fallDepth = 0;
+            for (let j = 1; j <= 3; j++) {
+                const checkBlock = bot.blockAt(new Vec3(nextX, nextY - 1 - j, nextZ));
+                if (!checkBlock || (checkBlock.name !== 'air' && checkBlock.name !== 'cave_air')) break;
+                fallDepth++;
+            }
+            if (fallDepth >= 3) {
+                log(bot, `Dug down ${descended} blocks, but there's a dangerous drop ahead.`);
+                return false;
+            }
+        }
+
+        // Dig ceiling block (top of 3-high tunnel) if solid
+        if (ceil && ceil.name !== 'air' && ceil.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY + 2, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase ceiling level.`);
+                return false;
+            }
+        }
+
+        // Dig the head block if solid
+        if (head && head.name !== 'air' && head.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY + 1, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase head level.`);
+                return false;
+            }
+        }
+
+        // Dig the feet block if solid
+        if (feet && feet.name !== 'air' && feet.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase feet level.`);
+                return false;
+            }
+        }
+
+        // Move to the new position
+        console.log(`[Skills] digDown: moving to (${nextX}, ${nextY}, ${nextZ})`);
+        try {
+            await goToPosition(bot, nextX + 0.5, nextY, nextZ + 0.5, 0);
+        } catch (e) {
+            console.log(`[Skills] digDown: pathfinder failed, using simple move — ${e.message}`);
+            // Pathfinder can struggle with tight 1-wide stairs, try simple move
+            bot.setControlState('forward', true);
+            await new Promise(resolve => setTimeout(resolve, 400));
+            bot.setControlState('forward', false);
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+
+        currentPos = new Vec3(nextX, nextY, nextZ);
+        descended++;
+    }
+
+    log(bot, `Dug a staircase down ${descended} blocks.`);
     return true;
 }
 
@@ -2055,7 +2184,11 @@ export async function goToSurface(bot) {
      **/
     const pos = bot.entity.position;
     for (let y = 360; y > -64; y--) { // probably not the best way to find the surface but it works
-        const block = bot.blockAt(new Vec3(pos.x, y, pos.z));
+        let block = bot.blockAt(new Vec3(pos.x, y, pos.z));
+        if (!block) {
+            await bot.waitForChunksToLoad();
+            block = bot.blockAt(new Vec3(pos.x, y, pos.z));
+        }
         if (!block || block.name === 'air' || block.name === 'cave_air') {
             continue;
         }
@@ -2151,14 +2284,14 @@ export async function useToolOn(bot, toolName, targetName) {
     }
     const blockInView = bot.blockAtCursor(5);
     if (viewBlocked()) {
-        log(bot, `Block ${blockInView.name} is in the way, moving closer...`);
+        log(bot, `Block ${blockInView?.name || 'unknown'} is in the way, moving closer...`);
         // choose random block next to target block, go to it
         const nearbyPos = block.position.offset(Math.random() * 2 - 1, 0, Math.random() * 2 - 1);
         await goToPosition(bot, nearbyPos.x, nearbyPos.y, nearbyPos.z, 1);
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5));
         if (viewBlocked()) {
             const blockInView = bot.blockAtCursor(5);
-            log(bot, `Block ${blockInView.name} is in the way, not using ${toolName}.`);
+            log(bot, `Block ${blockInView?.name || 'unknown'} is in the way, not using ${toolName}.`);
             return false;
         }
     }

@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..2ca8205 100644
+index b38bd30..d6a7119 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -14,6 +14,7 @@ const interactableBlocks = require('./lib/interactable.json')
@@ -21,6 +21,17 @@ index b38bd30..2ca8205 100644
      const generator = bot.pathfinder.getPathFromTo(movements, bot.entity.position, goal, { timeout })
      const { value: { result, astarContext: context } } = generator.next()
      astarContext = context
+@@ -116,8 +121,8 @@ function inject (bot) {
+ 
+   function detectDiggingStopped () {
+     digging = false
+-    bot.removeAllListeners('diggingAborted', detectDiggingStopped)
+-    bot.removeAllListeners('diggingCompleted', detectDiggingStopped)
++    bot.removeListener('diggingAborted', detectDiggingStopped)
++    bot.removeListener('diggingCompleted', detectDiggingStopped)
+   }
+ 
+   function resetPath (reason, clearStates = true) {
 @@ -170,6 +175,16 @@ function inject (bot) {
        const curPoint = path[i]
        if (curPoint.toBreak.length > 0 || curPoint.toPlace.length > 0) break

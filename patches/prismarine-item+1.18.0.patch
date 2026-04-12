@@ -1,0 +1,57 @@
+diff --git a/node_modules/prismarine-item/index.js b/node_modules/prismarine-item/index.js
+index 47a27b0..5646bc4 100644
+--- a/node_modules/prismarine-item/index.js
++++ b/node_modules/prismarine-item/index.js
+@@ -259,7 +259,28 @@ function loader (registryOrVersion) {
+       const useStoredEnchantments = registry.supportFeature('booksUseStoredEnchantments') && this.name === 'enchanted_book'
+ 
+       if (this.componentMap?.has('enchantments')) {
+-        return this.componentMap.get('enchantments').data
++        const rawData = this.componentMap.get('enchantments').data
++        // Normalize componentMap data to [{name, lvl}] format
++        if (!Array.isArray(rawData)) return []
++        return rawData.map(entry => {
++          if (entry.name && entry.lvl !== undefined) return entry
++          // Handle numeric ID format from protocol
++          if (entry.id !== undefined && entry.level !== undefined) {
++            const enchant = registry.enchantments[entry.id]
++            return { name: enchant?.name || null, lvl: entry.level }
++          }
++          // Handle {type: {value}, lvl: {value}} NBT-like format
++          const id = entry.id?.value ?? entry.id
++          const lvl = entry.lvl?.value ?? entry.lvl ?? entry.level ?? 1
++          if (typeof id === 'number') {
++            const enchant = registry.enchantments[id]
++            return { name: enchant?.name || null, lvl }
++          }
++          if (typeof id === 'string') {
++            return { name: id.replace('minecraft:', ''), lvl }
++          }
++          return { name: null, lvl }
++        }).filter(e => e.name != null)
+       }
+ 
+       if (typeOfEnchantLevelValue === 'short' && enchantNbtKey === 'ench') {
+@@ -300,13 +321,15 @@ function loader (registryOrVersion) {
+ 
+       const useStoredEnchants = this.name === 'enchanted_book' && registry.supportFeature('booksUseStoredEnchantments')
+ 
+-      const enchs = normalizedEnchArray.map(({ name, lvl }) => {
+-        const value =
+-          type === 'short'
+-            ? registry.enchantmentsByName[name].id
+-            : `minecraft:${registry.enchantmentsByName[name].name}`
+-        return { id: { type, value }, lvl: nbt.short(lvl) }
+-      })
++      const enchs = normalizedEnchArray
++        .filter(entry => entry.name && registry.enchantmentsByName[entry.name])
++        .map(({ name, lvl }) => {
++          const value =
++            type === 'short'
++              ? registry.enchantmentsByName[name].id
++              : `minecraft:${registry.enchantmentsByName[name].name}`
++          return { id: { type, value }, lvl: nbt.short(lvl) }
++        })
+ 
+       if (enchs.length !== 0) {
+         if (!this.nbt) this.nbt = nbt.comp({})

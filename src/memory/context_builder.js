@@ -173,7 +173,7 @@ export class ContextBuilder {
         identity += rules + '\n';
 
         // Personality — compact
-        identity += `Be brief. Use commands, don't describe actions. Respond only as ${botName}. Idle = tab '\\t'.\n`;
+        identity += `Be brief. Use commands, don't describe actions. Respond only as ${botName}. Always respond to players conversationally. Only use tab '\\t' when self-prompting and there's nothing to do.\n`;
 
         if (goal) {
             identity += `GOAL: "${goal}"\n`;
