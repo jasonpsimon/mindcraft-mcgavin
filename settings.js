@@ -1,16 +1,16 @@
 const settings = {
     "minecraft_version": "auto", // or specific version like "1.21.6"
-    "host": "127.0.0.1", // or "localhost", "your.ip.address.here"
+    "host": "192.168.1.198", // or "localhost", "your.ip.address.here"
     "port": 55916, // set to -1 to automatically scan for open ports
-    "auth": "offline", // or "microsoft"
+    "auth": "microsoft", // or "microsoft"
 
     // the mindserver manages all agents and hosts the UI
-    "mindserver_port": 8080,
-    "auto_open_ui": true, // opens UI in browser on startup
+    "mindserver_port": 8082,
+    "auto_open_ui": false, // opens UI in browser on startup
     
     "base_profile": "survival", // survival, assistant, creative, or god_mode
     "profiles": [
-        "./mcgavin.json", // McGavin: Gemma 4 E4B IT via LM Studio — optimized for local inference
+        "./ThatCoolGuyDude.json",
         // "./andy.json",
         // "./profiles/gpt.json",
         // "./profiles/claude.json",
