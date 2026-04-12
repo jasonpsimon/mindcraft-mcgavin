@@ -673,6 +673,16 @@ export async function breakBlockAt(bot, x, y, z) {
                 return false;
             }
         }
+        // Fix mineflayer enchantments.concat crash on newer MC versions
+        // where .enchants may be an object/null instead of an array
+        if (bot.heldItem && !Array.isArray(bot.heldItem.enchants)) {
+            bot.heldItem.enchants = bot.heldItem.enchants ? Object.values(bot.heldItem.enchants) : [];
+        }
+        const headSlot = bot.getEquipmentDestSlot('head');
+        const helmet = bot.inventory.slots[headSlot];
+        if (helmet && !Array.isArray(helmet.enchants)) {
+            helmet.enchants = helmet.enchants ? Object.values(helmet.enchants) : [];
+        }
         await bot.dig(block, true);
         log(bot, `Broke ${block.name} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
