@@ -10,6 +10,9 @@ export class SelfPrompter {
         this.prompt = '';
         this.idle_time = 0;
         this.cooldown = 2000;
+        this.baseCooldown = 2000;
+        this.maxCooldown = 10000;  // slow down to 10s when stuck
+        this._consecutiveNoProgress = 0;
     }
 
     start(prompt) {
@@ -68,6 +71,9 @@ export class SelfPrompter {
             let used_command = await this.agent.handleMessage('system', msg, -1);
             if (!used_command) {
                 no_command_count++;
+                this._consecutiveNoProgress++;
+                // Adaptive cooldown: slow down when not making progress
+                this.cooldown = Math.min(this.maxCooldown, this.baseCooldown * (1 + this._consecutiveNoProgress));
                 if (no_command_count >= MAX_NO_COMMAND) {
                     let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
                     this.agent.openChat(out);
@@ -78,6 +84,8 @@ export class SelfPrompter {
             }
             else {
                 no_command_count = 0;
+                this._consecutiveNoProgress = 0;
+                this.cooldown = this.baseCooldown; // reset to fast when making progress
                 await new Promise(r => setTimeout(r, this.cooldown));
             }
         }

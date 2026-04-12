@@ -348,6 +348,14 @@ export class Prompter {
                 }
             } catch (e) { /* silent */ }
 
+            // Long-term memory (persistent knowledge across sessions)
+            let longTermKnowledge = '';
+            try {
+                if (agent.long_term_memory && contextQuery) {
+                    longTermKnowledge = await agent.long_term_memory.getFormattedKnowledge(contextQuery) || '';
+                }
+            } catch (e) { /* silent */ }
+
             // Examples
             let examples = '';
             try {
@@ -363,7 +371,7 @@ export class Prompter {
                 deltaState,
                 turns: messages,
                 commandDocs,
-                episodicMemory,
+                episodicMemory: episodicMemory + (longTermKnowledge ? '\n' + longTermKnowledge : ''),
                 legacyMemory: agent.history.memory,
                 examples
             });

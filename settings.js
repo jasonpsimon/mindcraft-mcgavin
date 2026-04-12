@@ -27,7 +27,7 @@ const settings = {
         // individual profiles override values from the base profile
     ],
 
-    "load_memory": false, // load memory from previous session
+    "load_memory": true, // load memory from previous session
     "init_message": "Respond with hello world and your name", // sends to all on spawn
     "only_chat_with": [], // users that the bots listen to and send general messages to. if empty it will chat publicly
 
@@ -66,7 +66,7 @@ const settings = {
 
     // Confidence Engine: bypasses LLM for high-confidence repeated actions
     "confidence_engine": {
-        "highThreshold": 0.85, // ≥ this → execute cached action directly, no LLM call
+        "highThreshold": 0.98, // ≥ this (98%) → execute cached action directly, no LLM call
         "mediumThreshold": 0.5, // ≥ this → call LLM but provide cached action as hint
         "maxEntries": 1000, // max procedural memory entries before eviction
         "decayRate": 0.01, // confidence decay per hour unused
