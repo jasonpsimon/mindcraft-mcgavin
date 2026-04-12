@@ -1,5 +1,5 @@
 import OpenAIApi from 'openai';
-import { strictFormat } from '../utils/text.js';
+import { strictFormat, stripThinkTags } from '../utils/text.js';
 import { withLLMRetry } from '../utils/retry.js';
 
 export class LMStudio {
@@ -33,11 +33,7 @@ export class LMStudio {
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
-            res = completion.choices[0].message.content;
-            if (res.includes('</think>')) {
-                if (!res.includes('<think>')) res = '<think>' + res;
-                res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            }
+            res = stripThinkTags(completion.choices[0].message.content);
         } catch (err) {
             if ((err.message === 'Context length exceeded' || err.code === 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');

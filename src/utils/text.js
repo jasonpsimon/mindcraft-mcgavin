@@ -76,3 +76,14 @@ export function strictFormat(turns) {
     }
     return messages;
 }
+
+/**
+ * Strip <think>...</think> tags from model output.
+ * Handles missing opening tags (some models omit them) and multiple blocks.
+ * Returns the original text unchanged if no </think> tag is present.
+ */
+export function stripThinkTags(text) {
+    if (!text || !text.includes('</think>')) return text;
+    if (!text.includes('<think>')) text = '<think>' + text;
+    return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}

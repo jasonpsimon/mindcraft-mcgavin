@@ -1,4 +1,5 @@
 import { getBlockId, getItemId } from "../../utils/mcdata.js";
+import { cosineSimilarity } from "../../utils/math.js";
 import { actionsList } from './actions.js';
 import { queryList } from './queries.js';
 
@@ -330,14 +331,7 @@ export async function getFilteredCommandDocs(agent, context, embeddingModel, sel
             if (agent.blocked_actions.includes(name)) continue;
             if (ALWAYS_INCLUDE.has(name)) continue; // handled separately
 
-            let dot = 0, normA = 0, normB = 0;
-            for (let i = 0; i < contextEmbedding.length; i++) {
-                dot += contextEmbedding[i] * embedding[i];
-                normA += contextEmbedding[i] * contextEmbedding[i];
-                normB += embedding[i] * embedding[i];
-            }
-            const denom = Math.sqrt(normA) * Math.sqrt(normB);
-            const similarity = denom === 0 ? 0 : dot / denom;
+            const similarity = cosineSimilarity(contextEmbedding, embedding);
 
             scored.push({ name, similarity });
         }

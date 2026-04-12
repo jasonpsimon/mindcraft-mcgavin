@@ -2,7 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync} from 'fs';
 import { Examples } from '../utils/examples.js';
 import { getCommandDocs, getFilteredCommandDocs, initCommandDocEmbeddings } from '../agent/commands/index.js';
 import { SkillLibrary } from "../agent/library/skill_library.js";
-import { stringifyTurns } from '../utils/text.js';
+import { stringifyTurns, stripThinkTags } from '../utils/text.js';
 import { getCommand } from '../agent/commands/index.js';
 import settings from '../agent/settings.js';
 import { promises as fs } from 'fs';
@@ -371,7 +371,10 @@ export class Prompter {
             return systemPrompt;
         } catch (err) {
             console.warn('[ContextBuilder] Failed, falling back to replaceStrings:', err.message);
-            return null; // signal to caller to use fallback
+            const fallbackPrompt = await this.replaceStrings(
+                this.profile.conversing, messages, this.convo_examples
+            );
+            return fallbackPrompt;
         }
     }
 
@@ -403,10 +406,7 @@ export class Prompter {
                 return this.promptConvo(messages);
             }
 
-            if (generation?.includes('</think>')) {
-                const [_, afterThink] = generation.split('</think>');
-                generation = afterThink;
-            }
+            generation = stripThinkTags(generation);
 
             console.log('[FastModel] Generated:', generation);
             await this._saveLog(prompt, messages, generation, 'fast_conversation');
@@ -427,16 +427,11 @@ export class Prompter {
                 return '';
             }
 
-            let prompt;
             // Use ContextBuilder when enabled — token-budgeted prompt assembly
-            if (settings.use_context_builder) {
-                prompt = await this._buildContextPrompt(messages);
-            }
-            // Fallback to template-based replacement
-            if (!prompt) {
-                prompt = this.profile.conversing;
-                prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
-            }
+            // _buildContextPrompt handles its own fallback to replaceStrings on failure
+            const prompt = settings.use_context_builder
+                ? await this._buildContextPrompt(messages)
+                : await this.replaceStrings(this.profile.conversing, messages, this.convo_examples);
             let generation;
 
             try {
@@ -464,10 +459,7 @@ export class Prompter {
                 return '';
             }
 
-            if (generation?.includes('</think>')) {
-                const [_, afterThink] = generation.split('</think>')
-                generation = afterThink
-            }
+            generation = stripThinkTags(generation);
 
             return generation;
         }
@@ -497,10 +489,7 @@ export class Prompter {
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
         let resp = await this.chat_model.sendRequest([], prompt);
         await this._saveLog(prompt, to_summarize, resp, 'memSaving');
-        if (resp?.includes('</think>')) {
-            const [_, afterThink] = resp.split('</think>')
-            resp = afterThink;
-        }
+        resp = stripThinkTags(resp);
         return resp;
     }
 

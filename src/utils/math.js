@@ -9,5 +9,6 @@ export function cosineSimilarity(a, b) {
     }
     magnitudeA = Math.sqrt(magnitudeA);
     magnitudeB = Math.sqrt(magnitudeB);
-    return dotProduct / (magnitudeA * magnitudeB);  // calculate cosine similarity
+    const denom = magnitudeA * magnitudeB;
+    return denom === 0 ? 0 : dotProduct / denom;  // calculate cosine similarity
 }
