@@ -122,9 +122,12 @@ export class EventPipeline {
                 this.stats.pollCycles++;
 
                 // Adaptive interval: slower when idle, faster when active
+                // "Effectively idle" = not executing an action, even if self-prompter
+                // is active (it's just waiting in its cooldown, not doing work)
                 let interval = this.pollingInterval;
                 if (this.adaptivePolling) {
-                    interval = this.agent.isIdle() ? this.idleInterval : this.activeInterval;
+                    const effectivelyIdle = !this.agent.actions.executing;
+                    interval = effectivelyIdle ? this.idleInterval : this.activeInterval;
                 }
 
                 let remaining = interval - (Date.now() - start);
@@ -177,7 +180,7 @@ export class EventPipeline {
         return {
             ...this.stats,
             currentInterval: this.adaptivePolling
-                ? (this.agent.isIdle() ? this.idleInterval : this.activeInterval)
+                ? (!this.agent.actions.executing ? this.idleInterval : this.activeInterval)
                 : this.pollingInterval
         };
     }
