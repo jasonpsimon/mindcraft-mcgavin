@@ -1,42 +1,80 @@
 /**
  * Episodic Memory — Semantic event storage replacing the lossy 500-char summary.
  *
- * Stores conversation chunks and events as embedded vectors, retrieves by
- * semantic relevance at prompt time. Uses the same embedding model as the
- * example selector (from prompter), so no new dependencies.
+ * Uses Vectra (pure Node.js, file-backed vector index) for storage and
+ * semantic retrieval. No external server needed — sub-millisecond lookups.
  *
  * Architecture:
  *   - Each "episode" is a chunk of conversation turns + metadata
  *   - Episodes are embedded using the model's embed() function
- *   - Retrieval: embed the current context, find top-K most similar episodes
- *   - File-backed persistence to ./bots/{name}/episodic_memory.json
+ *   - Stored in a Vectra LocalIndex at ./bots/{name}/episodic_index/
+ *   - Retrieval: embed the current context, query Vectra for top-K similar
+ *   - Falls back to word-overlap similarity if embedding model is unavailable
  *
  * Replaces the summarizeMemories() flow in history.js:
  *   OLD: chunk 5 turns → LLM summarize → truncate to 500 chars → single string
- *   NEW: chunk turns → embed → store → retrieve top-K relevant at prompt time
- *
- * Falls back to word-overlap similarity if embedding model is unavailable.
+ *   NEW: chunk turns → embed → store in Vectra → retrieve top-K at prompt time
  */
 
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { LocalIndex } from 'vectra';
+import { mkdirSync, existsSync } from 'fs';
 
 export class EpisodicMemory {
     constructor(agentName, embeddingModel = null, options = {}) {
         this.agentName = agentName;
         this.embeddingModel = embeddingModel;
-        this.memoryDir = `./bots/${agentName}`;
-        this.memoryFile = `${this.memoryDir}/episodic_memory.json`;
+
+        // Vectra index directory
+        this.indexPath = `./bots/${agentName}/episodic_index`;
+        this.index = null; // initialized lazily in _ensureIndex()
+        this._indexReady = false;
 
         // Config
-        this.maxEpisodes = options.maxEpisodes || 200;
-        this.topK = options.topK || 3; // number of episodes to retrieve
-        this.maxTokensPerEpisode = options.maxTokensPerEpisode || 300; // rough char limit per episode in prompt
+        this.maxEpisodes = options.maxEpisodes || 500;
+        this.topK = options.topK || 3;
+        this.maxTokensPerEpisode = options.maxTokensPerEpisode || 300;
 
-        // Episodes: array of { id, text, embedding, timestamp, metadata }
-        this.episodes = [];
+        // In-memory fallback for when Vectra or embeddings aren't available
+        // Also serves as a fast lookup for metadata (Vectra stores metadata but
+        // listing all items for eviction scoring is cheaper from memory)
+        this.episodeCache = [];
         this.nextId = 0;
+    }
 
-        this.load();
+    /**
+     * Ensure the Vectra index is created and ready.
+     * Called lazily on first write/read operation.
+     */
+    async _ensureIndex() {
+        if (this._indexReady) return;
+
+        try {
+            mkdirSync(this.indexPath, { recursive: true });
+            this.index = new LocalIndex(this.indexPath);
+
+            if (!await this.index.isIndexCreated()) {
+                await this.index.createIndex();
+                console.log(`[EpisodicMemory] Created Vectra index at ${this.indexPath}`);
+            } else {
+                // Load existing items into cache
+                const items = await this.index.listItems();
+                this.episodeCache = items.map(item => ({
+                    id: item.id,
+                    text: item.metadata.text,
+                    timestamp: item.metadata.timestamp,
+                    metadata: item.metadata
+                }));
+                this.nextId = this.episodeCache.length > 0
+                    ? Math.max(...this.episodeCache.map(e => parseInt(e.id.replace('ep-', '')) || 0)) + 1
+                    : 0;
+                console.log(`[EpisodicMemory] Loaded ${this.episodeCache.length} episodes from Vectra for ${this.agentName}`);
+            }
+
+            this._indexReady = true;
+        } catch (err) {
+            console.error('[EpisodicMemory] Failed to initialize Vectra index:', err.message);
+            this._indexReady = false;
+        }
     }
 
     /**
@@ -50,57 +88,51 @@ export class EpisodicMemory {
         const text = this._turnsToText(turns);
         if (!text || text.trim().length === 0) return;
 
-        let embedding = null;
-        try {
-            if (this.embeddingModel) {
-                embedding = await this.embeddingModel.embed(text);
-            }
-        } catch (err) {
-            console.warn('[EpisodicMemory] Embedding failed, storing without vector:', err.message);
-        }
+        const compressed = this._compressText(text);
+        const id = `ep-${this.nextId++}`;
+        const timestamp = Date.now();
 
-        const episode = {
-            id: this.nextId++,
-            text: this._compressText(text),
-            embedding,
-            timestamp: Date.now(),
-            metadata
+        const itemMetadata = {
+            text: compressed,
+            timestamp,
+            type: metadata.type || 'conversation',
+            goal: metadata.goal || null
         };
 
-        this.episodes.push(episode);
-        this._enforceMaxEpisodes();
-        this.save();
+        // Try to embed and store in Vectra
+        if (this.embeddingModel) {
+            try {
+                await this._ensureIndex();
+                const vector = await this.embeddingModel.embed(compressed);
 
-        console.log(`[EpisodicMemory] Stored episode ${episode.id} (${this.episodes.length} total)`);
-        return episode;
+                if (this.index && vector) {
+                    await this.index.insertItem({
+                        id,
+                        vector,
+                        metadata: itemMetadata
+                    });
+                }
+            } catch (err) {
+                console.warn('[EpisodicMemory] Vectra insert failed, using cache only:', err.message);
+            }
+        }
+
+        // Always add to in-memory cache
+        this.episodeCache.push({ id, text: compressed, timestamp, metadata: itemMetadata });
+        await this._enforceMaxEpisodes();
+
+        console.log(`[EpisodicMemory] Stored episode ${id} (${this.episodeCache.length} total)`);
+        return { id, text: compressed, timestamp, metadata: itemMetadata };
     }
 
     /**
      * Add a single notable event (death, discovery, achievement, etc.)
      */
     async addEvent(description, metadata = {}) {
-        let embedding = null;
-        try {
-            if (this.embeddingModel) {
-                embedding = await this.embeddingModel.embed(description);
-            }
-        } catch (err) {
-            console.warn('[EpisodicMemory] Event embedding failed:', err.message);
-        }
-
-        const episode = {
-            id: this.nextId++,
-            text: description,
-            embedding,
-            timestamp: Date.now(),
-            metadata: { ...metadata, type: 'event' }
-        };
-
-        this.episodes.push(episode);
-        this._enforceMaxEpisodes();
-        this.save();
-
-        return episode;
+        return this.addEpisode(
+            [{ role: 'system', content: description }],
+            { ...metadata, type: 'event' }
+        );
     }
 
     /**
@@ -112,32 +144,30 @@ export class EpisodicMemory {
      */
     async retrieve(query, k = null) {
         k = k || this.topK;
-        if (this.episodes.length === 0) return [];
+        if (this.episodeCache.length === 0) return [];
 
-        let scored;
-
-        if (this.embeddingModel && this.episodes.some(e => e.embedding)) {
-            // Semantic retrieval via embeddings
+        // Try Vectra semantic search first
+        if (this.embeddingModel && this._indexReady && this.index) {
             try {
-                const queryEmbedding = await this.embeddingModel.embed(query);
-                scored = this.episodes
-                    .filter(e => e.embedding)
-                    .map(e => ({
-                        episode: e,
-                        score: this._cosineSimilarity(queryEmbedding, e.embedding)
+                const queryVector = await this.embeddingModel.embed(query);
+                const results = await this.index.queryItems(queryVector, query, k);
+
+                if (results && results.length > 0) {
+                    return results.map(r => ({
+                        id: r.item.id,
+                        text: r.item.metadata.text,
+                        timestamp: r.item.metadata.timestamp,
+                        metadata: r.item.metadata,
+                        score: r.score
                     }));
+                }
             } catch (err) {
-                console.warn('[EpisodicMemory] Query embedding failed, using word overlap:', err.message);
-                scored = this._wordOverlapScoring(query);
+                console.warn('[EpisodicMemory] Vectra query failed, falling back to word overlap:', err.message);
             }
-        } else {
-            // Fallback: word overlap
-            scored = this._wordOverlapScoring(query);
         }
 
-        // Sort by relevance, take top-K
-        scored.sort((a, b) => b.score - a.score);
-        return scored.slice(0, k).map(s => s.episode);
+        // Fallback: word-overlap scoring on cache
+        return this._wordOverlapRetrieval(query, k);
     }
 
     /**
@@ -151,7 +181,7 @@ export class EpisodicMemory {
         const episodes = await this.retrieve(query, k);
         if (episodes.length === 0) return '';
 
-        const parts = episodes.map((ep, i) => {
+        const parts = episodes.map(ep => {
             const age = this._formatAge(ep.timestamp);
             let text = ep.text;
             if (text.length > this.maxTokensPerEpisode) {
@@ -161,6 +191,63 @@ export class EpisodicMemory {
         });
 
         return 'Relevant memories:\n' + parts.join('\n');
+    }
+
+    /**
+     * Re-embed all cached episodes that may lack vectors in Vectra.
+     * Called after the embedding model becomes available.
+     */
+    async reembed() {
+        if (!this.embeddingModel) return;
+        await this._ensureIndex();
+        if (!this.index) return;
+
+        let count = 0;
+        for (const ep of this.episodeCache) {
+            // Check if item exists in Vectra
+            const existing = await this.index.getItem(ep.id);
+            if (!existing) {
+                try {
+                    const vector = await this.embeddingModel.embed(ep.text);
+                    if (vector) {
+                        await this.index.insertItem({
+                            id: ep.id,
+                            vector,
+                            metadata: ep.metadata || {
+                                text: ep.text,
+                                timestamp: ep.timestamp,
+                                type: 'conversation'
+                            }
+                        });
+                        count++;
+                    }
+                } catch (err) {
+                    // Skip failed embeddings
+                }
+            }
+        }
+        if (count > 0) {
+            console.log(`[EpisodicMemory] Re-embedded ${count} episodes into Vectra`);
+        }
+    }
+
+    /**
+     * Word-overlap fallback retrieval when embeddings aren't available.
+     */
+    _wordOverlapRetrieval(query, k) {
+        const queryWords = this._getWords(query);
+        const scored = this.episodeCache.map(ep => {
+            const epWords = this._getWords(ep.text);
+            const intersection = queryWords.filter(w => epWords.includes(w));
+            const union = queryWords.length + epWords.length - intersection.length;
+            return {
+                ...ep,
+                score: union === 0 ? 0 : intersection.length / union
+            };
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+        return scored.slice(0, k);
     }
 
     /**
@@ -179,41 +266,10 @@ export class EpisodicMemory {
      */
     _compressText(text) {
         return text
-            .replace(/\n{3,}/g, '\n\n')     // collapse multiple newlines
-            .replace(/\s{2,}/g, ' ')          // collapse multiple spaces
+            .replace(/\n{3,}/g, '\n\n')
+            .replace(/\s{2,}/g, ' ')
             .trim()
-            .substring(0, 1000);              // hard cap per episode
-    }
-
-    /**
-     * Cosine similarity between two vectors.
-     */
-    _cosineSimilarity(a, b) {
-        if (!a || !b || a.length !== b.length) return 0;
-        let dotProduct = 0, normA = 0, normB = 0;
-        for (let i = 0; i < a.length; i++) {
-            dotProduct += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-        const denom = Math.sqrt(normA) * Math.sqrt(normB);
-        return denom === 0 ? 0 : dotProduct / denom;
-    }
-
-    /**
-     * Fallback scoring using word overlap (same approach as upstream examples.js).
-     */
-    _wordOverlapScoring(query) {
-        const queryWords = this._getWords(query);
-        return this.episodes.map(e => {
-            const epWords = this._getWords(e.text);
-            const intersection = queryWords.filter(w => epWords.includes(w));
-            const union = queryWords.length + epWords.length - intersection.length;
-            return {
-                episode: e,
-                score: union === 0 ? 0 : intersection.length / union
-            };
-        });
+            .substring(0, 1000);
     }
 
     _getWords(text) {
@@ -233,93 +289,60 @@ export class EpisodicMemory {
     }
 
     /**
-     * Evict oldest, lowest-relevance episodes when over capacity.
-     * Keeps recent episodes and high-metadata episodes (events, achievements).
+     * Evict oldest, lowest-value episodes when over capacity.
+     * Removes from both cache and Vectra index.
      */
-    _enforceMaxEpisodes() {
-        if (this.episodes.length <= this.maxEpisodes) return;
+    async _enforceMaxEpisodes() {
+        if (this.episodeCache.length <= this.maxEpisodes) return;
 
         const now = Date.now();
-        const scored = this.episodes.map((ep, idx) => {
+        const scored = this.episodeCache.map((ep, idx) => {
             const ageHours = (now - ep.timestamp) / (1000 * 60 * 60);
             const recency = 1 / (1 + ageHours / 24);
             const isEvent = ep.metadata?.type === 'event' ? 0.3 : 0;
-            return { idx, score: recency + isEvent };
+            return { idx, id: ep.id, score: recency + isEvent };
         });
 
         scored.sort((a, b) => a.score - b.score);
-        const toRemove = new Set(scored.slice(0, this.episodes.length - this.maxEpisodes).map(s => s.idx));
-        this.episodes = this.episodes.filter((_, idx) => !toRemove.has(idx));
-    }
+        const toRemove = scored.slice(0, this.episodeCache.length - this.maxEpisodes);
 
-    save() {
-        try {
-            mkdirSync(this.memoryDir, { recursive: true });
-            // Save without embeddings to keep file size reasonable
-            // Re-embed on load if model is available
-            const data = {
-                nextId: this.nextId,
-                episodes: this.episodes.map(e => ({
-                    ...e,
-                    embedding: null // don't persist embeddings — re-embed on load if needed
-                }))
-            };
-            writeFileSync(this.memoryFile, JSON.stringify(data, null, 2));
-        } catch (error) {
-            console.error('[EpisodicMemory] Failed to save:', error);
-        }
-    }
-
-    load() {
-        try {
-            if (!existsSync(this.memoryFile)) return;
-            const data = JSON.parse(readFileSync(this.memoryFile, 'utf8'));
-            this.episodes = data.episodes || [];
-            this.nextId = data.nextId || this.episodes.length;
-            console.log(`[EpisodicMemory] Loaded ${this.episodes.length} episodes for ${this.agentName}`);
-        } catch (error) {
-            console.error('[EpisodicMemory] Failed to load:', error);
-            this.episodes = [];
-        }
-    }
-
-    /**
-     * Re-embed all episodes that lack embeddings (e.g., after loading from disk).
-     * Call this after the embedding model is ready.
-     */
-    async reembed() {
-        if (!this.embeddingModel) return;
-
-        let count = 0;
-        for (const ep of this.episodes) {
-            if (!ep.embedding) {
+        // Remove from Vectra
+        if (this.index && this._indexReady) {
+            for (const { id } of toRemove) {
                 try {
-                    ep.embedding = await this.embeddingModel.embed(ep.text);
-                    count++;
+                    await this.index.deleteItem(id);
                 } catch (err) {
-                    // Skip failed embeddings
+                    // Item may not exist in index
                 }
             }
         }
-        if (count > 0) {
-            console.log(`[EpisodicMemory] Re-embedded ${count} episodes`);
-            this.save();
-        }
+
+        // Remove from cache
+        const removeIds = new Set(toRemove.map(r => r.id));
+        this.episodeCache = this.episodeCache.filter(ep => !removeIds.has(ep.id));
     }
 
-    clear() {
-        this.episodes = [];
+    async clear() {
+        this.episodeCache = [];
         this.nextId = 0;
-        this.save();
+        if (this.index && this._indexReady) {
+            try {
+                await this.index.deleteIndex();
+                await this.index.createIndex();
+            } catch (err) {
+                console.warn('[EpisodicMemory] Failed to clear Vectra index:', err.message);
+            }
+        }
     }
 
     getStats() {
         return {
-            totalEpisodes: this.episodes.length,
-            withEmbeddings: this.episodes.filter(e => e.embedding).length,
-            events: this.episodes.filter(e => e.metadata?.type === 'event').length,
-            oldestAge: this.episodes.length > 0
-                ? this._formatAge(this.episodes[0].timestamp)
+            totalEpisodes: this.episodeCache.length,
+            events: this.episodeCache.filter(e => e.metadata?.type === 'event').length,
+            vectraReady: this._indexReady,
+            hasEmbeddingModel: !!this.embeddingModel,
+            oldestAge: this.episodeCache.length > 0
+                ? this._formatAge(this.episodeCache[0].timestamp)
                 : 'N/A'
         };
     }
