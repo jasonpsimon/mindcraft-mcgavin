@@ -97,11 +97,11 @@ const settings = {
     //   "fast_model": "lmstudio/your-small-model"
 
     // Context Builder: token-budgeted prompt assembly (experimental)
-    "use_context_builder": false, // set true to replace template-based prompts with ContextBuilder
+    "use_context_builder": true, // set true to replace template-based prompts with ContextBuilder
     "context_builder": {
-        "maxTokens": 4096, // total token budget for the prompt
+        "maxTokens": 7500, // total token budget for the prompt
         "charsPerToken": 4, // character-to-token ratio estimate
-        "responseReserve": 512 // tokens reserved for LLM response
+        "responseReserve": 592 // tokens reserved for LLM response
     },
 
 }
