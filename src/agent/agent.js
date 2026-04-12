@@ -10,6 +10,7 @@ import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
 import { ConfidenceEngine, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from '../memory/index.js';
+import { LongTermMemory } from '../memory/long_term_memory.js';
 import { getFullState } from './library/full_state.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
@@ -44,15 +45,17 @@ export class Agent {
         this.history = new History(this);
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
-        this.memory_bank = new MemoryBank();
+        this.memory_bank = new MemoryBank(); // legacy — kept for upstream command compatibility
+        this.long_term_memory = new LongTermMemory(this.name, null, settings.long_term_memory || {});
         this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
         this.self_prompter = new SelfPrompter(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
 
-        // Initialize episodic memory with the embedding model now that prompter is ready
+        // Initialize memory systems with the embedding model now that prompter is ready
         if (this.prompter.embedding_model) {
             await this.history.initEpisodicMemory(this.prompter.embedding_model);
+            await this.long_term_memory.init(this.prompter.embedding_model);
         }
 
         // load mem first before doing task
@@ -533,6 +536,13 @@ export class Agent {
                 console.log('Agent died: ', message);
                 let death_pos = this.bot.entity.position;
                 this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+
+                // Also store in long-term memory for persistent recall
+                if (death_pos) {
+                    this.long_term_memory.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                    this.history.episodic.addEvent(`Died: ${message} at x:${death_pos.x.toFixed(1)}, y:${death_pos.y.toFixed(1)}, z:${death_pos.z.toFixed(1)}`);
+                }
+
                 let death_pos_text = null;
                 if (death_pos) {
                     death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
