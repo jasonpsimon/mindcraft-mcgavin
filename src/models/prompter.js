@@ -193,8 +193,28 @@ export class Prompter {
         }
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
-        if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+        if (prompt.includes('$MEMORY')) {
+            // Combine legacy summary with episodic memory retrieval
+            let memoryText = this.agent.history.memory;
+            try {
+                if (this.agent.history.episodic && messages?.length > 0) {
+                    const lastMsg = messages[messages.length - 1]?.content || '';
+                    const goalContext = !this.agent.self_prompter.isStopped()
+                        ? this.agent.self_prompter.prompt + ' ' : '';
+                    const episodicText = await this.agent.history.episodic.getFormattedMemories(
+                        goalContext + lastMsg
+                    );
+                    if (episodicText) {
+                        memoryText = memoryText
+                            ? memoryText + '\n' + episodicText
+                            : episodicText;
+                    }
+                }
+            } catch (err) {
+                console.warn('[Prompter] Episodic memory retrieval failed:', err.message);
+            }
+            prompt = prompt.replaceAll('$MEMORY', memoryText);
+        }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))

@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
+import { EpisodicMemory } from '../memory/episodic_memory.js';
 
 
 export class History {
@@ -15,15 +16,29 @@ export class History {
         this.turns = [];
 
         // Natural language memory as a summary of recent messages + previous memory
+        // Kept for backwards compatibility — episodic memory supplements this
         this.memory = '';
+
+        // Episodic memory: vector-embedded event storage for semantic retrieval
+        // Embedding model is set later via initEpisodicMemory() after prompter is ready
+        this.episodic = new EpisodicMemory(this.name, null, settings.episodic_memory || {});
 
         // Maximum number of messages to keep in context before saving chunk to memory
         this.max_messages = settings.max_messages;
 
         // Number of messages to remove from current history and save into memory
-        this.summary_chunk_size = 5; 
+        this.summary_chunk_size = 5;
         // chunking reduces expensive calls to promptMemSaving and appendFullHistory
         // and improves the quality of the memory summary
+    }
+
+    /**
+     * Initialize episodic memory with the embedding model once available.
+     * Called after prompter is initialized in agent.start().
+     */
+    async initEpisodicMemory(embeddingModel) {
+        this.episodic.embeddingModel = embeddingModel;
+        await this.episodic.reembed(); // re-embed any loaded episodes that lack vectors
     }
 
     getHistory() { // expects an Examples object
@@ -31,6 +46,16 @@ export class History {
     }
 
     async summarizeMemories(turns) {
+        // Store in episodic memory (non-lossy, vector-embedded)
+        try {
+            const currentGoal = this.agent.self_prompter?.isStopped?.()
+                ? null : this.agent.self_prompter?.prompt;
+            await this.episodic.addEpisode(turns, { goal: currentGoal });
+        } catch (err) {
+            console.warn('[History] Episodic memory storage failed:', err.message);
+        }
+
+        // Also maintain legacy summary for backwards compatibility with $MEMORY placeholder
         console.log("Storing memories...");
         this.memory = await this.agent.prompter.promptMemSaving(turns);
 

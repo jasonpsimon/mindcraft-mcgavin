@@ -50,6 +50,11 @@ export class Agent {
         convoManager.initAgent(this);
         await this.prompter.initExamples();
 
+        // Initialize episodic memory with the embedding model now that prompter is ready
+        if (this.prompter.embedding_model) {
+            await this.history.initEpisodicMemory(this.prompter.embedding_model);
+        }
+
         // load mem first before doing task
         let save_data = null;
         if (load_mem) {
