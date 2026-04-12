@@ -539,8 +539,8 @@ export class Agent {
 
                 // Also store in long-term memory for persistent recall
                 if (death_pos) {
-                    this.long_term_memory.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
-                    this.history.episodic.addEvent(`Died: ${message} at x:${death_pos.x.toFixed(1)}, y:${death_pos.y.toFixed(1)}, z:${death_pos.z.toFixed(1)}`);
+                    await this.long_term_memory.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                    await this.history.episodic.addEvent(`Died: ${message} at x:${death_pos.x.toFixed(1)}, y:${death_pos.y.toFixed(1)}, z:${death_pos.z.toFixed(1)}`);
                 }
 
                 let death_pos_text = null;

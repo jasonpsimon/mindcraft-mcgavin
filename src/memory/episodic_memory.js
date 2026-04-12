@@ -150,7 +150,7 @@ export class EpisodicMemory {
         if (this.embeddingModel && this._indexReady && this.index) {
             try {
                 const queryVector = await this.embeddingModel.embed(query);
-                const results = await this.index.queryItems(queryVector, query, k);
+                const results = await this.index.queryItems(queryVector, k);
 
                 if (results && results.length > 0) {
                     return results.map(r => ({

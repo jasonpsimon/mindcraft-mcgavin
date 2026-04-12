@@ -200,7 +200,7 @@ export class LongTermMemory {
         if (this.embeddingModel && this._indexReady && this.index) {
             try {
                 const queryVector = await this.embeddingModel.embed(query);
-                const results = await this.index.queryItems(queryVector, query, k * 2); // over-fetch for filtering
+                const results = await this.index.queryItems(queryVector, k * 2); // over-fetch for filtering
 
                 let filtered = results.map(r => ({
                     id: r.item.id,
@@ -266,7 +266,7 @@ export class LongTermMemory {
         if (this.embeddingModel && this._indexReady && this.index) {
             try {
                 const vector = await this.embeddingModel.embed(text);
-                const results = await this.index.queryItems(vector, text, 3);
+                const results = await this.index.queryItems(vector, 3);
 
                 for (const r of results) {
                     if (r.score > 0.92 && r.item.metadata.category === category) {
