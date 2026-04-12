@@ -368,6 +368,10 @@ export const actionsList = [
             'selfPrompt': { type: 'string', description: 'The goal prompt.' },
         },
         perform: async function (agent, prompt) {
+            // If already self-prompting with the same goal, don't reset the loop
+            if (!agent.self_prompter.isStopped() && agent.self_prompter.prompt === prompt) {
+                return `Already working on goal: "${prompt}"`;
+            }
             if (convoManager.inConversation()) {
                 agent.self_prompter.setPromptPaused(prompt);
             }

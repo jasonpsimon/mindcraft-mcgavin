@@ -26,6 +26,7 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
         this.last_sender = null;
+        this._invFullCount = 0; // tracks consecutive inventory-full failures
         this.count_id = count_id;
         this._disconnectHandled = false;
 
@@ -441,8 +442,22 @@ export class Agent {
                 }
                 // --- End outcome recording ---
 
-                if (execute_res)
+                if (execute_res) {
                     this.history.add('system', execute_res);
+                    
+                    // --- Inventory-full loop breaker ---
+                    const execLower = execute_res.toLowerCase();
+                    if (execLower.includes('inventory full') || execLower.includes('inventory is full') || execLower.includes('no place to deposit')) {
+                        this._invFullCount++;
+                        if (this._invFullCount >= 2) {
+                            this.history.add('system', 'WARNING: Your inventory has been full for multiple actions. You MUST run !autoDiscard(5) RIGHT NOW before doing anything else. Do not try to collect or craft until you have free inventory slots.');
+                            this._invFullCount = 0; // reset after nudge
+                        }
+                    } else {
+                        this._invFullCount = 0; // reset on non-full result
+                    }
+                    // --- End inventory-full loop breaker ---
+                }
                 else
                     break;
             }
