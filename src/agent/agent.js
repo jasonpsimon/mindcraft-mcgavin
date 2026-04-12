@@ -14,6 +14,7 @@ import { LongTermMemory } from '../memory/long_term_memory.js';
 import { getFullState } from './library/full_state.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
+import { EventPipeline } from './event_pipeline.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
 import { serverProxy, sendOutputToServer } from './mindserver_proxy.js';
 import settings from './settings.js';
@@ -49,6 +50,7 @@ export class Agent {
         this.long_term_memory = new LongTermMemory(this.name, null, settings.long_term_memory || {});
         this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
         this.self_prompter = new SelfPrompter(this);
+        this.event_pipeline = new EventPipeline(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
 
@@ -357,9 +359,16 @@ export class Agent {
                         history.push({ role: 'system', content: hint });
                     }
                     console.log(`[ConfidenceEngine] SUGGEST (${(confidenceResult.confidence * 100).toFixed(0)}%): ${confidenceResult.action}`);
-                }
 
-                res = await this.prompter.promptConvo(history);
+                    // Route MEDIUM confidence to fast model if available
+                    if (settings.use_fast_model !== false) {
+                        res = await this.prompter.promptConvoFast(history, hint);
+                    } else {
+                        res = await this.prompter.promptConvo(history);
+                    }
+                } else {
+                    res = await this.prompter.promptConvo(history);
+                }
             }
             // --- End Confidence Engine hook ---
 
@@ -565,20 +574,9 @@ export class Agent {
         // Init NPC controller
         this.npc.init();
 
-        // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval
-        const INTERVAL = 300;
-        let last = Date.now();
-        setTimeout(async () => {
-            while (true) {
-                let start = Date.now();
-                await this.update(start - last);
-                let remaining = INTERVAL - (Date.now() - start);
-                if (remaining > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, remaining));
-                }
-                last = start;
-            }
-        }, INTERVAL);
+        // Initialize event pipeline (event listeners + adaptive polling loop)
+        this.event_pipeline.init(this.bot);
+        this.event_pipeline.startUpdateLoop();
 
         this.bot.emit('idle');
     }

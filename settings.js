@@ -58,6 +58,51 @@ const settings = {
   
     "log_all_prompts": false, // log ALL prompts to file
 
+    // --- McGavin Optimizations ---
+    "use_delta_state": true, // send compact state diffs instead of full dumps. saves tokens per cycle
+    "use_filtered_commands": true, // embed-filter command docs to ~8 relevant instead of all 35+
+    "relevant_commands_count": 8, // number of commands to select when use_filtered_commands is true
+
+    // Confidence Engine: bypasses LLM for high-confidence repeated actions
+    "confidence_engine": {
+        "highThreshold": 0.85, // ≥ this → execute cached action directly, no LLM call
+        "mediumThreshold": 0.5, // ≥ this → call LLM but provide cached action as hint
+        "maxEntries": 1000, // max procedural memory entries before eviction
+        "decayRate": 0.01, // confidence decay per hour unused
+        "minSuccessesForBypass": 3 // require N successes before allowing LLM bypass
+    },
+
+    // Episodic Memory: vector-embedded event storage replacing lossy 500-char summary
+    "episodic_memory": {
+        "maxEpisodes": 200, // max stored episodes before eviction
+        "retrieveCount": 3 // default number of memories to retrieve per query
+    },
+
+    // Long-Term Memory: persistent knowledge via Vectra (places, resources, strategies)
+    "long_term_memory": {
+        "maxEntries": 500, // max entries before eviction
+        "duplicateThreshold": 0.92 // similarity threshold for dedup
+    },
+
+    // Event Pipeline: hybrid event-driven + polling architecture
+    "polling_interval": 300, // base polling interval in ms (backwards compatible default)
+    "adaptive_polling": true, // auto-adjust: faster when active, slower when idle
+    "active_polling_interval": 300, // ms between updates during active gameplay
+    "idle_polling_interval": 1000, // ms between updates when idle (saves CPU)
+
+    // Model Routing
+    "use_fast_model": true, // route MEDIUM confidence responses to fast_model when available
+    // To configure, add "fast_model" to your bot profile (e.g., andy.json):
+    //   "fast_model": "lmstudio/your-small-model"
+
+    // Context Builder: token-budgeted prompt assembly (experimental)
+    "use_context_builder": false, // set true to replace template-based prompts with ContextBuilder
+    "context_builder": {
+        "maxTokens": 4096, // total token budget for the prompt
+        "charsPerToken": 4, // character-to-token ratio estimate
+        "responseReserve": 512 // tokens reserved for LLM response
+    },
+
 }
 
 export default settings;

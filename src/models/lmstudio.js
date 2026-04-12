@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
+import { withLLMRetry } from '../utils/retry.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -25,7 +26,10 @@ export class LMStudio {
                 stop: stop_seq,
                 ...(this.params || {})
             };
-            const completion = await this.openai.chat.completions.create(pack);
+            const completion = await withLLMRetry(
+                () => this.openai.chat.completions.create(pack),
+                'LMStudio'
+            );
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');

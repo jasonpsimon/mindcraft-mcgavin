@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
 import { DeltaStateTracker } from '../memory/delta_state.js';
 import { getFullState } from '../agent/library/full_state.js';
+import { ContextBuilder } from '../memory/context_builder.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +77,21 @@ export class Prompter {
             this.vision_model = this.chat_model;
         }
 
+        // Fast model for simple tasks (query responses, high-confidence hints)
+        // Falls back to chat_model if not configured
+        if (this.profile.fast_model) {
+            try {
+                let fast_model_profile = selectAPI(this.profile.fast_model);
+                this.fast_model = createModel(fast_model_profile);
+            } catch (e) {
+                console.warn('Failed to initialize fast_model, falling back to chat_model:', e.message);
+                this.fast_model = this.chat_model;
+            }
+        }
+        else {
+            this.fast_model = this.chat_model;
+        }
+
         
         let embedding_model_profile = null;
         if (this.profile.embedding) {
@@ -94,6 +110,7 @@ export class Prompter {
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
         this.deltaState = new DeltaStateTracker();
+        this.contextBuilder = new ContextBuilder(settings.context_builder || {});
         mkdirSync(`./bots/${name}`, { recursive: true });
         writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
             if (err) {
@@ -281,6 +298,120 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
+    /**
+     * Build a system prompt using the ContextBuilder instead of template replacement.
+     * Opt-in via settings.use_context_builder = true.
+     * Assembles a token-budgeted prompt from all available context.
+     */
+    async _buildContextPrompt(messages) {
+        try {
+            const agent = this.agent;
+            const goal = !agent.self_prompter.isStopped() ? agent.self_prompter.prompt : null;
+            const action = agent.actions.currentActionLabel || 'Idle';
+
+            // Delta state
+            let deltaState = '';
+            try {
+                const fullState = getFullState(agent);
+                deltaState = this.deltaState.update(fullState);
+            } catch (e) {
+                console.warn('[ContextBuilder] Delta state failed:', e.message);
+            }
+
+            // Command docs (filtered if possible)
+            let commandDocs = '';
+            try {
+                if (settings.use_filtered_commands !== false && this.embedding_model && messages?.length > 0) {
+                    const lastMsg = messages[messages.length - 1]?.content || '';
+                    const goalCtx = goal ? goal + ' ' : '';
+                    commandDocs = await getFilteredCommandDocs(agent, goalCtx + lastMsg, this.embedding_model, settings.relevant_commands_count || 8);
+                } else {
+                    commandDocs = getCommandDocs(agent);
+                }
+            } catch (e) {
+                commandDocs = getCommandDocs(agent);
+            }
+
+            // Episodic memory
+            let episodicMemory = '';
+            try {
+                if (agent.history.episodic && messages?.length > 0) {
+                    const lastMsg = messages[messages.length - 1]?.content || '';
+                    const goalCtx = goal ? goal + ' ' : '';
+                    episodicMemory = await agent.history.episodic.getFormattedMemories(goalCtx + lastMsg) || '';
+                }
+            } catch (e) { /* silent */ }
+
+            // Examples
+            let examples = '';
+            try {
+                if (this.convo_examples) {
+                    examples = await this.convo_examples.createExampleMessage(messages);
+                }
+            } catch (e) { /* silent */ }
+
+            const { systemPrompt, stats } = this.contextBuilder.build({
+                botName: agent.name,
+                goal,
+                action,
+                deltaState,
+                turns: messages,
+                commandDocs,
+                episodicMemory,
+                legacyMemory: agent.history.memory,
+                examples
+            });
+
+            console.log(`[ContextBuilder] Prompt assembled: ${stats.usedTokens} tokens used, ${stats.remainingTokens} remaining`);
+            return systemPrompt;
+        } catch (err) {
+            console.warn('[ContextBuilder] Failed, falling back to replaceStrings:', err.message);
+            return null; // signal to caller to use fallback
+        }
+    }
+
+    /**
+     * Fast prompt path for MEDIUM confidence situations.
+     * Uses fast_model with a stripped-down prompt (no examples, no code docs).
+     * Falls back to full promptConvo on error.
+     */
+    async promptConvoFast(messages, hint = '') {
+        if (this.fast_model === this.chat_model) {
+            // No separate fast model configured, use normal path
+            return this.promptConvo(messages);
+        }
+
+        await this.checkCooldown();
+        try {
+            let prompt = this.profile.conversing;
+            // Minimal replacement: identity, stats, inventory, commands (no examples)
+            prompt = await this.replaceStrings(prompt, messages, null);
+            if (hint) {
+                prompt += '\n' + hint;
+            }
+
+            console.log('[FastModel] Sending to fast model...');
+            let generation = await this.fast_model.sendRequest(messages, prompt);
+
+            if (typeof generation !== 'string' || generation.includes('(FROM OTHER BOT)')) {
+                console.warn('[FastModel] Bad response, falling back to full model.');
+                return this.promptConvo(messages);
+            }
+
+            if (generation?.includes('</think>')) {
+                const [_, afterThink] = generation.split('</think>');
+                generation = afterThink;
+            }
+
+            console.log('[FastModel] Generated:', generation);
+            await this._saveLog(prompt, messages, generation, 'fast_conversation');
+            return generation;
+        } catch (err) {
+            console.warn('[FastModel] Error, falling back to full model:', err.message);
+            return this.promptConvo(messages);
+        }
+    }
+
     async promptConvo(messages) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
@@ -291,8 +422,16 @@ export class Prompter {
                 return '';
             }
 
-            let prompt = this.profile.conversing;
-            prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            let prompt;
+            // Use ContextBuilder when enabled — token-budgeted prompt assembly
+            if (settings.use_context_builder) {
+                prompt = await this._buildContextPrompt(messages);
+            }
+            // Fallback to template-based replacement
+            if (!prompt) {
+                prompt = this.profile.conversing;
+                prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            }
             let generation;
 
             try {
