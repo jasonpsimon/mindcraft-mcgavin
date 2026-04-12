@@ -1,4 +1,4 @@
-import { toSinglePrompt } from '../utils/text.js';
+import { toSinglePrompt, stripThinkTags } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { HfInference } from "@huggingface/inference";
 
@@ -51,22 +51,13 @@ export class HuggingFace {
         break;
       }
 
-      // If the model is DeepSeek-R1, check for mismatched <think> blocks.
-        const hasOpenTag = res.includes("<think>");
-        const hasCloseTag = res.includes("</think>");
-
-        // If there's a partial mismatch, warn and retry the entire request.
-        if ((hasOpenTag && !hasCloseTag)) {
+      // Partial <think> block (open without close) — retry the request
+      if (res.includes("<think>") && !res.includes("</think>")) {
           console.warn("Partial <think> block detected. Re-generating...");
           continue;
-        }
+      }
 
-        // If both tags are present, remove the <think> block entirely.
-        if (hasOpenTag && hasCloseTag) {
-          res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        }
-
-      finalRes = res;
+      finalRes = stripThinkTags(res);
       break; // Exit loop if we got a valid response.
     }
 

@@ -1,6 +1,6 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
-import { strictFormat } from '../utils/text.js';
+import { strictFormat, stripThinkTags } from '../utils/text.js';
 
 // llama, mistral
 export class Novita {
@@ -44,25 +44,13 @@ export class Novita {
       catch (err) {
           if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
               console.log('Context length exceeded, trying again with shorter context.');
-              return await sendRequest(turns.slice(1), systemMessage, stop_seq);
+              return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
           } else {
             console.log(err);
               res = 'My brain disconnected, try again.';
           }
       }
-      if (res.includes('<think>')) {
-        let start = res.indexOf('<think>');
-        let end = res.indexOf('</think>') + 8;
-        if (start != -1) {
-          if (end != -1) {
-            res = res.substring(0, start) + res.substring(end);
-          } else {
-            res = res.substring(0, start+7);
-          }
-        }
-        res = res.trim();
-      }
-      return res;
+      return stripThinkTags(res);
   }
 
 	async embed(text) {

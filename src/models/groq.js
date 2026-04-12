@@ -1,5 +1,6 @@
 import Groq from 'groq-sdk'
 import { getKey } from '../utils/keys.js';
+import { stripThinkTags } from '../utils/text.js';
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -56,9 +57,7 @@ export class GroqCloudAPI {
                 ...(this.params || {})
             });
 
-            res = completion.choices[0].message.content;
-
-            res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            res = stripThinkTags(completion.choices[0].message.content);
         }
         catch(err) {
             if (err.message.includes("content must be a string")) {

@@ -1,4 +1,5 @@
 import { getKey } from '../utils/keys.js';
+import { stripThinkTags } from '../utils/text.js';
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
@@ -80,24 +81,13 @@ export class Hyperbolic {
                 }
             }
 
-            // Check for <think> blocks
-            const hasOpenTag = completionContent.includes("<think>");
-            const hasCloseTag = completionContent.includes("</think>");
-
-            if ((hasOpenTag && !hasCloseTag)) {
+            // Partial <think> block (open without close) — retry the request
+            if (completionContent.includes("<think>") && !completionContent.includes("</think>")) {
                 console.warn("Partial <think> block detected. Re-generating...");
-                continue; // Retry the request
+                continue;
             }
 
-            if (hasCloseTag && !hasOpenTag) {
-                completionContent = '<think>' + completionContent;
-            }
-
-            if (hasOpenTag && hasCloseTag) {
-                completionContent = completionContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            }
-
-            finalRes = completionContent.replace(/<\|separator\|>/g, '*no response*');
+            finalRes = stripThinkTags(completionContent).replace(/<\|separator\|>/g, '*no response*');
             break; // Valid response obtained—exit loop
         }
 

@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
+import { stripThinkTags } from '../utils/text.js';
 
 export class GLHF {
     static prefix = 'glhf';
@@ -37,16 +38,12 @@ export class GLHF {
                     throw new Error('Context length exceeded');
                 }
                 let res = completion.choices[0].message.content;
-                // If there's an open <think> tag without a corresponding </think>, retry.
+                // Partial <think> block (open without close) — retry the request
                 if (res.includes("<think>") && !res.includes("</think>")) {
                     console.warn("Partial <think> block detected. Re-generating...");
                     continue;
                 }
-                // If there's a closing </think> tag but no opening <think>, prepend one.
-                if (res.includes("</think>") && !res.includes("<think>")) {
-                    res = "<think>" + res;
-                }
-                finalRes = res.replace(/<\|separator\|>/g, '*no response*');
+                finalRes = stripThinkTags(res).replace(/<\|separator\|>/g, '*no response*');
                 break; // Valid response obtained.
             } catch (err) {
                 if ((err.message === 'Context length exceeded' || err.code === 'context_length_exceeded') && turns.length > 1) {

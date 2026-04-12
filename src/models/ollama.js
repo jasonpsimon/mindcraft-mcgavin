@@ -1,4 +1,4 @@
-import { strictFormat } from '../utils/text.js';
+import { strictFormat, stripThinkTags } from '../utils/text.js';
 
 export class Ollama {
     static prefix = 'ollama';
@@ -44,20 +44,11 @@ export class Ollama {
                 }
             }
 
-            const hasOpenTag = res.includes("<think>");
-            const hasCloseTag = res.includes("</think>");
-
-            if ((hasOpenTag && !hasCloseTag)) {
+            if (res.includes("<think>") && !res.includes("</think>")) {
                 console.warn("Partial <think> block detected. Re-generating...");
                 if (attempt < maxAttempts) continue;
             }
-            if (hasCloseTag && !hasOpenTag) {
-                res = '<think>' + res;
-            }
-            if (hasOpenTag && hasCloseTag) {
-                res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            }
-            finalRes = res;
+            finalRes = stripThinkTags(res);
             break;
         }
 
