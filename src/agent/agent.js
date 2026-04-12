@@ -9,6 +9,8 @@ import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
+import { ConfidenceEngine, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from '../memory/index.js';
+import { getFullState } from './library/full_state.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
@@ -43,6 +45,7 @@ export class Agent {
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank();
+        this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
         this.self_prompter = new SelfPrompter(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
@@ -316,8 +319,41 @@ export class Agent {
             max_responses = 1; // force only respond to this message, then let self-prompting take over
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
-            let history = this.history.getHistory();
-            let res = await this.prompter.promptConvo(history);
+
+            // --- Confidence Engine: check procedural memory before calling LLM ---
+            let confidenceResult = null;
+            let wasBypassed = false;
+            try {
+                const currentGoal = this.self_prompter.isStopped() ? null : this.self_prompter.prompt;
+                const gameState = getFullState(this);
+                confidenceResult = this.confidence_engine.evaluate(currentGoal, message, gameState);
+            } catch (err) {
+                console.warn('[ConfidenceEngine] Evaluation error, falling back to LLM:', err.message);
+            }
+
+            let res;
+
+            if (confidenceResult?.level === CONFIDENCE_HIGH) {
+                // HIGH confidence: bypass LLM entirely, use cached action
+                res = confidenceResult.action;
+                wasBypassed = true;
+                console.log(`[ConfidenceEngine] BYPASS (${(confidenceResult.confidence * 100).toFixed(0)}%): ${res}`);
+            } else {
+                // MEDIUM or LOW: call LLM (with optional hint for MEDIUM)
+                let history = this.history.getHistory();
+
+                if (confidenceResult?.level === CONFIDENCE_MEDIUM) {
+                    const hint = this.confidence_engine.buildSuggestion(confidenceResult);
+                    if (hint) {
+                        // Inject hint as a system message at the end of history
+                        history.push({ role: 'system', content: hint });
+                    }
+                    console.log(`[ConfidenceEngine] SUGGEST (${(confidenceResult.confidence * 100).toFixed(0)}%): ${confidenceResult.action}`);
+                }
+
+                res = await this.prompter.promptConvo(history);
+            }
+            // --- End Confidence Engine hook ---
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
@@ -331,10 +367,14 @@ export class Agent {
             if (command_name) { // contains query or command
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
-                
+
                 if (!commandExists(command_name)) {
                     this.history.add('system', `Command ${command_name} does not exist.`);
                     console.warn('Agent hallucinated command:', command_name)
+                    // Record failure if this was a bypass
+                    if (confidenceResult?.contextHash) {
+                        this.confidence_engine.recordOutcome(confidenceResult.contextHash, res, false, wasBypassed);
+                    }
                     continue;
                 }
 
@@ -364,6 +404,17 @@ export class Agent {
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
 
+                // --- Record outcome for procedural learning ---
+                if (confidenceResult?.contextHash) {
+                    const success = !!execute_res && !execute_res.toLowerCase().includes('failed') && !execute_res.toLowerCase().includes('error');
+                    this.confidence_engine.recordOutcome(confidenceResult.contextHash, res, success, wasBypassed, {
+                        goal: this.self_prompter.isStopped() ? null : this.self_prompter.prompt,
+                        trigger: message,
+                        result: execute_res?.substring(0, 200) // truncate for storage
+                    });
+                }
+                // --- End outcome recording ---
+
                 if (execute_res)
                     this.history.add('system', execute_res);
                 else
@@ -374,7 +425,7 @@ export class Agent {
                 this.routeResponse(source, res);
                 break;
             }
-            
+
             this.history.save();
         }
 
