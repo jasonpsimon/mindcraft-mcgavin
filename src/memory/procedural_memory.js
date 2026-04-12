@@ -12,7 +12,8 @@
  * File-backed persistence to ./bots/{name}/procedural_memory.json
  */
 
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFile, readFile, mkdir } from 'fs/promises';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { createHash } from 'crypto';
 
 export class ProceduralMemory {
@@ -28,6 +29,11 @@ export class ProceduralMemory {
         this.maxEntries = options.maxEntries || 1000;
         this.decayRate = options.decayRate || 0.01; // confidence decay per hour unused
         this.minSuccessesForBypass = options.minSuccessesForBypass || 3; // need at least N successes before bypass is considered
+
+        // Debounced save: batch writes instead of blocking on every recordAction()
+        this._saveTimer = null;
+        this._saveDebounceMs = options.saveDebounceMs || 5000; // flush every 5s
+        this._dirty = false;
 
         this.load();
     }
@@ -203,14 +209,45 @@ export class ProceduralMemory {
         }
     }
 
+    /**
+     * Schedule a debounced save. Batches multiple writes into one I/O operation.
+     * If called multiple times within the debounce window, only the last triggers a write.
+     */
     save() {
+        this._dirty = true;
+        if (this._saveTimer) return; // already scheduled
+
+        this._saveTimer = setTimeout(() => {
+            this._saveTimer = null;
+            this._flushSave();
+        }, this._saveDebounceMs);
+    }
+
+    /**
+     * Actually write to disk (async, non-blocking).
+     */
+    async _flushSave() {
+        if (!this._dirty) return;
+        this._dirty = false;
+
         try {
-            mkdirSync(this.memoryDir, { recursive: true });
+            await mkdir(this.memoryDir, { recursive: true });
             const data = Object.fromEntries(this.entries);
-            writeFileSync(this.memoryFile, JSON.stringify(data, null, 2));
+            await writeFile(this.memoryFile, JSON.stringify(data, null, 2));
         } catch (error) {
             console.error('Failed to save procedural memory:', error);
         }
+    }
+
+    /**
+     * Force an immediate save (e.g., on shutdown).
+     */
+    async saveNow() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        await this._flushSave();
     }
 
     load() {
@@ -225,12 +262,12 @@ export class ProceduralMemory {
         }
     }
 
-    clear() {
+    async clear() {
         this.entries = new Map();
-        this.save();
+        await this.saveNow(); // immediate write on explicit clear
     }
 
-    getStats() {
+    getStats(highThreshold = 0.85, mediumThreshold = 0.5) {
         const entries = Array.from(this.entries.values());
         const now = Date.now();
         let highConf = 0, medConf = 0, lowConf = 0;
@@ -238,8 +275,8 @@ export class ProceduralMemory {
         for (const entry of entries) {
             const hours = (now - entry.lastUsed) / (1000 * 60 * 60);
             const conf = this._calculateConfidence(entry, hours);
-            if (conf >= 0.85) highConf++;
-            else if (conf >= 0.5) medConf++;
+            if (conf >= highThreshold) highConf++;
+            else if (conf >= mediumThreshold) medConf++;
             else lowConf++;
         }
 

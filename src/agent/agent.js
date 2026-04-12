@@ -356,7 +356,7 @@ export class Agent {
                 let history = this.history.getHistory();
 
                 if (confidenceResult?.level === CONFIDENCE_MEDIUM) {
-                    const hint = this.confidence_engine.buildSuggestion(confidenceResult);
+                    const hint = this.confidence_engine.buildSuggestionFromResult(confidenceResult);
                     if (hint) {
                         // Inject hint as a system message at the end of history
                         history.push({ role: 'system', content: hint });

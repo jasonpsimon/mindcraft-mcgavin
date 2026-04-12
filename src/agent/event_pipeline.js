@@ -31,6 +31,11 @@ export class EventPipeline {
         this._lastEventTime = {};
         this._debounceMs = 200; // minimum ms between handling same event type
 
+        // Flag-based urgent update: events set the flag, polling loop executes
+        this._pendingUrgentUpdate = false;
+        this._urgentMinInterval = 100; // ms guard between urgent updates
+        this._lastUrgentUpdate = 0;
+
         // Stats
         this.stats = {
             eventsHandled: 0,
@@ -118,6 +123,21 @@ export class EventPipeline {
         const loop = async () => {
             while (true) {
                 let start = Date.now();
+
+                // Consume urgent flag: run modes update through the single pipeline
+                if (this._pendingUrgentUpdate) {
+                    this._pendingUrgentUpdate = false;
+                    const now = Date.now();
+                    if (now - this._lastUrgentUpdate >= this._urgentMinInterval) {
+                        this._lastUrgentUpdate = now;
+                        try {
+                            await this.bot.modes.update();
+                        } catch (err) {
+                            console.warn('[EventPipeline] Urgent modes update failed:', err.message);
+                        }
+                    }
+                }
+
                 await this.agent.update(start - last);
                 this.stats.pollCycles++;
 
@@ -128,6 +148,11 @@ export class EventPipeline {
                 if (this.adaptivePolling) {
                     const effectivelyIdle = !this.agent.actions.executing;
                     interval = effectivelyIdle ? this.idleInterval : this.activeInterval;
+                }
+
+                // If an urgent event came in while we were updating, skip the sleep
+                if (this._pendingUrgentUpdate) {
+                    interval = 0;
                 }
 
                 let remaining = interval - (Date.now() - start);
@@ -162,15 +187,13 @@ export class EventPipeline {
     }
 
     /**
-     * Trigger an immediate modes update for urgent situations.
-     * Bypasses the polling interval for time-critical reactions.
+     * Flag an urgent modes update.
+     * Instead of executing directly (risking double-fire with polling),
+     * sets a flag that the polling loop checks on its next cycle.
+     * Also shortens the current sleep to near-zero for fast reaction.
      */
-    async _urgentModesUpdate() {
-        try {
-            await this.bot.modes.update();
-        } catch (err) {
-            console.warn('[EventPipeline] Urgent modes update failed:', err.message);
-        }
+    _urgentModesUpdate() {
+        this._pendingUrgentUpdate = true;
     }
 
     /**

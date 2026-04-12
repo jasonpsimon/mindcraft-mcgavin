@@ -4,3 +4,4 @@ export { DeltaStateTracker } from './delta_state.js';
 export { EpisodicMemory } from './episodic_memory.js';
 export { ContextBuilder } from './context_builder.js';
 export { LongTermMemory } from './long_term_memory.js';
+export { getWords, formatAge, wordOverlapScore, initVectraIndex } from './memory_utils.js';

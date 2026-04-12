@@ -17,8 +17,6 @@
  * most models; LM Studio with Gemma averages ~3.5 chars/token).
  */
 
-import { getCommandDocs } from '../agent/commands/index.js';
-
 export class ContextBuilder {
     constructor(options = {}) {
         // Token budget (chars ≈ tokens * 4)

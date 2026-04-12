@@ -21,8 +21,7 @@
  * Stored at: ./bots/{name}/longterm_index/
  */
 
-import { LocalIndex } from 'vectra';
-import { mkdirSync } from 'fs';
+import { formatAge, wordOverlapScore, initVectraIndex } from './memory_utils.js';
 
 const VALID_CATEGORIES = ['place', 'resource', 'player', 'strategy', 'fact'];
 
@@ -53,29 +52,25 @@ export class LongTermMemory {
         if (this._indexReady) return;
 
         try {
-            mkdirSync(this.indexPath, { recursive: true });
-            this.index = new LocalIndex(this.indexPath);
+            const { index, items } = await initVectraIndex(this.indexPath, 'LongTermMemory');
+            this.index = index;
 
-            if (!await this.index.isIndexCreated()) {
-                await this.index.createIndex();
-                console.log(`[LongTermMemory] Created Vectra index at ${this.indexPath}`);
-            } else {
-                // Load existing items into cache
-                const items = await this.index.listItems();
-                for (const item of items) {
-                    this.facts.set(item.id, {
-                        text: item.metadata.text,
-                        category: item.metadata.category,
-                        metadata: item.metadata,
-                        timestamp: item.metadata.timestamp
-                    });
+            for (const item of items) {
+                this.facts.set(item.id, {
+                    text: item.metadata.text,
+                    category: item.metadata.category,
+                    metadata: item.metadata,
+                    timestamp: item.metadata.timestamp
+                });
 
-                    // Rebuild places cache from stored place facts
-                    if (item.metadata.category === 'place' && item.metadata.coords) {
-                        this.places.set(item.metadata.name, item.metadata.coords);
-                    }
+                // Rebuild places cache from stored place facts
+                if (item.metadata.category === 'place' && item.metadata.coords) {
+                    this.places.set(item.metadata.name, item.metadata.coords);
                 }
-                console.log(`[LongTermMemory] Loaded ${this.facts.size} facts for ${this.agentName}`);
+            }
+
+            if (items.length > 0) {
+                console.log(`[LongTermMemory] Cached ${this.facts.size} facts for ${this.agentName}`);
             }
 
             this._indexReady = true;
@@ -250,7 +245,7 @@ export class LongTermMemory {
         if (facts.length === 0) return '';
 
         const parts = facts.map(f => {
-            const age = this._formatAge(f.metadata?.timestamp || f.timestamp);
+            const age = formatAge(f.metadata?.timestamp || f.timestamp);
             return `[${f.category}|${age}] ${f.text}`;
         });
 
@@ -325,44 +320,25 @@ export class LongTermMemory {
      * Word-overlap fallback recall.
      */
     _wordOverlapRecall(query, k, category = null) {
-        const queryWords = this._getWords(query);
         let entries = Array.from(this.facts.entries());
 
         if (category) {
             entries = entries.filter(([_, f]) => f.category === category);
         }
 
-        const scored = entries.map(([id, fact]) => {
-            const factWords = this._getWords(fact.text);
-            const intersection = queryWords.filter(w => factWords.includes(w));
-            const union = queryWords.length + factWords.length - intersection.length;
-            return {
-                id,
-                text: fact.text,
-                category: fact.category,
-                metadata: fact.metadata,
-                timestamp: fact.timestamp,
-                score: union === 0 ? 0 : intersection.length / union
-            };
-        });
+        const scored = entries.map(([id, fact]) => ({
+            id,
+            text: fact.text,
+            category: fact.category,
+            metadata: fact.metadata,
+            timestamp: fact.timestamp,
+            score: wordOverlapScore(query, fact.text)
+        }));
 
         scored.sort((a, b) => b.score - a.score);
         return scored.slice(0, k);
     }
 
-    _getWords(text) {
-        return text.replace(/[^a-zA-Z ]/g, '').toLowerCase().split(' ').filter(w => w.length > 0);
-    }
-
-    _formatAge(timestamp) {
-        if (!timestamp) return '?';
-        const mins = Math.floor((Date.now() - timestamp) / 60000);
-        if (mins < 1) return 'just now';
-        if (mins < 60) return `${mins}m ago`;
-        const hours = Math.floor(mins / 60);
-        if (hours < 24) return `${hours}h ago`;
-        return `${Math.floor(hours / 24)}d ago`;
-    }
 
     /**
      * Evict oldest, lowest-value facts when over capacity.

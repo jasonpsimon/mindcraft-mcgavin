@@ -16,7 +16,6 @@
 export class DeltaStateTracker {
     constructor() {
         this.lastState = null;
-        this.lastFormatted = null;
         this.callCount = 0;
         this.fullRefreshInterval = 10; // send full state every N calls as a safety net
     }
@@ -34,8 +33,7 @@ export class DeltaStateTracker {
         // First call or periodic full refresh
         if (!this.lastState || this.callCount % this.fullRefreshInterval === 0) {
             this.lastState = this._deepCopy(currentState);
-            this.lastFormatted = this._formatFullState(currentState);
-            return this.lastFormatted;
+            return this._formatFullState(currentState);
         }
 
         // Compute delta

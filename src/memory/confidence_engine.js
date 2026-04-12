@@ -176,10 +176,14 @@ export class ConfidenceEngine {
     /**
      * Build a suggestion string to inject into the LLM prompt for MEDIUM confidence.
      * Gives the LLM a hint without forcing the action.
+     *
+     * @param {object} evaluateResult - The object returned by evaluate()
+     *   Must have { action: string, confidence: number }
+     * @returns {string} Hint string, or '' if input is invalid
      */
-    buildSuggestion(entry) {
-        if (!entry || !entry.action) return '';
-        return `\n[Memory hint: A similar situation was handled with "${entry.action}" (confidence: ${(entry.confidence * 100).toFixed(0)}%). Consider this approach, but use your judgment.]\n`;
+    buildSuggestionFromResult(evaluateResult) {
+        if (!evaluateResult || typeof evaluateResult.confidence !== 'number' || !evaluateResult.action) return '';
+        return `\n[Memory hint: A similar situation was handled with "${evaluateResult.action}" (confidence: ${(evaluateResult.confidence * 100).toFixed(0)}%). Consider this approach, but use your judgment.]\n`;
     }
 
     /**
@@ -188,7 +192,7 @@ export class ConfidenceEngine {
     getStats() {
         return {
             ...this.stats,
-            proceduralStats: this.procedural.getStats(),
+            proceduralStats: this.procedural.getStats(this.highThreshold, this.mediumThreshold),
             bypassRate: this.stats.totalDecisions > 0
                 ? (this.stats.bypassed / this.stats.totalDecisions * 100).toFixed(1) + '%'
                 : '0%',

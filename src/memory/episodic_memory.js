@@ -16,8 +16,7 @@
  *   NEW: chunk turns → embed → store in Vectra → retrieve top-K at prompt time
  */
 
-import { LocalIndex } from 'vectra';
-import { mkdirSync, existsSync } from 'fs';
+import { formatAge, wordOverlapScore, initVectraIndex } from './memory_utils.js';
 
 export class EpisodicMemory {
     constructor(agentName, embeddingModel = null, options = {}) {
@@ -49,25 +48,18 @@ export class EpisodicMemory {
         if (this._indexReady) return;
 
         try {
-            mkdirSync(this.indexPath, { recursive: true });
-            this.index = new LocalIndex(this.indexPath);
+            const { index, items } = await initVectraIndex(this.indexPath, 'EpisodicMemory');
+            this.index = index;
 
-            if (!await this.index.isIndexCreated()) {
-                await this.index.createIndex();
-                console.log(`[EpisodicMemory] Created Vectra index at ${this.indexPath}`);
-            } else {
-                // Load existing items into cache
-                const items = await this.index.listItems();
+            if (items.length > 0) {
                 this.episodeCache = items.map(item => ({
                     id: item.id,
                     text: item.metadata.text,
                     timestamp: item.metadata.timestamp,
                     metadata: item.metadata
                 }));
-                this.nextId = this.episodeCache.length > 0
-                    ? Math.max(...this.episodeCache.map(e => parseInt(e.id.replace('ep-', '')) || 0)) + 1
-                    : 0;
-                console.log(`[EpisodicMemory] Loaded ${this.episodeCache.length} episodes from Vectra for ${this.agentName}`);
+                this.nextId = Math.max(...this.episodeCache.map(e => parseInt(e.id.replace('ep-', '')) || 0)) + 1;
+                console.log(`[EpisodicMemory] Cached ${this.episodeCache.length} episodes for ${this.agentName}`);
             }
 
             this._indexReady = true;
@@ -182,7 +174,7 @@ export class EpisodicMemory {
         if (episodes.length === 0) return '';
 
         const parts = episodes.map(ep => {
-            const age = this._formatAge(ep.timestamp);
+            const age = formatAge(ep.timestamp);
             let text = ep.text;
             if (text.length > this.maxTokensPerEpisode) {
                 text = text.substring(0, this.maxTokensPerEpisode) + '...';
@@ -235,16 +227,10 @@ export class EpisodicMemory {
      * Word-overlap fallback retrieval when embeddings aren't available.
      */
     _wordOverlapRetrieval(query, k) {
-        const queryWords = this._getWords(query);
-        const scored = this.episodeCache.map(ep => {
-            const epWords = this._getWords(ep.text);
-            const intersection = queryWords.filter(w => epWords.includes(w));
-            const union = queryWords.length + epWords.length - intersection.length;
-            return {
-                ...ep,
-                score: union === 0 ? 0 : intersection.length / union
-            };
-        });
+        const scored = this.episodeCache.map(ep => ({
+            ...ep,
+            score: wordOverlapScore(query, ep.text)
+        }));
 
         scored.sort((a, b) => b.score - a.score);
         return scored.slice(0, k);
@@ -272,21 +258,6 @@ export class EpisodicMemory {
             .substring(0, 1000);
     }
 
-    _getWords(text) {
-        return text.replace(/[^a-zA-Z ]/g, '').toLowerCase().split(' ').filter(w => w.length > 0);
-    }
-
-    /**
-     * Format how long ago an episode was stored.
-     */
-    _formatAge(timestamp) {
-        const mins = Math.floor((Date.now() - timestamp) / 60000);
-        if (mins < 1) return 'just now';
-        if (mins < 60) return `${mins}m ago`;
-        const hours = Math.floor(mins / 60);
-        if (hours < 24) return `${hours}h ago`;
-        return `${Math.floor(hours / 24)}d ago`;
-    }
 
     /**
      * Evict oldest, lowest-value episodes when over capacity.
@@ -342,7 +313,7 @@ export class EpisodicMemory {
             vectraReady: this._indexReady,
             hasEmbeddingModel: !!this.embeddingModel,
             oldestAge: this.episodeCache.length > 0
-                ? this._formatAge(this.episodeCache[0].timestamp)
+                ? formatAge(this.episodeCache[0].timestamp)
                 : 'N/A'
         };
     }
