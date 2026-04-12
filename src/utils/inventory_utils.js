@@ -1,6 +1,7 @@
 /**
  * Smart inventory management utilities.
  * Scores items by value and identifies junk to discard.
+ * Goal-aware: protects items relevant to the current objective.
  */
 
 // Items the bot should NEVER discard (high value)
@@ -25,9 +26,80 @@ const KEEP_ALWAYS = new Set([
     'torch', 'bed', 'red_bed', 'cyan_bed',
 ]);
 
-// Items that are almost always safe to discard (low value / bulk junk)
+// Goal keyword → items that become protected when that keyword is in the goal
+const GOAL_ITEM_MAP = {
+    // Building materials
+    'build': ['cobblestone', 'stone', 'oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'glass', 'brick', 'sandstone'],
+    'house': ['cobblestone', 'stone', 'oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'glass', 'oak_door', 'oak_fence'],
+    'shelter': ['cobblestone', 'stone', 'oak_planks', 'oak_log', 'dirt'],
+    'stone': ['cobblestone', 'stone', 'smooth_stone', 'andesite', 'diorite', 'granite'],
+    'wall': ['cobblestone', 'stone', 'deepslate', 'cobbled_deepslate', 'brick'],
+    'bridge': ['cobblestone', 'stone', 'oak_planks'],
+    'tower': ['cobblestone', 'stone', 'oak_planks', 'ladder'],
+    'castle': ['cobblestone', 'stone', 'stone_bricks', 'deepslate', 'cobbled_deepslate'],
+    'farm': ['dirt', 'wheat', 'wheat_seeds', 'bone_meal', 'oak_fence', 'water_bucket'],
+    'garden': ['dirt', 'grass_block', 'flower_pot', 'bone_meal'],
+
+    // Nether
+    'nether': ['cobblestone', 'netherrack', 'blackstone', 'basalt', 'obsidian', 'flint_and_steel', 'gold_ingot'],
+    'portal': ['obsidian', 'flint_and_steel'],
+    'blaze': ['netherrack', 'cobblestone'],
+    'fortress': ['netherrack', 'cobblestone'],
+
+    // Combat & survival
+    'fight': ['arrow', 'string', 'bone', 'gunpowder', 'flint'],
+    'combat': ['arrow', 'string', 'bone', 'gunpowder', 'flint'],
+    'survive': ['coal', 'torch', 'cooked_beef', 'cooked_porkchop', 'bread', 'cobblestone'],
+    'food': ['wheat', 'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'egg'],
+    'cook': ['coal', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton'],
+
+    // Crafting & tools
+    'craft': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot'],
+    'tool': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
+    'pickaxe': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
+    'sword': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
+    'armor': ['iron_ingot', 'diamond', 'leather', 'gold_ingot'],
+    'smelt': ['coal', 'charcoal', 'raw_iron', 'raw_gold', 'raw_copper', 'cobblestone'],
+    'furnace': ['cobblestone', 'coal', 'charcoal'],
+
+    // Mining
+    'mine': ['torch', 'coal', 'cobblestone', 'oak_planks', 'stick'],
+    'diamond': ['iron_ingot', 'torch', 'coal', 'cobblestone', 'oak_planks', 'stick', 'water_bucket'],
+    'iron': ['cobblestone', 'coal', 'torch', 'stick', 'oak_planks'],
+
+    // Redstone
+    'redstone': ['redstone', 'cobblestone', 'stick', 'torch'],
+    'piston': ['cobblestone', 'redstone', 'iron_ingot', 'oak_planks'],
+
+    // Decoration
+    'decorate': ['flower_pot', 'amethyst_block', 'calcite', 'dripstone_block'],
+};
+
+/**
+ * Get the set of items protected by the current goal.
+ * @param {string|null} goal - The bot's current goal text
+ * @returns {Set<string>} Items that should not be discarded
+ */
+function getGoalProtectedItems(goal) {
+    const protectedItems = new Set();
+    if (!goal) return protectedItems;
+
+    const goalLower = goal.toLowerCase();
+    for (const [keyword, items] of Object.entries(GOAL_ITEM_MAP)) {
+        if (goalLower.includes(keyword)) {
+            for (const item of items) {
+                protectedItems.add(item);
+            }
+        }
+    }
+    return protectedItems;
+}
+
 // Lower score = more discardable
-function getItemValue(itemName) {
+function getItemValue(itemName, goalProtected = new Set()) {
+    // If the goal needs this item, bump it to "valuable"
+    if (goalProtected.has(itemName)) return 4;
+
     // Tier 0: Trash — discard first
     if ([
         'rotten_flesh', 'poisonous_potato', 'spider_eye',
@@ -76,9 +148,12 @@ function getItemValue(itemName) {
  * Analyze inventory and return ranked discard suggestions.
  * @param {object} bot - The mineflayer bot
  * @param {number} slotsNeeded - How many slots we need to free up (default 5)
+ * @param {string|null} goal - The bot's current goal (to protect relevant items)
  * @returns {{ suggestions: Array<{name: string, count: number, value: number}>, message: string }}
  */
-export function getDiscardSuggestions(bot, slotsNeeded = 5) {
+export function getDiscardSuggestions(bot, slotsNeeded = 5, goal = null) {
+    const goalProtected = getGoalProtectedItems(goal);
+
     const inventory = {};
     for (const slot of bot.inventory.slots) {
         if (slot != null && slot.name) {
@@ -89,7 +164,7 @@ export function getDiscardSuggestions(bot, slotsNeeded = 5) {
 
     // Score and sort: lowest value first, then highest count
     const scored = Object.entries(inventory)
-        .map(([name, count]) => ({ name, count, value: getItemValue(name) }))
+        .map(([name, count]) => ({ name, count, value: getItemValue(name, goalProtected) }))
         .filter(item => item.value < 5) // never suggest protected items
         .sort((a, b) => a.value - b.value || b.count - a.count);
 
@@ -99,19 +174,25 @@ export function getDiscardSuggestions(bot, slotsNeeded = 5) {
     for (const item of scored) {
         if (freedSlots >= slotsNeeded) break;
         suggestions.push(item);
-        // Each stack slot holds up to 64; discarding a full stack frees 1 slot
         freedSlots += Math.ceil(item.count / 64);
     }
 
-    // Build a human-readable (LLM-readable) message
+    // Build an LLM-readable message
     const cmds = suggestions
-        .slice(0, 3) // max 3 suggestions to avoid overwhelming the LLM
+        .slice(0, 3)
         .map(s => `!discard("${s.name}", ${s.count})`)
         .join(', then ');
 
-    const message = suggestions.length > 0
-        ? `To free inventory space, discard junk items: ${cmds}`
-        : 'No obvious junk items to discard. Consider dropping your least needed items.';
+    let message = '';
+    if (suggestions.length > 0) {
+        message = `To free inventory space, discard junk items: ${cmds}`;
+        if (goalProtected.size > 0) {
+            const kept = [...goalProtected].filter(i => inventory[i]).slice(0, 3).join(', ');
+            if (kept) message += ` (keeping ${kept} — needed for your goal)`;
+        }
+    } else {
+        message = 'No obvious junk items to discard. Consider dropping your least needed items.';
+    }
 
     return { suggestions, message };
 }
@@ -120,10 +201,11 @@ export function getDiscardSuggestions(bot, slotsNeeded = 5) {
  * Auto-discard the lowest-value items to free up inventory space.
  * @param {object} bot - The mineflayer bot
  * @param {number} slotsNeeded - How many slots to free
+ * @param {string|null} goal - The bot's current goal (to protect relevant items)
  * @returns {Promise<string>} Description of what was discarded
  */
-export async function autoDiscard(bot, slotsNeeded = 5) {
-    const { suggestions } = getDiscardSuggestions(bot, slotsNeeded);
+export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
+    const { suggestions } = getDiscardSuggestions(bot, slotsNeeded, goal);
     if (suggestions.length === 0) {
         return 'No junk items found to auto-discard.';
     }

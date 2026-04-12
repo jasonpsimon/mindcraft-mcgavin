@@ -513,7 +513,8 @@ export const actionsList = [
             }
         },
         perform: async function(agent, slots_needed = 5) {
-            const result = await autoDiscard(agent.bot, slots_needed);
+            const goal = agent.self_prompter?.isStopped() ? null : agent.self_prompter?.prompt;
+            const result = await autoDiscard(agent.bot, slots_needed, goal);
             return result;
         }
     },

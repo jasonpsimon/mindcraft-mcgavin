@@ -336,6 +336,7 @@ export class Agent {
             let wasBypassed = false;
             try {
                 const currentGoal = this.self_prompter.isStopped() ? null : this.self_prompter.prompt;
+                this.bot._goalHint = currentGoal; // expose goal to skills for smart discard
                 const gameState = getFullState(this);
                 confidenceResult = this.confidence_engine.evaluate(currentGoal, message, gameState);
             } catch (err) {

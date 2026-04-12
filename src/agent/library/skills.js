@@ -87,7 +87,8 @@ export async function craftRecipe(bot, itemName, num=1) {
         const emptySlots = bot.inventory.emptySlotCount();
         let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}.`;
         if (emptySlots === 0) {
-            const { message: discardAdvice } = getDiscardSuggestions(bot, 5);
+            const currentGoal = bot._goalHint || null;
+            const { message: discardAdvice } = getDiscardSuggestions(bot, 5, currentGoal);
             hint += ` Your inventory is FULL (0 empty slots). ${discardAdvice} Then use !collectBlocks to gather what you need.`;
         } else {
             hint += ` Use !collectBlocks to gather the missing items.`;
@@ -522,7 +523,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }
         catch (err) {
             if (err.name === 'NoChests') {
-                const { message: discardHint } = getDiscardSuggestions(bot, 5);
+                const currentGoal = bot._goalHint || null;
+                const { message: discardHint } = getDiscardSuggestions(bot, 5, currentGoal);
                 log(bot, `Failed to collect ${blockType}: Inventory full. ${discardHint}`);
                 break;
             }
