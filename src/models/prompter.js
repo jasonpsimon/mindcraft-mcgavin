@@ -59,6 +59,7 @@ export class Prompter {
             max_tokens = this.profile.max_tokens;
 
         let chat_model_profile = selectAPI(this.profile.model);
+        if (this.profile.url) chat_model_profile.url = this.profile.url;
         this.chat_model = createModel(chat_model_profile);
 
         if (this.profile.code_model) {
