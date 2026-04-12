@@ -433,7 +433,7 @@ export class Agent {
                 // --- Record outcome for procedural learning ---
                 if (confidenceResult?.contextHash) {
                     const exec_lower = (execute_res || '').toLowerCase();
-                    const success = !!execute_res && !exec_lower.includes('failed') && !exec_lower.includes('error') && !exec_lower.includes('invalid') && !exec_lower.includes('do not have the resources') && !exec_lower.includes('not a command');
+                    const success = !!execute_res && !exec_lower.includes('failed') && !exec_lower.includes('error') && !exec_lower.includes('invalid') && !exec_lower.includes('do not have the resources') && !exec_lower.includes('not a command') && !exec_lower.includes('was given') && !exec_lower.includes('does not exist') && !exec_lower.includes('exception');
                     this.confidence_engine.recordOutcome(confidenceResult.contextHash, res, success, wasBypassed, {
                         goal: this.self_prompter.isStopped() ? null : this.self_prompter.prompt,
                         trigger: message,
