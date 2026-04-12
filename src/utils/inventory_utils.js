@@ -6,7 +6,7 @@
 
 // Cooldown after discarding to prevent the bot from picking items back up
 let lastDiscardTime = 0;
-const DISCARD_COOLDOWN_MS = 12000; // 12 seconds — items despawn after 5 min but bot moves on
+const DISCARD_COOLDOWN_MS = 60000; // 60 seconds — gives bot plenty of time to move on
 
 export function markDiscarded() {
     lastDiscardTime = Date.now();
