@@ -3,6 +3,7 @@ import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
+import { getDiscardSuggestions, autoDiscard } from '../../utils/inventory_utils.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
@@ -86,7 +87,8 @@ export async function craftRecipe(bot, itemName, num=1) {
         const emptySlots = bot.inventory.emptySlotCount();
         let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}.`;
         if (emptySlots === 0) {
-            hint += ` Your inventory is FULL (0 empty slots). You MUST use !discard to drop junk items first, then !collectBlocks to gather what you need. Example: !discard("andesite", 64) or !discard("cobbled_deepslate", 38) or !discard("tuff", 50).`;
+            const { message: discardAdvice } = getDiscardSuggestions(bot, 5);
+            hint += ` Your inventory is FULL (0 empty slots). ${discardAdvice} Then use !collectBlocks to gather what you need.`;
         } else {
             hint += ` Use !collectBlocks to gather the missing items.`;
         }
@@ -520,7 +522,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }
         catch (err) {
             if (err.name === 'NoChests') {
-                log(bot, `Failed to collect ${blockType}: Inventory full. Use !discard("item_name", count) to drop unwanted items like cobblestone, andesite, tuff, cobbled_deepslate, gravel, rotten_flesh, or dirt to make room.`);
+                const { message: discardHint } = getDiscardSuggestions(bot, 5);
+                log(bot, `Failed to collect ${blockType}: Inventory full. ${discardHint}`);
                 break;
             }
             else {

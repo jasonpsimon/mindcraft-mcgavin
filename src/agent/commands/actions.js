@@ -1,6 +1,7 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
+import { autoDiscard } from '../../utils/inventory_utils.js';
 
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
@@ -498,5 +499,22 @@ export const actionsList = [
         perform: runAsAction(async (agent, tool_name, target) => {
             await skills.useToolOn(agent.bot, tool_name, target);
         })
+    },
+    {
+        name: '!autoDiscard',
+        description: 'Automatically discard the least valuable items in your inventory to free up space. Useful when inventory is full and you need room to collect resources.',
+        params: {
+            'slots_needed': {
+                type: 'int',
+                description: 'Number of inventory slots to free up.',
+                domain: [1, 36],
+                default: 5,
+                optional: true
+            }
+        },
+        perform: async function(agent, slots_needed = 5) {
+            const result = await autoDiscard(agent.bot, slots_needed);
+            return result;
+        }
     },
 ];
