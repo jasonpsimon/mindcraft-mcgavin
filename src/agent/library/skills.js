@@ -82,7 +82,15 @@ export async function craftRecipe(bot, itemName, num=1) {
         }
     }
     if (!recipes || recipes.length === 0) {
-        log(bot, `You do not have the resources to craft a ${itemName}. It requires: ${Object.entries(mc.getItemCraftingRecipes(itemName)[0][0]).map(([key, value]) => `${key}: ${value}`).join(', ')}.`);
+        const missingItems = Object.entries(mc.getItemCraftingRecipes(itemName)[0][0]).map(([key, value]) => `${key}: ${value}`).join(', ');
+        const emptySlots = bot.inventory.emptySlotCount();
+        let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}.`;
+        if (emptySlots === 0) {
+            hint += ` Your inventory is FULL (0 empty slots). You MUST !discard items first to make room, then !collectBlocks to gather what you need.`;
+        } else {
+            hint += ` Use !collectBlocks to gather the missing items.`;
+        }
+        log(bot, hint);
         if (placedTable) {
             await collectBlock(bot, 'crafting_table', 1);
         }
