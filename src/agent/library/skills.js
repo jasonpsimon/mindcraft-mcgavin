@@ -3,7 +3,7 @@ import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
-import { getDiscardSuggestions, autoDiscard } from '../../utils/inventory_utils.js';
+import { getDiscardSuggestions, autoDiscard, markDiscarded } from '../../utils/inventory_utils.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
@@ -875,6 +875,7 @@ export async function discard(bot, itemName, num=-1) {
         log(bot, `You do not have any ${itemName} to discard.`);
         return false;
     }
+    markDiscarded();
     log(bot, `Discarded ${discarded} ${itemName}.`);
     return true;
 }

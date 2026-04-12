@@ -4,6 +4,19 @@
  * Goal-aware: protects items relevant to the current objective.
  */
 
+// Cooldown after discarding to prevent the bot from picking items back up
+let lastDiscardTime = 0;
+const DISCARD_COOLDOWN_MS = 12000; // 12 seconds — items despawn after 5 min but bot moves on
+
+export function markDiscarded() {
+    lastDiscardTime = Date.now();
+}
+
+export function isDiscardCooldownActive() {
+    return (Date.now() - lastDiscardTime) < DISCARD_COOLDOWN_MS;
+}
+
+
 // Items the bot should NEVER discard (high value)
 const KEEP_ALWAYS = new Set([
     // Tools & weapons
@@ -222,6 +235,7 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
                 remaining -= toDrop;
             }
             discarded.push(`${item.count} ${item.name}`);
+            markDiscarded();
         } catch (e) {
             // Skip items that fail to discard
         }

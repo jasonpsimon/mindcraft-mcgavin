@@ -1,3 +1,4 @@
+import { isDiscardCooldownActive } from '../utils/inventory_utils.js';
 import * as skills from './library/skills.js';
 import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
@@ -196,6 +197,7 @@ const modes_list = [
         prev_item: null,
         noticed_at: -1,
         update: async function (agent) {
+            if (isDiscardCooldownActive()) return; // skip pickup right after discarding
             let item = world.getNearestEntityWhere(agent.bot, entity => entity.name === 'item', 8);
             let empty_inv_slots = agent.bot.inventory.emptySlotCount();
             if (item && item !== this.prev_item && await world.isClearPath(agent.bot, item) && empty_inv_slots > 1) {
