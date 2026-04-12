@@ -27,7 +27,7 @@ export function blacklistCommands(commands) {
     }
 }
 
-const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*")(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"))*)\))?/
+const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*")(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"))*)\)|\s+("[^"]*"))?/
 const argRegex = /-?\d+(?:\.\d+)?|true|false|"[^"]*"/g;
 
 export function containsCommand(message) {
@@ -102,7 +102,8 @@ export function parseCommandMessage(message) {
     const commandName = "!"+commandMatch[1];
 
     let args;
-    if (commandMatch[2]) args = commandMatch[2].match(argRegex);
+    const rawArgs = commandMatch[2] || commandMatch[3];
+    if (rawArgs) args = rawArgs.match(argRegex);
     else args = [];
 
     const command = getCommand(commandName);
