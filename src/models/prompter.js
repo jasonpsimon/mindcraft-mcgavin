@@ -9,6 +9,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
+import { DeltaStateTracker } from '../memory/delta_state.js';
+import { getFullState } from '../agent/library/full_state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,6 +93,7 @@ export class Prompter {
         }
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
+        this.deltaState = new DeltaStateTracker();
         mkdirSync(`./bots/${name}`, { recursive: true });
         writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
             if (err) {
@@ -136,15 +139,42 @@ export class Prompter {
     async replaceStrings(prompt, messages, examples=null, to_summarize=[], last_goals=null) {
         prompt = prompt.replaceAll('$NAME', this.agent.name);
 
-        if (prompt.includes('$STATS')) {
-            let stats = await getCommand('!stats').perform(this.agent) + '\n';
-            stats += await getCommand('!entities').perform(this.agent) + '\n';
-            stats += await getCommand('!nearbyBlocks').perform(this.agent);
-            prompt = prompt.replaceAll('$STATS', stats);
-        }
-        if (prompt.includes('$INVENTORY')) {
-            let inventory = await getCommand('!inventory').perform(this.agent);
-            prompt = prompt.replaceAll('$INVENTORY', inventory);
+        if (prompt.includes('$STATS') || prompt.includes('$INVENTORY')) {
+            // Delta state: use compact diff instead of full dumps when enabled
+            if (settings.use_delta_state !== false && this.deltaState) {
+                try {
+                    const fullState = getFullState(this.agent);
+                    const deltaOutput = this.deltaState.update(fullState);
+                    if (prompt.includes('$STATS'))
+                        prompt = prompt.replaceAll('$STATS', deltaOutput);
+                    if (prompt.includes('$INVENTORY'))
+                        prompt = prompt.replaceAll('$INVENTORY', ''); // included in delta output
+                } catch (err) {
+                    console.warn('[DeltaState] Error, falling back to full state:', err.message);
+                    // Fallback to original behavior
+                    let stats = await getCommand('!stats').perform(this.agent) + '\n';
+                    stats += await getCommand('!entities').perform(this.agent) + '\n';
+                    stats += await getCommand('!nearbyBlocks').perform(this.agent);
+                    if (prompt.includes('$STATS'))
+                        prompt = prompt.replaceAll('$STATS', stats);
+                    if (prompt.includes('$INVENTORY')) {
+                        let inventory = await getCommand('!inventory').perform(this.agent);
+                        prompt = prompt.replaceAll('$INVENTORY', inventory);
+                    }
+                }
+            } else {
+                // Original behavior when delta state is disabled
+                if (prompt.includes('$STATS')) {
+                    let stats = await getCommand('!stats').perform(this.agent) + '\n';
+                    stats += await getCommand('!entities').perform(this.agent) + '\n';
+                    stats += await getCommand('!nearbyBlocks').perform(this.agent);
+                    prompt = prompt.replaceAll('$STATS', stats);
+                }
+                if (prompt.includes('$INVENTORY')) {
+                    let inventory = await getCommand('!inventory').perform(this.agent);
+                    prompt = prompt.replaceAll('$INVENTORY', inventory);
+                }
+            }
         }
         if (prompt.includes('$ACTION')) {
             prompt = prompt.replaceAll('$ACTION', this.agent.actions.currentActionLabel);
