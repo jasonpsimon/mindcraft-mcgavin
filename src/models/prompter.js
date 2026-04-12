@@ -315,7 +315,8 @@ export class Prompter {
     async _buildContextPrompt(messages) {
         try {
             const agent = this.agent;
-            const goal = !agent.self_prompter.isStopped() ? agent.self_prompter.prompt : null;
+            const isSelfPrompting = !agent.self_prompter.isStopped();
+            const goal = isSelfPrompting ? agent.self_prompter.prompt : null;
             const action = agent.actions.currentActionLabel || 'Idle';
 
             // Delta state
@@ -327,12 +328,15 @@ export class Prompter {
                 console.warn('[ContextBuilder] Delta state failed:', e.message);
             }
 
-            // Command docs (filtered if possible)
+            // Command docs — fewer when self-prompting (goal-focused), more when chatting
             const contextQuery = this._getContextQuery(messages);
+            const cmdCount = isSelfPrompting
+                ? Math.min(settings.relevant_commands_count || 8, 5)  // tighter during goals
+                : settings.relevant_commands_count || 8;
             let commandDocs = '';
             try {
                 if (settings.use_filtered_commands !== false && this.embedding_model && messages?.length > 0) {
-                    commandDocs = await getFilteredCommandDocs(agent, contextQuery, this.embedding_model, settings.relevant_commands_count || 8);
+                    commandDocs = await getFilteredCommandDocs(agent, contextQuery, this.embedding_model, cmdCount);
                 } else {
                     commandDocs = getCommandDocs(agent);
                 }
@@ -349,14 +353,14 @@ export class Prompter {
             } catch (e) { /* silent */ }
 
             // Long-term memory (persistent knowledge across sessions)
-            let longTermKnowledge = '';
+            let longTermMemory = '';
             try {
                 if (agent.long_term_memory && contextQuery) {
-                    longTermKnowledge = await agent.long_term_memory.getFormattedKnowledge(contextQuery) || '';
+                    longTermMemory = await agent.long_term_memory.getFormattedKnowledge(contextQuery) || '';
                 }
             } catch (e) { /* silent */ }
 
-            // Examples
+            // Examples — ContextBuilder will skip these during self-prompting
             let examples = '';
             try {
                 if (this.convo_examples) {
@@ -371,12 +375,14 @@ export class Prompter {
                 deltaState,
                 turns: messages,
                 commandDocs,
-                episodicMemory: episodicMemory + (longTermKnowledge ? '\n' + longTermKnowledge : ''),
-                legacyMemory: agent.history.memory,
-                examples
+                episodicMemory,
+                longTermMemory,
+                examples,
+                isSelfPrompting,
+                profile: this.profile
             });
 
-            console.log(`[ContextBuilder] Prompt assembled: ${stats.usedTokens} tokens used, ${stats.remainingTokens} remaining`);
+            console.log(`[ContextBuilder] ${stats.usedTokens}/${Math.ceil(this.contextBuilder.availableChars / this.contextBuilder.charsPerToken)} tokens | conv:${stats.sections.conversation || 0} cmd:${stats.sections.commands || 0} mem:${stats.sections.memory || 0} ex:${stats.sections.examples || 0} | SP:${isSelfPrompting}`);
             return systemPrompt;
         } catch (err) {
             console.warn('[ContextBuilder] Failed, falling back to replaceStrings:', err.message);

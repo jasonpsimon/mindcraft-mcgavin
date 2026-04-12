@@ -5,13 +5,13 @@
  * an intelligent prompt assembler that fits content into a token budget.
  *
  * Priority order (highest to lowest):
- *   1. Bot identity + current goal (always included)
+ *   1. Bot identity + rules + current goal (from profile, always included)
  *   2. Current action status
  *   3. Delta state (compact game state changes)
- *   4. Recent conversation turns (working memory)
- *   5. Relevant command docs (not all 35+)
- *   6. Episodic memories (semantically relevant)
- *   7. Few-shot examples (reduced for simple tasks)
+ *   4. Command docs (goal-filtered, fewer = better for small models)
+ *   5. Recent conversation turns (compressed in self-prompt mode)
+ *   6. Episodic + long-term memories (replaces legacy 500-char summary)
+ *   7. Few-shot examples (0 when self-prompting, 1-2 with players)
  *
  * Token estimation uses a simple chars/4 heuristic (good enough for
  * most models; LM Studio with Gemma averages ~3.5 chars/token).
@@ -46,22 +46,25 @@ export class ContextBuilder {
      * @param {string} params.action - Current action label
      * @param {string} params.deltaState - Output from DeltaStateTracker
      * @param {Array} params.turns - Recent conversation turns
-     * @param {string} params.commandDocs - Full command docs string
+     * @param {string} params.commandDocs - Filtered command docs string
      * @param {string} params.episodicMemory - Formatted episodic memories
-     * @param {string} params.legacyMemory - Legacy 500-char summary
+     * @param {string} params.longTermMemory - Formatted long-term knowledge
      * @param {string} params.examples - Formatted few-shot examples
+     * @param {boolean} params.isSelfPrompting - Whether the bot is in self-prompt mode
+     * @param {object} params.profile - Bot profile JSON (for identity/rules)
      * @returns {object} { systemPrompt: string, stats: object }
      */
     build(params) {
         const sections = [];
         let usedChars = 0;
+        const isSP = params.isSelfPrompting || false;
         const stats = {
             totalBudget: this.availableChars,
             sections: {}
         };
 
-        // --- PRIORITY 1: Identity + Goal (always included, ~100-300 chars) ---
-        const identity = this._buildIdentity(params.botName, params.goal);
+        // --- PRIORITY 1: Identity + Rules + Goal (always included) ---
+        const identity = this._buildIdentity(params.botName, params.goal, params.profile);
         sections.push(identity);
         usedChars += identity.length;
         stats.sections.identity = identity.length;
@@ -79,28 +82,15 @@ export class ContextBuilder {
         if (stateStr.length > 0) {
             const stateBudget = Math.max(this.minState, stateStr.length);
             const trimmedState = stateStr.substring(0, stateBudget);
-            sections.push('Game state:\n' + trimmedState + '\n');
-            usedChars += trimmedState.length + 13;
-            stats.sections.state = trimmedState.length + 13;
+            sections.push(trimmedState + '\n');
+            usedChars += trimmedState.length + 1;
+            stats.sections.state = trimmedState.length + 1;
         }
 
-        // --- PRIORITY 4: Conversation turns (working memory) ---
-        const remaining = this.availableChars - usedChars;
-        const convoBudget = Math.min(
-            Math.max(this.minConversation, Math.floor(remaining * 0.35)),
-            remaining - this.minCommands // leave room for commands
-        );
-        const convoStr = this._buildConversation(params.turns, convoBudget);
-        if (convoStr.length > 0) {
-            sections.push(convoStr);
-            usedChars += convoStr.length;
-            stats.sections.conversation = convoStr.length;
-        }
-
-        // --- PRIORITY 5: Command docs (filtered if possible) ---
+        // --- PRIORITY 4: Command docs (goal-filtered, high value) ---
         const cmdBudget = Math.min(
-            this.minCommands + Math.floor((this.availableChars - usedChars) * 0.3),
-            this.availableChars - usedChars
+            this.minCommands + Math.floor((this.availableChars - usedChars) * 0.25),
+            this.availableChars - usedChars - this.minConversation
         );
         if (params.commandDocs && cmdBudget > 200) {
             const cmdStr = this._trimToFit(params.commandDocs, cmdBudget);
@@ -109,21 +99,28 @@ export class ContextBuilder {
             stats.sections.commands = cmdStr.length + 1;
         }
 
-        // --- PRIORITY 6: Episodic + legacy memory ---
+        // --- PRIORITY 5: Conversation turns (compressed in self-prompt mode) ---
+        const remaining = this.availableChars - usedChars;
+        const convoBudget = Math.max(this.minConversation, Math.floor(remaining * 0.45));
+        const convoStr = this._buildConversation(params.turns, convoBudget, isSP);
+        if (convoStr.length > 0) {
+            sections.push(convoStr);
+            usedChars += convoStr.length;
+            stats.sections.conversation = convoStr.length;
+        }
+
+        // --- PRIORITY 6: Episodic + long-term memory (replaces legacy summary) ---
         const memBudget = Math.min(
-            Math.floor((this.availableChars - usedChars) * 0.4),
+            Math.floor((this.availableChars - usedChars) * 0.6),
             this.availableChars - usedChars
         );
         if (memBudget > 100) {
-            let memStr = '';
-            if (params.episodicMemory) {
-                memStr = params.episodicMemory;
-            }
-            if (params.legacyMemory && params.legacyMemory.length > 0) {
-                memStr = memStr
-                    ? memStr + '\nSummary: ' + params.legacyMemory
-                    : 'Memory: ' + params.legacyMemory;
-            }
+            let memParts = [];
+            if (params.episodicMemory) memParts.push(params.episodicMemory);
+            if (params.longTermMemory) memParts.push(params.longTermMemory);
+            // NOTE: legacy memory intentionally excluded — episodic replaces it
+
+            let memStr = memParts.join('\n');
             if (memStr.length > 0) {
                 memStr = this._trimToFit(memStr, memBudget);
                 sections.push(memStr + '\n');
@@ -132,18 +129,26 @@ export class ContextBuilder {
             }
         }
 
-        // --- PRIORITY 7: Examples (reduced when confidence is high) ---
-        const exBudget = this.availableChars - usedChars;
-        if (params.examples && exBudget > 200) {
-            const exStr = this._trimToFit(params.examples, exBudget);
-            sections.push(exStr);
-            usedChars += exStr.length;
-            stats.sections.examples = exStr.length;
+        // --- PRIORITY 7: Examples (skip during self-prompting, use 1-2 with players) ---
+        // When self-prompting, episodic memories serve as better "examples" than static ones.
+        // Only include examples when talking to a player and episodic memory is thin.
+        const hasEpisodicContext = (params.episodicMemory || '').length > 50;
+        const includeExamples = !isSP && (!hasEpisodicContext || !params.episodicMemory);
+
+        if (includeExamples && params.examples) {
+            const exBudget = this.availableChars - usedChars;
+            if (exBudget > 200) {
+                const exStr = this._trimToFit(params.examples, exBudget);
+                sections.push(exStr);
+                usedChars += exStr.length;
+                stats.sections.examples = exStr.length;
+            }
         }
 
         stats.usedChars = usedChars;
         stats.usedTokens = Math.ceil(usedChars / this.charsPerToken);
         stats.remainingTokens = Math.ceil((this.availableChars - usedChars) / this.charsPerToken);
+        stats.selfPrompting = isSP;
 
         this.lastBuild = stats;
 
@@ -154,15 +159,24 @@ export class ContextBuilder {
     }
 
     /**
-     * Build the identity/personality section.
+     * Build the identity/personality section from the bot profile.
+     * Reads `context_rules` from profile for customizable rules per bot.
+     * Falls back to a sensible default if not present.
      */
-    _buildIdentity(botName, goal) {
-        let identity = `You are an AI Minecraft bot named ${botName} that can converse with players, see, move, mine, build, and interact with the world by using commands.\n`;
-        identity += `RULES: Tool order: wood→stone→iron→diamond. Need pickaxe for stone/ore. Need crafting_table for tools. If inventory full, !autoDiscard(5) first. Item names use underscores. If asked your goal, SAY it, don't re-call !goal.\n`;
-        identity += `Be brief, casual, efficient. Use commands immediately. Respond only as ${botName}. If nothing to say, respond with tab '\\t'.\n`;
+    _buildIdentity(botName, goal, profile) {
+        // Base identity — always present
+        let identity = `You are a Minecraft bot named ${botName}. Use commands to act.\n`;
+
+        // Rules — read from profile, or use default strategic knowledge
+        const rules = profile?.context_rules ||
+            `RULES: Tool progression: wood→stone→iron→diamond pickaxe. Need pickaxe for stone/ore. Need crafting_table for tools (craft from 4 planks). Diamond ore only below y=16. Smelt raw_iron in furnace→iron_ingot before crafting. If inventory full: !autoDiscard(5). Use !getCraftingPlan to check requirements before crafting.`;
+        identity += rules + '\n';
+
+        // Personality — compact
+        identity += `Be brief. Use commands, don't describe actions. Respond only as ${botName}. Idle = tab '\\t'.\n`;
 
         if (goal) {
-            identity += `YOUR CURRENT ASSIGNED GOAL: "${goal}"\n`;
+            identity += `GOAL: "${goal}"\n`;
         }
 
         return identity;
@@ -170,9 +184,10 @@ export class ContextBuilder {
 
     /**
      * Build conversation string from turns, fitting within budget.
-     * Keeps the most recent turns first (most relevant).
+     * In self-prompt mode, strips fluff — keeps only commands and their results.
+     * In conversation mode, keeps full turns for natural dialogue.
      */
-    _buildConversation(turns, budget) {
+    _buildConversation(turns, budget, selfPrompting = false) {
         if (!turns || turns.length === 0) return '';
 
         const lines = [];
@@ -181,9 +196,24 @@ export class ContextBuilder {
         // Work backwards from most recent
         for (let i = turns.length - 1; i >= 0; i--) {
             const turn = turns[i];
+            let content = turn.content;
+
+            if (selfPrompting) {
+                // Strip repeated self-prompt reminders — they waste tokens
+                if (turn.role === 'system' && content.includes('self-prompting with the goal')) continue;
+
+                // Strip assistant turns that are just chatter (no command)
+                if (turn.role === 'assistant' && !content.includes('!') && content !== '\\t') continue;
+
+                // Compress system action output — strip "Action output:\n" prefix
+                if (turn.role === 'system' && content.startsWith('Action output:\n')) {
+                    content = content.replace('Action output:\n', '');
+                }
+            }
+
             const prefix = turn.role === 'assistant' ? 'You' :
                           turn.role === 'system' ? 'System' : 'User';
-            const line = `${prefix}: ${turn.content}`;
+            const line = `${prefix}: ${content}`;
 
             if (totalLen + line.length + 1 > budget) break;
 

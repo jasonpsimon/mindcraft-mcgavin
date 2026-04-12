@@ -176,5 +176,6 @@
                 "content": "Here!"
             }
         ]
-    ]
+    ],
+    "context_rules": "RULES: Tool progression: wood\u2192stone\u2192iron\u2192diamond pickaxe. Need pickaxe for stone/ore. Craft crafting_table from 4 planks before making tools. Diamond ore only spawns below y=16 \u2014 dig deep. Smelt raw_iron in furnace to get iron_ingot before crafting iron tools. If inventory full: !autoDiscard(5). Use !getCraftingPlan to check requirements before crafting."
 }
