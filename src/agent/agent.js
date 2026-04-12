@@ -11,6 +11,7 @@ import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
 import { ConfidenceEngine, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from '../memory/index.js';
 import { LongTermMemory } from '../memory/long_term_memory.js';
+import { seedMemory } from '../memory/seed_memory.js';
 import { getFullState } from './library/full_state.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
@@ -58,6 +59,8 @@ export class Agent {
         if (this.prompter.embedding_model) {
             await this.history.initEpisodicMemory(this.prompter.embedding_model);
             await this.long_term_memory.init(this.prompter.embedding_model);
+            // Seed long-term memory with Minecraft fundamentals on first run
+            await seedMemory(this.long_term_memory);
         }
 
         // load mem first before doing task
