@@ -1,6 +1,6 @@
 import { readFileSync, mkdirSync, writeFileSync} from 'fs';
 import { Examples } from '../utils/examples.js';
-import { getCommandDocs } from '../agent/commands/index.js';
+import { getCommandDocs, getFilteredCommandDocs, initCommandDocEmbeddings } from '../agent/commands/index.js';
 import { SkillLibrary } from "../agent/library/skill_library.js";
 import { stringifyTurns } from '../utils/text.js';
 import { getCommand } from '../agent/commands/index.js';
@@ -116,11 +116,12 @@ export class Prompter {
             this.convo_examples = new Examples(this.embedding_model, settings.num_examples);
             this.coding_examples = new Examples(this.embedding_model, settings.num_examples);
             
-            // Wait for both examples to load before proceeding
+            // Wait for examples, skill library, and command doc embeddings to load
             await Promise.all([
                 this.convo_examples.load(this.profile.conversation_examples),
                 this.coding_examples.load(this.profile.coding_examples),
-                this.skill_libary.initSkillLibrary()
+                this.skill_libary.initSkillLibrary(),
+                initCommandDocEmbeddings(this.embedding_model)
             ]).catch(error => {
                 // Preserve error details
                 console.error('Failed to initialize examples. Error details:', error);
@@ -179,8 +180,28 @@ export class Prompter {
         if (prompt.includes('$ACTION')) {
             prompt = prompt.replaceAll('$ACTION', this.agent.actions.currentActionLabel);
         }
-        if (prompt.includes('$COMMAND_DOCS'))
-            prompt = prompt.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent));
+        if (prompt.includes('$COMMAND_DOCS')) {
+            // Use filtered command docs when possible — only relevant commands for context
+            if (settings.use_filtered_commands !== false && this.embedding_model && messages?.length > 0) {
+                try {
+                    const lastMsg = messages[messages.length - 1]?.content || '';
+                    const goalContext = !this.agent.self_prompter.isStopped()
+                        ? this.agent.self_prompter.prompt + ' ' : '';
+                    const filteredDocs = await getFilteredCommandDocs(
+                        this.agent,
+                        goalContext + lastMsg,
+                        this.embedding_model,
+                        settings.relevant_commands_count || 8
+                    );
+                    prompt = prompt.replaceAll('$COMMAND_DOCS', filteredDocs);
+                } catch (err) {
+                    console.warn('[Prompter] Filtered command docs failed, using full docs:', err.message);
+                    prompt = prompt.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent));
+                }
+            } else {
+                prompt = prompt.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent));
+            }
+        }
         if (prompt.includes('$CODE_DOCS')) {
             const code_task_content = messages.slice().reverse().find(msg =>
                 msg.role !== 'system' && msg.content.includes('!newAction(')

@@ -229,31 +229,134 @@ export async function executeCommand(agent, message) {
     }
 }
 
-export function getCommandDocs(agent) {
-    const typeTranslations = {
-        //This was added to keep the prompt the same as before type checks were implemented.
-        //If the language model is giving invalid inputs changing this might help.
-        'float':             'number',
-        'int':               'number',
-        'BlockName':         'string',
-        'ItemName':          'string',
-        'BlockOrItemName':   'string',
-        'boolean':           'bool'
-    }
-    let docs = `\n*COMMAND DOCS\n You can use the following commands to perform actions and get information about the world. 
+const typeTranslations = {
+    //This was added to keep the prompt the same as before type checks were implemented.
+    //If the language model is giving invalid inputs changing this might help.
+    'float':             'number',
+    'int':               'number',
+    'BlockName':         'string',
+    'ItemName':          'string',
+    'BlockOrItemName':   'string',
+    'boolean':           'bool'
+};
+
+const COMMAND_DOCS_HEADER = `\n*COMMAND DOCS\n You can use the following commands to perform actions and get information about the world.
     Use the commands with the syntax: !commandName or !commandName("arg1", 1.2, ...) if the command takes arguments.\n
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;
+
+function formatCommandDoc(command) {
+    let doc = command.name + ': ' + command.description + '\n';
+    if (command.params) {
+        doc += 'Params:\n';
+        for (let param in command.params) {
+            doc += `${param}: (${typeTranslations[command.params[param].type]??command.params[param].type}) ${command.params[param].description}\n`;
+        }
+    }
+    return doc;
+}
+
+export function getCommandDocs(agent) {
+    let docs = COMMAND_DOCS_HEADER;
     for (let command of commandList) {
         if (agent.blocked_actions.includes(command.name)) {
             continue;
         }
-        docs += command.name + ': ' + command.description + '\n';
-        if (command.params) {
-            docs += 'Params:\n';
-            for (let param in command.params) {
-                docs += `${param}: (${typeTranslations[command.params[param].type]??command.params[param].type}) ${command.params[param].description}\n`;
-            }
-        }
+        docs += formatCommandDoc(command);
     }
     return docs + '*\n';
+}
+
+// --- Filtered command docs for token-efficient prompts ---
+
+// Commands that should always be included (core bot functionality)
+const ALWAYS_INCLUDE = new Set([
+    '!stop', '!stats', '!inventory', '!nearbyBlocks', '!craftable',
+    '!newAction', '!goal', '!endGoal', '!entities'
+]);
+
+// Cached embeddings for command docs
+let _commandEmbeddings = null;
+let _commandDocStrings = null;
+
+/**
+ * Initialize embeddings for all command docs.
+ * Call once after embedding model is ready.
+ */
+export async function initCommandDocEmbeddings(embeddingModel) {
+    if (!embeddingModel || _commandEmbeddings) return;
+
+    _commandEmbeddings = new Map();
+    _commandDocStrings = new Map();
+
+    try {
+        const promises = commandList.map(async (command) => {
+            const docStr = formatCommandDoc(command);
+            _commandDocStrings.set(command.name, docStr);
+            // Embed the command name + description (not params, to keep it lightweight)
+            const embedText = `${command.name}: ${command.description}`;
+            const embedding = await embeddingModel.embed(embedText);
+            _commandEmbeddings.set(command.name, embedding);
+        });
+        await Promise.all(promises);
+        console.log(`[CommandDocs] Embedded ${_commandEmbeddings.size} command docs`);
+    } catch (err) {
+        console.warn('[CommandDocs] Embedding failed, will use full docs:', err.message);
+        _commandEmbeddings = null;
+        _commandDocStrings = null;
+    }
+}
+
+/**
+ * Get filtered command docs — only the most relevant commands for the current context.
+ *
+ * @param {object} agent - The agent instance
+ * @param {string} context - Current message/goal context for relevance matching
+ * @param {object} embeddingModel - The embedding model
+ * @param {number} selectCount - Number of relevant commands to include (beyond always-include)
+ * @returns {string} Filtered command docs string
+ */
+export async function getFilteredCommandDocs(agent, context, embeddingModel, selectCount = 8) {
+    // If embeddings aren't ready, fall back to full docs
+    if (!_commandEmbeddings || !embeddingModel) {
+        return getCommandDocs(agent);
+    }
+
+    try {
+        const contextEmbedding = await embeddingModel.embed(context);
+
+        // Score all commands by similarity to current context
+        const scored = [];
+        for (const [name, embedding] of _commandEmbeddings) {
+            if (agent.blocked_actions.includes(name)) continue;
+            if (ALWAYS_INCLUDE.has(name)) continue; // handled separately
+
+            let dot = 0, normA = 0, normB = 0;
+            for (let i = 0; i < contextEmbedding.length; i++) {
+                dot += contextEmbedding[i] * embedding[i];
+                normA += contextEmbedding[i] * contextEmbedding[i];
+                normB += embedding[i] * embedding[i];
+            }
+            const denom = Math.sqrt(normA) * Math.sqrt(normB);
+            const similarity = denom === 0 ? 0 : dot / denom;
+
+            scored.push({ name, similarity });
+        }
+
+        scored.sort((a, b) => b.similarity - a.similarity);
+        const selectedNames = new Set(scored.slice(0, selectCount).map(s => s.name));
+
+        // Build filtered docs: always-include + top-K relevant
+        let docs = COMMAND_DOCS_HEADER;
+        for (const command of commandList) {
+            if (agent.blocked_actions.includes(command.name)) continue;
+            if (ALWAYS_INCLUDE.has(command.name) || selectedNames.has(command.name)) {
+                docs += _commandDocStrings.get(command.name) || formatCommandDoc(command);
+            }
+        }
+
+        return docs + '*\n';
+    } catch (err) {
+        console.warn('[CommandDocs] Filtered docs failed, using full docs:', err.message);
+        return getCommandDocs(agent);
+    }
 }
