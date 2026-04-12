@@ -45,7 +45,7 @@ export function getBlockAtPosition(bot, x=0, y=0, z=0) {
      * @param {Bot} bot - The bot to get the block for.
      * @param {number} x - The relative x offset to serach, default 0.
      * @param {number} y - The relative y offset to serach, default 0.
-     * @param {number} y - The relative z offset to serach, default 0. 
+     * @param {number} z - The relative z offset to search, default 0.
      * @returns {Block} - The nearest block.
      * @example
      * let blockBelow = world.getBlockAtPosition(bot, 0, -1, 0);

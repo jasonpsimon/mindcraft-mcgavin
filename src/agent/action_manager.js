@@ -1,3 +1,5 @@
+import assert from 'assert';
+
 export class ActionManager {
     constructor(agent) {
         this.agent = agent;

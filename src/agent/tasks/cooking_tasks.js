@@ -154,35 +154,35 @@ export class CookingTaskInitiator {
         //     // Place the chest
         //     await bot.chat(`/setblock ${x} ${y} ${z} chest`);
 
-            const cookingItems = [
-                ['minecraft:milk_bucket', 1],     // Non-stackable
-                ['minecraft:egg', 16],            // Stacks to 16
-                ['minecraft:dandelion', 64],    // Stacks to 64
-                ['minecraft:sugar', 64],
-                ['minecraft:cocoa_beans', 64],
-                ['minecraft:apple', 64],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:salmon', 64],
-                ['minecraft:cod', 64],
-                ['minecraft:kelp', 64],
-                ['minecraft:dried_kelp', 64],
-                ['minecraft:sweet_berries', 64],
-                ['minecraft:honey_bottle', 1],     // Non-stackable
-                ['minecraft:glow_berries', 64],
-                ['minecraft:bowl', 64],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:cooked_salmon', 64],
-                ['minecraft:cooked_cod', 64],
-                ['minecraft:gold_ingot', 64],
-                ['minecraft:oak_planks', 64],
-                ['minecraft:iron_ingot', 64],
-                ['minecraft:milk_bucket', 1],
-                ['minecraft:milk_bucket', 1],
-            ];
+        //     const cookingItems = [
+        //         ['minecraft:milk_bucket', 1],     // Non-stackable
+        //         ['minecraft:egg', 16],            // Stacks to 16
+        //         ['minecraft:dandelion', 64],    // Stacks to 64
+        //         ['minecraft:sugar', 64],
+        //         ['minecraft:cocoa_beans', 64],
+        //         ['minecraft:apple', 64],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:salmon', 64],
+        //         ['minecraft:cod', 64],
+        //         ['minecraft:kelp', 64],
+        //         ['minecraft:dried_kelp', 64],
+        //         ['minecraft:sweet_berries', 64],
+        //         ['minecraft:honey_bottle', 1],     // Non-stackable
+        //         ['minecraft:glow_berries', 64],
+        //         ['minecraft:bowl', 64],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:cooked_salmon', 64],
+        //         ['minecraft:cooked_cod', 64],
+        //         ['minecraft:gold_ingot', 64],
+        //         ['minecraft:oak_planks', 64],
+        //         ['minecraft:iron_ingot', 64],
+        //         ['minecraft:milk_bucket', 1],
+        //         ['minecraft:milk_bucket', 1],
+        //     ];
 
         //     // Fill the chest with random cooking items
         //     for (let slot = 0; slot < cookingItems.length; slot++) { // Chest has 27 slots

@@ -571,7 +571,7 @@ export async function breakBlockAt(bot, x, y, z) {
      * await skills.breakBlockAt(bot, position.x, position.y - 1, position.x);
      **/
     if (x == null || y == null || z == null) throw new Error('Invalid position to break block at.');
-    let block = bot.blockAt(Vec3(x, y, z));
+    let block = bot.blockAt(new Vec3(x, y, z));
     if (block.name !== 'air' && block.name !== 'water' && block.name !== 'lava') {
         if (bot.modes.isOn('cheat')) {
             if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
@@ -717,12 +717,12 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
     let buildOffBlock = null;
     let faceVec = null;
     const dir_map = {
-        'top': Vec3(0, 1, 0),
-        'bottom': Vec3(0, -1, 0),
-        'north': Vec3(0, 0, -1),
-        'south': Vec3(0, 0, 1),
-        'east': Vec3(1, 0, 0),
-        'west': Vec3(-1, 0, 0),
+        'top': new Vec3(0, 1, 0),
+        'bottom': new Vec3(0, -1, 0),
+        'north': new Vec3(0, 0, -1),
+        'south': new Vec3(0, 0, 1),
+        'east': new Vec3(1, 0, 0),
+        'west': new Vec3(-1, 0, 0),
     }
     let dirs = [];
     if (placeOn === 'side') {
@@ -751,7 +751,7 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
     }
 
     const pos = bot.entity.position;
-    const pos_above = pos.plus(Vec3(0,1,0));
+    const pos_above = pos.plus(new Vec3(0,1,0));
     const dont_move_for = ['torch', 'redstone_torch', 'redstone', 'lever', 'button', 'rail', 'detector_rail', 
         'powered_rail', 'activator_rail', 'tripwire_hook', 'tripwire', 'water_bucket', 'string'];
     if (!dont_move_for.includes(item_name) && (pos.distanceTo(targetBlock.position) < 1.1 || pos_above.distanceTo(targetBlock.position) < 1.1)) {
@@ -1513,7 +1513,7 @@ export async function useDoor(bot, door_pos=null) {
             if (door_pos) break;
         }
     } else {
-        door_pos = Vec3(door_pos.x, door_pos.y, door_pos.z);
+        door_pos = new Vec3(door_pos.x, door_pos.y, door_pos.z);
     }
     if (!door_pos) {
         log(bot, `Could not find a door to use.`);
