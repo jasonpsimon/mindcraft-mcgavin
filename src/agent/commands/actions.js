@@ -19,7 +19,7 @@ function runAsAction (actionFn, resume = false, timeout = -1) {
         };
         const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout, resume });
         if (code_return.interrupted && !code_return.timedout)
-            return;
+            return `Action was interrupted. ${code_return.message || 'Try again.'}`;
         return code_return.message;
     }
 

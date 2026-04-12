@@ -326,7 +326,7 @@ async function execute(mode, agent, func, timeout=-1) {
         // auto prompt to respond to the interruption
         let role = convoManager.inConversation() ? agent.last_sender : 'system';
         let logs = agent.bot.modes.flushBehaviorLog();
-        agent.handleMessage(role, `(AUTO MESSAGE)Your previous action '${interrupted_action}' was interrupted by ${mode.name}.
+        agent.handleMessage(role, `(AUTO MESSAGE)Your previous action '${interrupted_action}' was interrupted by ${mode.name}. Try the action again or use a different approach.
         Your behavior log: ${logs}\nRespond accordingly.`);
     }
 }
