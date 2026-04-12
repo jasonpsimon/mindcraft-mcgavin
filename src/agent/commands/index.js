@@ -120,6 +120,13 @@ export function parseCommandMessage(message) {
         const param = params[i];
         //Remove any extra characters
         let arg = args[i].trim();
+        // Auto-normalize item names: "diamond pickaxe" → "diamond_pickaxe"
+        if (param.type === 'string' && arg.startsWith('"') && arg.endsWith('"')) {
+            const inner = arg.slice(1, -1);
+            if (inner.includes(' ') && /^[a-z ]+$/i.test(inner)) {
+                arg = '"' + inner.replace(/ /g, '_') + '"';
+            }
+        }
         if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
             arg = arg.substring(1, arg.length-1);
         }

@@ -464,7 +464,7 @@ export function initializeLoopingItems() {
 export function getDetailedCraftingPlan(targetItem, count = 1, current_inventory = {}) {
     initializeLoopingItems();
     if (!targetItem || count <= 0 || !getItemId(targetItem)) {
-        return "Invalid input. Please provide a valid item name and positive count.";
+        return `Invalid item name "${targetItem}". Item names use underscores, not spaces (e.g. "diamond_pickaxe" not "diamond pickaxe"). Provide a valid minecraft item name.`;
     }
 
     if (isBaseItem(targetItem)) {
