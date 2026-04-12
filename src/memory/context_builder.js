@@ -50,8 +50,6 @@ export class ContextBuilder {
      * @param {string} params.episodicMemory - Formatted episodic memories
      * @param {string} params.legacyMemory - Legacy 500-char summary
      * @param {string} params.examples - Formatted few-shot examples
-     * @param {string} params.codeDocsStr - Relevant code docs (for coding mode)
-     * @param {number} params.confidenceLevel - From confidence engine (0-1), used to adjust example count
      * @returns {object} { systemPrompt: string, stats: object }
      */
     build(params) {

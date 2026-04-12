@@ -34,7 +34,8 @@ export function wordOverlapScore(text1, text2) {
     const words1 = _getWords(text1);
     const words2 = _getWords(text2);
     const intersection = words1.filter(word => words2.includes(word));
-    return intersection.length / (words1.length + words2.length - intersection.length);
+    const union = words1.length + words2.length - intersection.length;
+    return union === 0 ? 0 : intersection.length / union;
 }
 
 // ensures stricter turn order and roles:
