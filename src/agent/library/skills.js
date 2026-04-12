@@ -86,7 +86,7 @@ export async function craftRecipe(bot, itemName, num=1) {
         const emptySlots = bot.inventory.emptySlotCount();
         let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}.`;
         if (emptySlots === 0) {
-            hint += ` Your inventory is FULL (0 empty slots). You MUST !discard items first to make room, then !collectBlocks to gather what you need.`;
+            hint += ` Your inventory is FULL (0 empty slots). You MUST use !discard to drop junk items first, then !collectBlocks to gather what you need. Example: !discard("andesite", 64) or !discard("cobbled_deepslate", 38) or !discard("tuff", 50).`;
         } else {
             hint += ` Use !collectBlocks to gather the missing items.`;
         }
@@ -520,7 +520,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }
         catch (err) {
             if (err.name === 'NoChests') {
-                log(bot, `Failed to collect ${blockType}: Inventory full. Use !discard("item_name", count) to drop unwanted items like rotten_flesh, gravel, or dirt to make room.`);
+                log(bot, `Failed to collect ${blockType}: Inventory full. Use !discard("item_name", count) to drop unwanted items like cobblestone, andesite, tuff, cobbled_deepslate, gravel, rotten_flesh, or dirt to make room.`);
                 break;
             }
             else {
