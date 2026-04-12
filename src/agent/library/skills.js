@@ -453,6 +453,17 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
 
     let collected = 0;
 
+    // Auto-replant: track tree base positions when collecting logs
+    const LOG_TO_SAPLING = {
+        'oak_log': 'oak_sapling', 'birch_log': 'birch_sapling',
+        'spruce_log': 'spruce_sapling', 'dark_oak_log': 'dark_oak_sapling',
+        'jungle_log': 'jungle_sapling', 'acacia_log': 'acacia_sapling',
+        'mangrove_log': 'mangrove_propagule', 'cherry_log': 'cherry_sapling',
+        'pale_oak_log': 'pale_oak_sapling',
+    };
+    const isLog = Object.keys(LOG_TO_SAPLING).some(l => blocktypes.includes(l));
+    const treeBasePositions = []; // store {x, y, z, saplingType}
+
     const movements = new pf.Movements(bot);
     movements.dontMineUnderFallingBlock = false;
     movements.dontCreateFlow = true;
@@ -517,8 +528,29 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                 await bot.collectBlock.collect(block);
                 success = true;
             }
-            if (success)
+            if (success) {
                 collected++;
+                // Track tree base: record the lowest Y position we chopped at
+                if (isLog && block) {
+                    const saplingType = LOG_TO_SAPLING[block.name] || LOG_TO_SAPLING[blockType];
+                    if (saplingType) {
+                        // Only record if this is the lowest log at this x,z (the stump)
+                        const existing = treeBasePositions.find(p => p.x === block.position.x && p.z === block.position.z);
+                        if (!existing || block.position.y < existing.y) {
+                            if (existing) {
+                                existing.y = block.position.y;
+                            } else {
+                                treeBasePositions.push({
+                                    x: block.position.x,
+                                    y: block.position.y,
+                                    z: block.position.z,
+                                    saplingType
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             await autoLight(bot);
         }
         catch (err) {
@@ -538,6 +570,37 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             break;  
     }
     log(bot, `Collected ${collected} ${blockType}.`);
+
+    // Auto-replant saplings at tree base positions
+    if (isLog && treeBasePositions.length > 0 && collected > 0) {
+        let replanted = 0;
+        for (const base of treeBasePositions) {
+            try {
+                const saplingItem = bot.inventory.findInventoryItem(base.saplingType);
+                if (!saplingItem) break; // no saplings left
+
+                // Check if the block at the base is now air (tree was fully chopped)
+                const baseBlock = bot.blockAt(new Vec3(base.x, base.y, base.z));
+                if (baseBlock && baseBlock.name === 'air') {
+                    // Check the block below is solid (dirt/grass)
+                    const belowBlock = bot.blockAt(new Vec3(base.x, base.y - 1, base.z));
+                    if (belowBlock && (belowBlock.name === 'dirt' || belowBlock.name === 'grass_block' ||
+                        belowBlock.name === 'podzol' || belowBlock.name === 'mud' ||
+                        belowBlock.name === 'rooted_dirt' || belowBlock.name === 'coarse_dirt' ||
+                        belowBlock.name === 'mycelium' || belowBlock.name === 'moss_block')) {
+                        await placeBlock(bot, base.saplingType, base.x, base.y, base.z);
+                        replanted++;
+                    }
+                }
+            } catch (e) {
+                // Replanting failed, not critical — just skip
+            }
+        }
+        if (replanted > 0) {
+            log(bot, `Replanted ${replanted} ${treeBasePositions[0]?.saplingType || 'sapling'}(s) where trees were chopped.`);
+        }
+    }
+
     return collected > 0;
 }
 
