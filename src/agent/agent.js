@@ -546,21 +546,18 @@ export class Agent {
         this.bot.on('messagestr', async (message, _, jsonMsg) => {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
                 console.log('Agent died: ', message);
-                let death_pos = this.bot.entity.position;
-                this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                const death_pos = this.bot.entity?.position;
+                const dimension = this.bot.game.dimension;
 
-                // Also store in long-term memory for persistent recall
                 if (death_pos) {
+                    const posText = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
+                    this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
                     await this.long_term_memory.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
-                    await this.history.episodic.addEvent(`Died: ${message} at x:${death_pos.x.toFixed(1)}, y:${death_pos.y.toFixed(1)}, z:${death_pos.z.toFixed(1)}`);
+                    await this.history.episodic.addEvent(`Died: ${message} at ${posText}`);
+                    this.handleMessage('system', `You died at position ${posText} in the ${dimension} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
+                } else {
+                    this.handleMessage('system', `You died in the ${dimension} dimension with the final message: '${message}'. Position unknown. Previous actions were stopped and you have respawned.`);
                 }
-
-                let death_pos_text = null;
-                if (death_pos) {
-                    death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
-                }
-                let dimention = this.bot.game.dimension;
-                this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimention} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
             }
         });
         this.bot.on('idle', () => {

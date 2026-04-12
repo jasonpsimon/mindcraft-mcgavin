@@ -12,8 +12,8 @@
  * File-backed persistence to ./bots/{name}/procedural_memory.json
  */
 
-import { writeFile, readFile, mkdir } from 'fs/promises';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFile, mkdir } from 'fs/promises';
+import { readFileSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 
 export class ProceduralMemory {

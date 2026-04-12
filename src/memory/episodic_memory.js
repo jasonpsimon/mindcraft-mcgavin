@@ -252,8 +252,8 @@ export class EpisodicMemory {
      */
     _compressText(text) {
         return text
-            .replace(/\n{3,}/g, '\n\n')
-            .replace(/\s{2,}/g, ' ')
+            .replace(/\n{3,}/g, '\n\n')  // collapse 3+ newlines to double (preserve paragraph breaks)
+            .replace(/ {2,}/g, ' ')       // collapse multiple spaces only (not newlines)
             .trim()
             .substring(0, 1000);
     }

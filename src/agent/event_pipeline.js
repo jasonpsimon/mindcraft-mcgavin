@@ -91,13 +91,14 @@ export class EventPipeline {
             });
         });
 
-        // Weather change
+        // Weather change: invalidate state cache + log for learning
         bot.on('rain', () => {
             this._handleEvent('weather', () => {
-                // Invalidate delta state cache on weather change
                 if (this.agent.prompter?.deltaState) {
-                    // Weather change is tracked by delta state automatically
+                    this.agent.prompter.deltaState.invalidate();
                 }
+                const weatherState = bot.isRaining ? 'started raining' : 'stopped raining';
+                this.agent.history?.episodic?.addEvent(`Weather: ${weatherState}`);
             });
         });
 

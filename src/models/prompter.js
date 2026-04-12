@@ -201,12 +201,10 @@ export class Prompter {
             // Use filtered command docs when possible — only relevant commands for context
             if (settings.use_filtered_commands !== false && this.embedding_model && messages?.length > 0) {
                 try {
-                    const lastMsg = messages[messages.length - 1]?.content || '';
-                    const goalContext = !this.agent.self_prompter.isStopped()
-                        ? this.agent.self_prompter.prompt + ' ' : '';
+                    const contextQuery = this._getContextQuery(messages);
                     const filteredDocs = await getFilteredCommandDocs(
                         this.agent,
-                        goalContext + lastMsg,
+                        contextQuery,
                         this.embedding_model,
                         settings.relevant_commands_count || 8
                     );
@@ -236,11 +234,9 @@ export class Prompter {
             let memoryText = this.agent.history.memory;
             try {
                 if (this.agent.history.episodic && messages?.length > 0) {
-                    const lastMsg = messages[messages.length - 1]?.content || '';
-                    const goalContext = !this.agent.self_prompter.isStopped()
-                        ? this.agent.self_prompter.prompt + ' ' : '';
+                    const contextQuery = this._getContextQuery(messages);
                     const episodicText = await this.agent.history.episodic.getFormattedMemories(
-                        goalContext + lastMsg
+                        contextQuery
                     );
                     if (episodicText) {
                         memoryText = memoryText
@@ -299,6 +295,18 @@ export class Prompter {
     }
 
     /**
+     * Build a context query string from the current goal + last message.
+     * Used by context-aware placeholders ($COMMAND_DOCS, $MEMORY) and ContextBuilder
+     * to retrieve semantically relevant content.
+     */
+    _getContextQuery(messages) {
+        const goalCtx = !this.agent.self_prompter.isStopped()
+            ? this.agent.self_prompter.prompt + ' ' : '';
+        const lastMsg = messages?.[messages.length - 1]?.content || '';
+        return goalCtx + lastMsg;
+    }
+
+    /**
      * Build a system prompt using the ContextBuilder instead of template replacement.
      * Opt-in via settings.use_context_builder = true.
      * Assembles a token-budgeted prompt from all available context.
@@ -319,12 +327,11 @@ export class Prompter {
             }
 
             // Command docs (filtered if possible)
+            const contextQuery = this._getContextQuery(messages);
             let commandDocs = '';
             try {
                 if (settings.use_filtered_commands !== false && this.embedding_model && messages?.length > 0) {
-                    const lastMsg = messages[messages.length - 1]?.content || '';
-                    const goalCtx = goal ? goal + ' ' : '';
-                    commandDocs = await getFilteredCommandDocs(agent, goalCtx + lastMsg, this.embedding_model, settings.relevant_commands_count || 8);
+                    commandDocs = await getFilteredCommandDocs(agent, contextQuery, this.embedding_model, settings.relevant_commands_count || 8);
                 } else {
                     commandDocs = getCommandDocs(agent);
                 }
@@ -336,9 +343,7 @@ export class Prompter {
             let episodicMemory = '';
             try {
                 if (agent.history.episodic && messages?.length > 0) {
-                    const lastMsg = messages[messages.length - 1]?.content || '';
-                    const goalCtx = goal ? goal + ' ' : '';
-                    episodicMemory = await agent.history.episodic.getFormattedMemories(goalCtx + lastMsg) || '';
+                    episodicMemory = await agent.history.episodic.getFormattedMemories(contextQuery) || '';
                 }
             } catch (e) { /* silent */ }
 
