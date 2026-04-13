@@ -27,6 +27,8 @@ The bot (`McGavin`) runs on a home server against a local Minecraft world, power
 | **Block Awareness** | `$STATS` placeholder injection | Full `!nearbyBlocks` (16-block radius) injected every prompt |
 | **Ore Handling** | Basic block names | Bidirectional variant mapping (regular ↔ deepslate ↔ nether) |
 | **Command Routing** | All through LLM | Confidence engine caches patterns; direct commands bypass LLM entirely |
+| **Error Recovery** | LLM must interpret failures | Auto-recovery engine resolves common failures (wrong tool, full inventory, missing crafting table) without LLM involvement |
+| **Inventory Mgmt** | Manual | Goal-aware auto-discard with tiered item scoring, cooldown protection |
 
 ## Custom Systems
 
@@ -44,7 +46,7 @@ Caches successful command patterns and replays them for high-confidence matches 
 - **Summarized Memory** — compressed conversation history (500 char limit)
 
 ### Goal Queue & Persistent Rules
-- **Goal queue** — stack multiple sequential goals; `!endGoal` auto-advances to the next
+- **Goal queue** — stack multiple sequential goals; `!endGoal` auto-advances to the next. Goal names are surfaced in the LLM system prompt so the bot knows its full roadmap
 - **Persistent rules** — background checks that run between every self-prompt iteration (e.g., "collect any visible diamond ore"). Smart condition detection parses rule descriptions into actual game-state checks. Rules and goals persist across restarts via `memory.json`.
 
 ### Player Interaction
@@ -52,6 +54,22 @@ Caches successful command patterns and replays them for high-confidence matches 
 - **Natural language detection** — "add goal Mine 64 diamonds" or "add rule collect visible ore" parsed via regex
 - **Player message queue** — messages that arrive during LLM generation are queued and drained after completion
 - **Urgent command detection** — "stop", "follow me", "come here" are caught before the queue
+
+### Auto-Recovery Engine (GOAP-Inspired)
+The auto-recovery engine intercepts failed commands and resolves common failure chains automatically — no LLM round-trip required. Inspired by Goal-Oriented Action Planning (GOAP), it recursively resolves prerequisites up to 8 levels deep.
+
+- **Pattern matching** — 7 built-in failure patterns (inventory full, wrong tool, missing crafting table, missing furnace, bedrock hit, pathfinding timeout, block not found) with runtime-extensible registry
+- **Recursive dependency resolution** — "need pickaxe" → "need crafting table" → "need planks" → "collect logs" → resolved
+- **Tool tier awareness** — queries both a hardcoded fast-path map and minecraft-data `harvestTools` dynamically to determine minimum tool tier. Distinguishes pickaxe vs axe operations
+- **Inventory-aware** — checks empty slots before crafting, pre-validates discard suggestions, respects the 60-second discard cooldown
+- **Snapshot caching** — single inventory enumeration per recovery pass, invalidated after mutations (craft, collect, discard)
+- **Repeated failure detection** — gives up after 3 identical failures within 60 seconds, advising the LLM to try a different approach
+- **Clean retry** — extracts the parsed command (e.g., `!collectBlocks("oak_log", 4)`) for retry instead of re-sending the full LLM response
+
+### Inventory Management
+- **Goal-aware auto-discard** — 5-tier item scoring system that protects goal-relevant items (diamond ore when goal is "craft diamond tools") and always keeps essential items (tools, food, crafting tables)
+- **Discard cooldown** — 60-second cooldown prevents the bot from picking up items it just threw away
+- **Pre-flight checks** — before crafting or recovery actions, the engine validates whether inventory can be cleared and bails early if not
 
 ### Mining & Pathfinding
 - **Ore variant mapping** — searching for "diamond_ore" also finds `deepslate_diamond_ore`; searching for "gold" also finds `nether_gold_ore`. Bidirectional.
@@ -72,11 +90,12 @@ Player Chat ──→ Direct Command?  ──yes──→ Execute immediately
                     │ miss
                     ▼
               ContextBuilder ──→ LLM (Gemma 4 E4B IT) ──→ Parse & Execute
-                    ▲
-                    │
-         ┌─────────┴─────────┐
-    NearbyBlocks     Memory (episodic/LT/procedural)
-    (16-block radius)
+                    ▲                                          │
+                    │                                     Command fails?
+         ┌─────────┴─────────┐                                 │
+    NearbyBlocks     Memory (episodic/LT/procedural)           ▼
+    (16-block radius)                                 Auto-Recovery Engine
+                                                      (resolve → retry)
 ```
 
 ## Setup
@@ -140,6 +159,7 @@ src/
 ├── agent/
 │   ├── agent.js              # Main agent — message handling, command routing
 │   ├── self_prompter.js       # Goal queue, persistent rules, self-prompt loop
+│   ├── auto_recovery.js        # GOAP-inspired failure recovery engine
 │   ├── commands/
 │   │   ├── actions.js         # !goal, !addGoal, !addRule, !digDown, !digUp, etc.
 │   │   ├── queries.js         # !nearbyBlocks, !stats, !inventory, !viewRules
@@ -153,6 +173,8 @@ src/
 │   ├── long_term_memory.js    # Persistent facts (Vectra)
 │   ├── procedural_memory.js   # Command usage patterns
 │   └── seed_memory.js         # Bootstrap knowledge
+├── utils/
+│   └── inventory_utils.js     # Goal-aware auto-discard and inventory scoring
 └── models/
     └── prompter.js            # LLM interface and prompt orchestration
 ```
