@@ -12,7 +12,6 @@ import { selectAPI, createModel } from './_model_map.js';
 import { DeltaStateTracker } from '../memory/delta_state.js';
 import { getFullState } from '../agent/library/full_state.js';
 import { ContextBuilder } from '../memory/context_builder.js';
-import { getNearbyBlockTypes } from '../agent/library/world.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -370,20 +369,16 @@ export class Prompter {
                 }
             } catch (e) { /* silent */ }
 
-            // Nearby blocks — filter for interesting ones so LLM knows surroundings
+            // Nearby blocks — run the full !nearbyBlocks command like upstream does
+            // This gives the LLM block awareness every turn without wasting a command
             let nearbyBlocks = '';
             try {
-                const allBlocks = getNearbyBlockTypes(agent.bot, 16);
-                const interesting = allBlocks.filter(b =>
-                    b.includes('ore') || b.includes('chest') || b.includes('crafting') ||
-                    b.includes('furnace') || b.includes('diamond') || b.includes('lava') ||
-                    b.includes('water') || b.includes('spawner') || b.includes('obsidian') ||
-                    b.includes('iron_block') || b.includes('gold_block')
-                );
-                if (interesting.length > 0) {
-                    nearbyBlocks = 'Nearby notable blocks (within 16 blocks): ' + interesting.join(', ');
-                }
-            } catch (e) { /* silent */ }
+                nearbyBlocks = await getCommand('!nearbyBlocks').perform(agent);
+                if (nearbyBlocks) nearbyBlocks = nearbyBlocks.trim();
+                console.log('[NearbyBlocks] ' + (nearbyBlocks ? nearbyBlocks.replace(/\n/g, ' | ') : '(empty)'));
+            } catch (e) {
+                console.warn('[ContextBuilder] nearbyBlocks failed:', e.message);
+            }
 
             const { systemPrompt, stats } = this.contextBuilder.build({
                 botName: agent.name,
@@ -400,7 +395,7 @@ export class Prompter {
                 profile: this.profile
             });
 
-            console.log(`[ContextBuilder] ${stats.usedTokens}/${Math.ceil(this.contextBuilder.availableChars / this.contextBuilder.charsPerToken)} tokens | conv:${stats.sections.conversation || 0} cmd:${stats.sections.commands || 0} mem:${stats.sections.memory || 0} ex:${stats.sections.examples || 0} | SP:${isSelfPrompting}`);
+            console.log(`[ContextBuilder] ${stats.usedTokens}/${Math.ceil(this.contextBuilder.availableChars / this.contextBuilder.charsPerToken)} tokens | conv:${stats.sections.conversation || 0} cmd:${stats.sections.commands || 0} mem:${stats.sections.memory || 0} ex:${stats.sections.examples || 0} nb:${stats.sections.nearbyBlocks || 0} | SP:${isSelfPrompting}`);
             return systemPrompt;
         } catch (err) {
             console.warn('[ContextBuilder] Failed, falling back to replaceStrings:', err.message);

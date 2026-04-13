@@ -23,7 +23,7 @@ export class ConfidenceEngine {
         this.procedural = new ProceduralMemory(agentName, options);
 
         // Thresholds (configurable via settings)
-        this.highThreshold = options.highThreshold || 0.85;
+        this.highThreshold = options.highThreshold || 0.98;
         this.mediumThreshold = options.mediumThreshold || 0.5;
 
         // Stats tracking

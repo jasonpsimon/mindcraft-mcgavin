@@ -4,7 +4,7 @@ import { VisionInterpreter } from './vision/vision_interpreter.js';
 import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
-import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
+import { containsCommand, commandExists, executeCommand, getCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
@@ -308,9 +308,8 @@ export class Agent {
         };
 
         if (save_data?.self_prompt) {
-            if (init_message) {
-                this.history.add('system', init_message);
-            }
+            // Skip init_message when resuming a goal — it races with
+            // self-prompter and causes responses to get discarded
             await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state);
         }
         if (save_data?.last_sender) {
@@ -541,6 +540,14 @@ export class Agent {
 
                 if (execute_res) {
                     this.history.add('system', execute_res);
+
+                    // --- Refresh nearby blocks after every action ---
+                    // Bot has likely moved, give LLM fresh surroundings
+                    try {
+                        const nbResult = getCommand('!nearbyBlocks').perform(this);
+                        if (nbResult) this.history.add('system', nbResult);
+                    } catch (e) { /* silent */ }
+                    // --- End nearby blocks refresh ---
                     
                     // --- Inventory-full loop breaker ---
                     const execLower = execute_res.toLowerCase();
