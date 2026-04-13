@@ -959,89 +959,135 @@ export async function equip(bot, itemName) {
 export async function safeToss(bot, itemType, metadata, count) {
     const pos = bot.entity.position.floored();
 
-    // Check if we're in a confined space: solid blocks on most sides + above
+    // Check if we're in a confined space (underground)
     const above = bot.blockAt(pos.offset(0, 2, 0));
     const isConfined = above && above.name !== 'air' && above.name !== 'short_grass'
         && above.name !== 'cave_air';
 
-    if (!isConfined) {
-        // Surface: toss normally — no fire, no pockets needed
-        await bot.toss(itemType, metadata, count);
-        return;
-    }
+    // --- Strategy 1 (underground only): Fire Pit ---
+    // Dig a hole in the floor, light a fire, toss items in to burn.
+    // Reseal with the original block material.
+    if (isConfined) {
+        const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
+        if (flintAndSteel) {
+            const pitPos = pos.offset(0, -1, 0);
+            const floorBlock = bot.blockAt(pitPos);
 
-    // --- Underground disposal ---
-    // Strategy 1: Fire pit — dig a hole in the floor, light a fire, toss items in to burn.
-    // Strategy 2: Sealed pocket — 2-deep wall alcove when no flint_and_steel.
+            if (floorBlock && floorBlock.diggable
+                && floorBlock.name !== 'air' && floorBlock.name !== 'cave_air'
+                && floorBlock.name !== 'water' && floorBlock.name !== 'lava'
+                && floorBlock.name !== 'bedrock') {
 
-    const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
+                const originalFloorName = floorBlock.name; // remember for resealing
+                console.log(`[SafeToss] Fire pit — digging ${originalFloorName} at ${pitPos}`);
+                try {
+                    await bot.dig(floorBlock);
 
-    if (flintAndSteel) {
-        // --- Fire Pit Strategy ---
-        // Dig 1 block down directly below the bot's feet, light it, toss items in
-        const pitPos = pos.offset(0, -1, 0);
-        const floorBlock = bot.blockAt(pitPos);
+                    const pitFloor = bot.blockAt(pos.offset(0, -2, 0));
+                    if (pitFloor && pitFloor.name !== 'air') {
+                        await bot.equip(flintAndSteel, 'hand');
+                        await bot.activateBlock(pitFloor);
+                        console.log('[SafeToss] Fire lit in pit');
 
-        // Need a solid, diggable block below us (not bedrock, air, lava, water)
-        if (floorBlock && floorBlock.diggable
-            && floorBlock.name !== 'air' && floorBlock.name !== 'cave_air'
-            && floorBlock.name !== 'water' && floorBlock.name !== 'lava'
-            && floorBlock.name !== 'bedrock') {
+                        await bot.lookAt(pitPos.offset(0.5, 0.5, 0.5));
+                        await bot.toss(itemType, metadata, count);
 
-            console.log(`[SafeToss] Fire pit strategy — digging pit at ${pitPos}`);
-            try {
-                // Dig the pit
-                await bot.dig(floorBlock);
+                        console.log('[SafeToss] Waiting for items to burn...');
+                        await new Promise(r => setTimeout(r, 5500));
 
-                // Light fire on the floor of the pit
-                const pitFloor = bot.blockAt(pos.offset(0, -2, 0));
-                if (pitFloor && pitFloor.name !== 'air') {
-                    await bot.equip(flintAndSteel, 'hand');
-                    // activateBlock lights fire on top of the target block
-                    await bot.activateBlock(pitFloor);
-                    console.log('[SafeToss] Fire lit in pit');
-
-                    // Look down into the pit and toss items
-                    await bot.lookAt(pitPos.offset(0.5, 0.5, 0.5));
-                    await bot.toss(itemType, metadata, count);
-
-                    // Wait for items to burn (~5 seconds in fire)
-                    console.log('[SafeToss] Waiting for items to burn...');
-                    await new Promise(r => setTimeout(r, 5500));
-
-                    // Extinguish the fire by placing a block back over it
-                    // This also plugs the hole so we don't fall in
-                    const sealBlocks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
-                        'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone'];
-                    let sealItem = null;
-                    for (const name of sealBlocks) {
-                        sealItem = bot.inventory.findInventoryItem(name);
-                        if (sealItem) break;
-                    }
-                    if (sealItem) {
-                        try {
-                            const pitFloorRef = bot.blockAt(pos.offset(0, -2, 0));
-                            if (pitFloorRef && pitFloorRef.name !== 'air') {
-                                await bot.equip(sealItem, 'hand');
-                                await bot.placeBlock(pitFloorRef, new Vec3(0, 1, 0));
-                                console.log('[SafeToss] Pit sealed');
+                        // Reseal with the original material, fall back to any available block
+                        const sealItem = _findSealBlock(bot, originalFloorName);
+                        if (sealItem) {
+                            try {
+                                const pitFloorRef = bot.blockAt(pos.offset(0, -2, 0));
+                                if (pitFloorRef && pitFloorRef.name !== 'air') {
+                                    await bot.equip(sealItem, 'hand');
+                                    await bot.placeBlock(pitFloorRef, new Vec3(0, 1, 0));
+                                    console.log(`[SafeToss] Pit resealed with ${sealItem.name}`);
+                                }
+                            } catch (e) {
+                                console.warn('[SafeToss] Could not reseal pit:', e.message);
                             }
-                        } catch (e) {
-                            console.warn('[SafeToss] Could not seal pit:', e.message);
                         }
+                        return; // Done — items burned
                     }
-                    return; // Done — items burned
+                } catch (e) {
+                    console.warn('[SafeToss] Fire pit failed, trying sealed pocket:', e.message);
                 }
-            } catch (e) {
-                console.warn('[SafeToss] Fire pit failed, trying sealed pocket:', e.message);
-                // Fall through to sealed pocket strategy
             }
         }
     }
 
-    // --- Sealed Pocket Fallback ---
-    // No flint_and_steel or fire pit failed. Dig a 2-deep alcove into a wall,
-    // toss items to the back (~2.5 blocks away, outside pickup range), seal entrance.
+    // --- Strategy 2 (surface and underground): Sealed 2-Deep Pocket ---
+    // Dig a 2-block-deep alcove into the ground (surface) or wall (underground).
+    // Toss items to the back, reseal the top/entrance with the original material.
+
+    if (!isConfined) {
+        // Surface: dig straight down 2 blocks, toss into the hole, seal the top
+        const topPos = pos.offset(0, -1, 0);
+        const bottomPos = pos.offset(0, -2, 0);
+        const topBlock = bot.blockAt(topPos);
+        const bottomBlock = bot.blockAt(bottomPos);
+
+        if (topBlock && topBlock.diggable && bottomBlock && bottomBlock.diggable
+            && topBlock.name !== 'water' && topBlock.name !== 'lava'
+            && bottomBlock.name !== 'water' && bottomBlock.name !== 'lava'
+            && topBlock.name !== 'bedrock' && bottomBlock.name !== 'bedrock') {
+
+            const originalTopName = topBlock.name; // remember for resealing
+            console.log(`[SafeToss] Surface pocket — digging 2-deep below (${originalTopName})`);
+            try {
+                await bot.dig(topBlock);
+                const bottomBlockFresh = bot.blockAt(bottomPos);
+                if (bottomBlockFresh && bottomBlockFresh.diggable) {
+                    await bot.dig(bottomBlockFresh);
+                }
+
+                // Toss items into the 2-deep hole
+                await bot.lookAt(bottomPos.offset(0.5, 0.5, 0.5));
+                await bot.toss(itemType, metadata, count);
+                await new Promise(r => setTimeout(r, 400));
+
+                // Reseal the top with the original material
+                const sealItem = _findSealBlock(bot, originalTopName);
+                if (sealItem) {
+                    try {
+                        // Place on the block at y-2 (bottom of pocket) facing up
+                        const refBlock = bot.blockAt(pos.offset(0, -3, 0));
+                        if (refBlock && refBlock.name !== 'air') {
+                            // First seal the bottom slot (y-2)
+                            await bot.equip(sealItem, 'hand');
+                            await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+                        }
+                        // Now seal the top slot (y-1) with same or any material
+                        const sealItem2 = _findSealBlock(bot, originalTopName);
+                        if (sealItem2) {
+                            const midRef = bot.blockAt(pos.offset(0, -2, 0));
+                            if (midRef && midRef.name !== 'air') {
+                                await bot.equip(sealItem2, 'hand');
+                                await bot.placeBlock(midRef, new Vec3(0, 1, 0));
+                                console.log(`[SafeToss] Surface pocket sealed with ${sealItem2.name}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[SafeToss] Could not seal surface pocket:', e.message);
+                    }
+                }
+                return;
+            } catch (e) {
+                console.warn('[SafeToss] Surface pocket failed, tossing normally:', e.message);
+                await bot.toss(itemType, metadata, count);
+                return;
+            }
+        }
+
+        // Surface but can't dig down — normal toss as last resort
+        await bot.toss(itemType, metadata, count);
+        return;
+    }
+
+    // --- Underground wall pocket fallback ---
+    // No flint_and_steel or fire pit failed. Dig 2-deep into a wall, reseal entrance.
     const directions = [
         { dx: 1, dz: 0, name: 'east' },
         { dx: -1, dz: 0, name: 'west' },
@@ -1050,6 +1096,7 @@ export async function safeToss(bot, itemType, metadata, count) {
     ];
 
     let pocketDir = null;
+    let originalWallName = null;
 
     for (const dir of directions) {
         const block1 = bot.blockAt(pos.offset(dir.dx, 0, dir.dz));
@@ -1059,12 +1106,12 @@ export async function safeToss(bot, itemType, metadata, count) {
             && block2 && block2.diggable && block2.name !== 'air' && block2.name !== 'cave_air'
             && block2.name !== 'water' && block2.name !== 'lava') {
             pocketDir = dir;
+            originalWallName = block1.name; // remember for resealing
             break;
         }
     }
 
     if (!pocketDir) {
-        // No suitable wall — last resort normal toss
         await bot.toss(itemType, metadata, count);
         return;
     }
@@ -1072,7 +1119,7 @@ export async function safeToss(bot, itemType, metadata, count) {
     const pocket1Pos = pos.offset(pocketDir.dx, 0, pocketDir.dz);
     const pocket2Pos = pos.offset(pocketDir.dx * 2, 0, pocketDir.dz * 2);
 
-    console.log(`[SafeToss] Sealed pocket fallback ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos}`);
+    console.log(`[SafeToss] Wall pocket ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos} (${originalWallName})`);
     try {
         const block1 = bot.blockAt(pocket1Pos);
         if (block1 && block1.diggable) await bot.dig(block1);
@@ -1088,26 +1135,44 @@ export async function safeToss(bot, itemType, metadata, count) {
     await bot.toss(itemType, metadata, count);
     await new Promise(r => setTimeout(r, 400));
 
-    // Seal the pocket entrance
-    const sealBlocks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
-        'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone'];
-    let sealItem = null;
-    for (const name of sealBlocks) {
-        sealItem = bot.inventory.findInventoryItem(name);
-        if (sealItem) break;
-    }
+    // Reseal entrance with original wall material
+    const sealItem = _findSealBlock(bot, originalWallName);
     if (sealItem) {
         try {
             const refBlock = bot.blockAt(pocket1Pos.offset(0, -1, 0));
             if (refBlock && refBlock.name !== 'air') {
                 await bot.equip(sealItem, 'hand');
                 await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
-                console.log(`[SafeToss] Sealed pocket with ${sealItem.name}`);
+                console.log(`[SafeToss] Pocket sealed with ${sealItem.name}`);
             }
         } catch (e) {
             console.warn('[SafeToss] Could not seal pocket:', e.message);
         }
     }
+}
+
+/**
+ * Find a block in inventory to seal a pocket/pit.
+ * Prefers the original material, falls back to common blocks.
+ * @param {object} bot
+ * @param {string} preferredName - the original block name to match first
+ * @returns {object|null} inventory item or null
+ */
+function _findSealBlock(bot, preferredName) {
+    // Try the original material first
+    if (preferredName) {
+        const preferred = bot.inventory.findInventoryItem(preferredName);
+        if (preferred) return preferred;
+    }
+    // Fall back to common cheap blocks
+    const fallbacks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
+        'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone',
+        'grass_block', 'mud', 'sand', 'gravel'];
+    for (const name of fallbacks) {
+        const item = bot.inventory.findInventoryItem(name);
+        if (item) return item;
+    }
+    return null;
 }
 
 export async function discard(bot, itemName, num=-1) {
@@ -2679,6 +2744,7 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
 
 
 
