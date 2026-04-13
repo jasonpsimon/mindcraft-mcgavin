@@ -363,12 +363,12 @@ export class AutoRecoveryEngine {
         }
 
         // Determine what block we're trying to work with
-        const blockMatch = failResult.match(/harvest (\w+)|mine (\w+)/i);
-        const blockName = blockMatch ? (blockMatch[1] || blockMatch[2]) : null;
+        const blockMatch = failResult.match(/harvest (\w+)|mine (\w+)|break (\w+)/i);
+        const blockName = blockMatch ? (blockMatch[1] || blockMatch[2] || blockMatch[3]) : null;
 
         // Detect if this is an axe-type operation (wood, leaves) vs pickaxe (stone, ore)
         const failLower = failResult.toLowerCase();
-        const needsAxe = failLower.includes('axe') ||
+        const needsAxe = (/(?<!pick)axe/i.test(failResult)) ||
             (blockName && (blockName.includes('log') || blockName.includes('planks') ||
              blockName.includes('wood') || blockName.includes('leaves')));
         const tierList = needsAxe ? AXE_TIERS : PICKAXE_TIERS;

@@ -726,7 +726,10 @@ export class Agent {
                     // --- Auto-Recovery Engine ---
                     // Intercept failures and resolve dependency chains without LLM
                     try {
-                        const recovery = await this.auto_recovery.checkAndRecover(command_name, execute_res, res);
+                        // Extract just the command string (e.g. "!digDown(5)") for retry, not the full LLM response
+                        const cmdMatch = res.match(/!\w+(?:\((?:[^)]*)\))?/);
+                        const cleanCommand = cmdMatch ? cmdMatch[0] : res;
+                        const recovery = await this.auto_recovery.checkAndRecover(command_name, execute_res, cleanCommand);
                         if (recovery.recovered) {
                             console.log(`[AutoRecovery] Recovered from ${command_name} failure:`, recovery.result);
                             this.history.add('system', recovery.result);
