@@ -173,7 +173,8 @@ export class ContextBuilder {
         identity += rules + '\n';
 
         // Personality — compact
-        identity += `Be brief. Use commands, don't describe actions. Respond only as ${botName}. Always respond to players conversationally. Only use tab '\\t' when self-prompting and there's nothing to do.\n`;
+        identity += `Be brief. Use commands, don't describe actions. Respond only as ${botName}. Only use tab '\\t' when self-prompting and there's nothing to do.\n`;
+        identity += `IMPORTANT: When a player talks to you, ALWAYS respond to them conversationally FIRST (in plain text), then optionally add a command after. Never ignore a player message. If they ask you to do something, acknowledge it before acting.\n`;
 
         if (goal) {
             identity += `GOAL: "${goal}"\n`;
