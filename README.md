@@ -160,7 +160,7 @@ src/
 
 If you made it this far, I owe you an explanation. This project was forked for a very personal reason: my children.
 
-My daughter has always loved playing Minecraft and often wanted to play with me. But like many parents, I couldn't always be there. Sometimes I had to travel for work, and other times there were responsibilities at home that needed my attention. Playing together isn't just about the game, it's about interaction. No one really wants to play alone. They want someone to share the experience with.
+My daughter has always loved playing Minecraft and often wanted to play with me. But like many parents, I couldn't always be there. Sometimes I had to travel for work, and other times there were responsibilities at home that needed my attention. Playing a game isn't just about the game, it's about interaction. No one really wants to play alone. They want someone to share the experience with.
 
 Forking this project gave me a way to create that interaction, even when I couldn't be physically present. It allowed me to build something that could keep her company in the game world and make Minecraft feel more alive and social.
 
