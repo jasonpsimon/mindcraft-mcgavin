@@ -1,6 +1,6 @@
 <h1 align="center">mindcraft-mcgavin</h1>
 
-<p align="center"><b>A heavily modified <a href="https://github.com/mindcraft-bots/mindcraft">Mindcraft</a> fork optimized for local LLM inference and autonomous survival gameplay. No more expensive cloud LLMs or large heavy local LLMs that need god-tier hardware. This is designed to run on small, local LLMs.</b></p>
+<p align="center"><b>A heavily modified <a href="https://github.com/mindcraft-bots/mindcraft">Mindcraft</a> fork optimized for local LLM inference and autonomous survival gameplay. No more expensive cloud LLMs or large heavy local LLMs that need god-tier hardware. This is designed to run on small, local LLMs and inexpensive hardware.</b></p>
 
 <p align="center">
   Designed to run (and is currently running) on a 16GB M1 Mac Mini. Built for small context windows (gemma-4-e4b-it / LM Studio) with custom memory sub-systems to help take the weight off of the LLMs (think: "save tokens" and "quicker responses"), intelligent command routing, and a multi-goal autonomy engine.
