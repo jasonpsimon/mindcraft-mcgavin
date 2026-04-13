@@ -946,6 +946,109 @@ export async function equip(bot, itemName) {
     return true;
 }
 
+
+/**
+ * Safely toss items by digging a side pocket when underground/confined.
+ * Prevents the bot from immediately picking up discarded items in shafts.
+ * In open areas (surface), just tosses normally.
+ * @param {MinecraftBot} bot
+ * @param {number} itemType - item type ID
+ * @param {null} metadata - always null (matches bot.toss signature)
+ * @param {number} count - how many to toss
+ */
+export async function safeToss(bot, itemType, metadata, count) {
+    const pos = bot.entity.position.floored();
+
+    // Check if we're in a confined space: solid blocks on most sides + above
+    const above = bot.blockAt(pos.offset(0, 2, 0));
+    const isConfined = above && above.name !== 'air' && above.name !== 'short_grass'
+        && above.name !== 'cave_air';
+
+    if (!isConfined) {
+        // Open space — normal toss is fine
+        await bot.toss(itemType, metadata, count);
+        return;
+    }
+
+    // Find a solid wall direction to dig a 2-deep pocket into.
+    // 2 blocks deep puts items ~2.5 blocks from the bot — outside pickup range (~2 blocks).
+    const directions = [
+        { dx: 1, dz: 0, name: 'east' },
+        { dx: -1, dz: 0, name: 'west' },
+        { dx: 0, dz: 1, name: 'south' },
+        { dx: 0, dz: -1, name: 'north' },
+    ];
+
+    let pocketDir = null;
+
+    for (const dir of directions) {
+        // Need both blocks in that direction to be solid and diggable
+        const block1 = bot.blockAt(pos.offset(dir.dx, 0, dir.dz));
+        const block2 = bot.blockAt(pos.offset(dir.dx * 2, 0, dir.dz * 2));
+        if (block1 && block1.diggable && block1.name !== 'air' && block1.name !== 'cave_air'
+            && block1.name !== 'water' && block1.name !== 'lava'
+            && block2 && block2.diggable && block2.name !== 'air' && block2.name !== 'cave_air'
+            && block2.name !== 'water' && block2.name !== 'lava') {
+            pocketDir = dir;
+            break;
+        }
+    }
+
+    if (!pocketDir) {
+        // No 2-deep wall found — fall back to normal toss
+        await bot.toss(itemType, metadata, count);
+        return;
+    }
+
+    // Dig the pocket — 2 blocks deep so items land outside pickup range
+    const pocket1Pos = pos.offset(pocketDir.dx, 0, pocketDir.dz);
+    const pocket2Pos = pos.offset(pocketDir.dx * 2, 0, pocketDir.dz * 2);
+
+    console.log(`[SafeToss] Digging 2-deep side pocket ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos}`);
+    try {
+        const block1 = bot.blockAt(pocket1Pos);
+        if (block1 && block1.diggable) await bot.dig(block1);
+        const block2 = bot.blockAt(pocket2Pos);
+        if (block2 && block2.diggable) await bot.dig(block2);
+    } catch (e) {
+        console.warn('[SafeToss] Failed to dig pocket, tossing normally:', e.message);
+        await bot.toss(itemType, metadata, count);
+        return;
+    }
+
+    // Face the back of the pocket and toss — items land ~2.5 blocks away
+    await bot.lookAt(pocket2Pos.offset(0.5, 0.5, 0.5));
+    await bot.toss(itemType, metadata, count);
+
+    // Brief pause to let items fly into the pocket
+    await new Promise(r => setTimeout(r, 400));
+
+    // Seal the pocket — place a block at the entrance (pocket1Pos)
+    // This walls off the items so the bot can never pick them up
+    const sealBlocks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
+        'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone'];
+    let sealItem = null;
+    for (const sealName of sealBlocks) {
+        sealItem = bot.inventory.findInventoryItem(sealName);
+        if (sealItem) break;
+    }
+
+    if (sealItem) {
+        try {
+            // Place against the floor of the pocket entrance
+            const refBlock = bot.blockAt(pocket1Pos.offset(0, -1, 0));
+            if (refBlock && refBlock.name !== 'air') {
+                await bot.equip(sealItem, 'hand');
+                await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+                console.log(`[SafeToss] Sealed pocket entrance with ${sealItem.name}`);
+            }
+        } catch (e) {
+            console.warn('[SafeToss] Could not seal pocket:', e.message);
+            // Items are 2 blocks deep — they likely won't be picked up even unsealed
+        }
+    }
+}
+
 export async function discard(bot, itemName, num=-1) {
     /**
      * Discard the given item.
@@ -963,7 +1066,7 @@ export async function discard(bot, itemName, num=-1) {
             break;
         }
         let to_discard = num === -1 ? item.count : Math.min(num - discarded, item.count);
-        await bot.toss(item.type, null, to_discard);
+        await safeToss(bot, item.type, null, to_discard);
         discarded += to_discard;
         if (num !== -1 && discarded >= num) {
             break;
@@ -2515,3 +2618,6 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
+
+

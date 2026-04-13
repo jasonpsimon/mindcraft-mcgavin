@@ -1,3 +1,5 @@
+import { safeToss } from '../agent/library/skills.js';
+
 /**
  * Smart inventory management utilities.
  * Scores items by value and identifies junk to discard.
@@ -231,7 +233,7 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
                 const found = bot.inventory.findInventoryItem(item.name);
                 if (!found) break;
                 const toDrop = Math.min(remaining, found.count);
-                await bot.toss(found.type, null, toDrop);
+                await safeToss(bot, found.type, null, toDrop);
                 remaining -= toDrop;
             }
             discarded.push(`${item.count} ${item.name}`);
@@ -245,3 +247,4 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
         ? `Auto-discarded: ${discarded.join(', ')}. Freed ${discarded.length} inventory slot(s).`
         : 'Failed to auto-discard items.';
 }
+
