@@ -374,8 +374,9 @@ export class Agent {
 
             let res;
 
-            if (confidenceResult?.level === CONFIDENCE_HIGH) {
+            if (confidenceResult?.level === CONFIDENCE_HIGH && self_prompt) {
                 // HIGH confidence: bypass LLM entirely, use cached action
+                // Only bypass during self-prompting — player messages always go to LLM
                 res = confidenceResult.action;
                 wasBypassed = true;
                 console.log(`[ConfidenceEngine] BYPASS (${(confidenceResult.confidence * 100).toFixed(0)}%): ${res}`);
