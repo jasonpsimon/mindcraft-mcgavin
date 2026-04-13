@@ -36,13 +36,19 @@ export class ConfidenceEngine {
             bypassFailures: 0
         };
 
-        // Safety: commands that should never be bypassed (destructive/risky)
+        // Safety: commands that should never be bypassed (destructive/risky or context-dependent)
         this.neverBypass = new Set(options.neverBypass || [
             '!attack',
             '!attackPlayer',
-            '!newAction',  // code generation needs full reasoning
+            '!newAction',       // code generation needs full reasoning
             '!goal',
             '!endGoal',
+            '!collectBlocks',   // highly dependent on nearby blocks
+            '!digDown',         // depends on current position/surroundings
+            '!searchForBlock',  // needs LLM to pick the right block type
+            '!goToCoordinates', // destination depends on current context
+            '!goToPlayer',      // social context matters
+            '!followPlayer',    // social context matters
         ]);
     }
 

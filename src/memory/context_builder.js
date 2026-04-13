@@ -87,6 +87,14 @@ export class ContextBuilder {
             stats.sections.state = trimmedState.length + 1;
         }
 
+        // --- PRIORITY 3.5: Nearby notable blocks (high value for mining decisions) ---
+        const nearbyStr = params.nearbyBlocks || '';
+        if (nearbyStr.length > 0) {
+            sections.push(nearbyStr + '\n');
+            usedChars += nearbyStr.length + 1;
+            stats.sections.nearbyBlocks = nearbyStr.length + 1;
+        }
+
         // --- PRIORITY 4: Command docs (goal-filtered, high value) ---
         const cmdBudget = Math.min(
             this.minCommands + Math.floor((this.availableChars - usedChars) * 0.25),

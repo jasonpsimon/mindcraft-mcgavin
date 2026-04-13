@@ -441,10 +441,21 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         return false;
     }
     let blocktypes = [blockType];
-    if (blockType === 'coal' || blockType === 'diamond' || blockType === 'emerald' || blockType === 'iron' || blockType === 'gold' || blockType === 'lapis_lazuli' || blockType === 'redstone')
-        blocktypes.push(blockType+'_ore');
-    if (blockType.endsWith('ore'))
-        blocktypes.push('deepslate_'+blockType);
+    // Shorthand: "iron" → "iron_ore", etc.
+    if (['coal', 'diamond', 'emerald', 'iron', 'gold', 'copper', 'lapis_lazuli', 'redstone'].includes(blockType))
+        blocktypes.push(blockType + '_ore');
+    // Regular ore ↔ deepslate ore (both directions)
+    if (blockType.endsWith('ore') && !blockType.startsWith('deepslate_'))
+        blocktypes.push('deepslate_' + blockType);
+    if (blockType.startsWith('deepslate_'))
+        blocktypes.push(blockType.replace('deepslate_', ''));
+    // Nether ore variants
+    if (blockType === 'gold_ore' || blockType === 'gold')
+        blocktypes.push('nether_gold_ore');
+    if (blockType === 'nether_gold_ore')
+        blocktypes.push('gold_ore', 'deepslate_gold_ore');
+    if (blockType === 'quartz' || blockType === 'quartz_ore' || blockType === 'nether_quartz_ore')
+        blocktypes.push('nether_quartz_ore');
     if (blockType === 'dirt')
         blocktypes.push('grass_block');
     if (blockType === 'cobblestone')
@@ -1185,9 +1196,13 @@ export async function goToGoal(bot, goal) {
 
     const destructiveMovements = new pf.Movements(bot);
 
+    // Bump pathfinder timeouts for complex underground terrain
+    bot.pathfinder.thinkTimeout = 10000;  // 10s total (default 5s)
+    bot.pathfinder.tickTimeout = 80;      // 80ms per tick (default 40ms)
+
     let final_movements = destructiveMovements;
 
-    const pathfind_timeout = 1000;
+    const pathfind_timeout = 4000;
     if (await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, pathfind_timeout).status === 'success') {
         final_movements = nonDestructiveMovements;
         log(bot, `Found non-destructive path.`);

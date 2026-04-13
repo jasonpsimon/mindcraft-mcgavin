@@ -12,6 +12,7 @@ import { selectAPI, createModel } from './_model_map.js';
 import { DeltaStateTracker } from '../memory/delta_state.js';
 import { getFullState } from '../agent/library/full_state.js';
 import { ContextBuilder } from '../memory/context_builder.js';
+import { getNearbyBlockTypes } from '../agent/library/world.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -369,11 +370,27 @@ export class Prompter {
                 }
             } catch (e) { /* silent */ }
 
+            // Nearby blocks — filter for interesting ones so LLM knows surroundings
+            let nearbyBlocks = '';
+            try {
+                const allBlocks = getNearbyBlockTypes(agent.bot, 16);
+                const interesting = allBlocks.filter(b =>
+                    b.includes('ore') || b.includes('chest') || b.includes('crafting') ||
+                    b.includes('furnace') || b.includes('diamond') || b.includes('lava') ||
+                    b.includes('water') || b.includes('spawner') || b.includes('obsidian') ||
+                    b.includes('iron_block') || b.includes('gold_block')
+                );
+                if (interesting.length > 0) {
+                    nearbyBlocks = 'Nearby notable blocks (within 16 blocks): ' + interesting.join(', ');
+                }
+            } catch (e) { /* silent */ }
+
             const { systemPrompt, stats } = this.contextBuilder.build({
                 botName: agent.name,
                 goal,
                 action,
                 deltaState,
+                nearbyBlocks,
                 turns: messages,
                 commandDocs,
                 episodicMemory,
