@@ -64,7 +64,7 @@ export class ContextBuilder {
         };
 
         // --- PRIORITY 1: Identity + Rules + Goal (always included) ---
-        const identity = this._buildIdentity(params.botName, params.goal, params.profile);
+        const identity = this._buildIdentity(params.botName, params.goal, params.profile, params.goalQueue);
         sections.push(identity);
         usedChars += identity.length;
         stats.sections.identity = identity.length;
@@ -171,7 +171,7 @@ export class ContextBuilder {
      * Reads `context_rules` from profile for customizable rules per bot.
      * Falls back to a sensible default if not present.
      */
-    _buildIdentity(botName, goal, profile) {
+    _buildIdentity(botName, goal, profile, goalQueue = []) {
         // Base identity — always present
         let identity = `You are a Minecraft bot named ${botName}. Use commands to act.\n`;
 
@@ -186,6 +186,11 @@ export class ContextBuilder {
 
         if (goal) {
             identity += `GOAL: "${goal}"\n`;
+        }
+
+        if (goalQueue && goalQueue.length > 0) {
+            identity += `QUEUED GOALS (work on these in order after current goal):\n`;
+            goalQueue.forEach((g, i) => { identity += `  ${i + 1}. ${g}\n`; });
         }
 
         return identity;

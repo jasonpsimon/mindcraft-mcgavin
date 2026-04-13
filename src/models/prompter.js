@@ -257,7 +257,15 @@ export class Prompter {
             prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages));
         if (prompt.includes('$SELF_PROMPT')) {
             // if active or paused, show the current goal
-            let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n` : '';
+            let self_prompt = '';
+            if (!this.agent.self_prompter.isStopped()) {
+                self_prompt = `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n`;
+                const queue = this.agent.self_prompter.goalQueue || [];
+                if (queue.length > 0) {
+                    self_prompt += `QUEUED GOALS (work on these in order after current goal):\n`;
+                    queue.forEach((g, i) => { self_prompt += `  ${i + 1}. ${g}\n`; });
+                }
+            }
             prompt = prompt.replaceAll('$SELF_PROMPT', self_prompt);
         }
         if (prompt.includes('$LAST_GOALS')) {
@@ -380,9 +388,11 @@ export class Prompter {
                 console.warn('[ContextBuilder] nearbyBlocks failed:', e.message);
             }
 
+            const goalQueue = agent.self_prompter.goalQueue || [];
             const { systemPrompt, stats } = this.contextBuilder.build({
                 botName: agent.name,
                 goal,
+                goalQueue,
                 action,
                 deltaState,
                 nearbyBlocks,
