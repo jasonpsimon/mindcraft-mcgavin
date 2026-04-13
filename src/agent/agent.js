@@ -22,6 +22,7 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+import { AutoRecoveryEngine } from './auto_recovery.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -51,6 +52,7 @@ export class Agent {
         this.memory_bank = new MemoryBank(); // legacy — kept for upstream command compatibility
         this.long_term_memory = new LongTermMemory(this.name, null, settings.long_term_memory || {});
         this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
+        this.auto_recovery = new AutoRecoveryEngine(this);
         this.self_prompter = new SelfPrompter(this);
         this.event_pipeline = new EventPipeline(this);
         convoManager.initAgent(this);
@@ -734,6 +736,29 @@ export class Agent {
                         this._invFullCount = 0; // reset on non-full result
                     }
                     // --- End inventory-full loop breaker ---
+
+                    // --- Auto-Recovery Engine ---
+                    // Intercept failures and resolve dependency chains without LLM
+                    try {
+                        const recovery = await this.auto_recovery.checkAndRecover(command_name, execute_res, res);
+                        if (recovery.recovered) {
+                            console.log(`[AutoRecovery] Recovered from ${command_name} failure:`, recovery.result);
+                            this.history.add('system', recovery.result);
+
+                            // If recovery provides a retry command, execute it immediately
+                            if (recovery.retry) {
+                                console.log(`[AutoRecovery] Retrying: ${recovery.retry}`);
+                                let retry_res = await executeCommand(this, recovery.retry);
+                                if (retry_res) {
+                                    console.log(`[AutoRecovery] Retry result:`, retry_res);
+                                    this.history.add('system', retry_res);
+                                }
+                            }
+                        }
+                    } catch (recoveryErr) {
+                        console.warn('[AutoRecovery] Error during recovery attempt:', recoveryErr.message);
+                    }
+                    // --- End Auto-Recovery Engine ---
                 }
                 else
                     break;
