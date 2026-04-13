@@ -221,10 +221,103 @@ export class Agent {
                         }
                     }
 
+                    // --- Natural language goal/rule detection ---
+                    const msg_lower = translation.toLowerCase();
+
+                    // "add a goal to..." / "queue goal..." / "next goal..."
+                    const goalMatch = msg_lower.match(/(?:add (?:a )?goal|queue (?:a )?goal|next goal|new goal)[:\s]+["']?(.+?)["']?\s*$/);
+                    if (goalMatch) {
+                        const goalText = goalMatch[1].replace(/^(?:to |for )/i, '').trim();
+                        const cmdStr = '!addGoal("' + goalText + '")';
+                        console.log('[NaturalLang] Goal detected: ' + cmdStr);
+                        this.routeResponse(username, 'Got it, I\'ll queue that goal: "' + goalText + '"');
+                        await this.history.add(username, translation);
+                        let result = await executeCommand(this, cmdStr);
+                        if (result) await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
+                    // "set goal to..." / "your goal is..." / "work on..."
+                    const setGoalMatch = msg_lower.match(/(?:set (?:a |your )?goal|your goal is|work on|start working on|go (?:do|mine|collect|craft|build|find|get))[:\s]+["']?(.+?)["']?\s*$/);
+                    if (setGoalMatch) {
+                        const goalText = setGoalMatch[1].replace(/^(?:to |for )/i, '').trim();
+                        const cmdStr = '!goal("' + goalText + '")';
+                        console.log('[NaturalLang] Set goal detected: ' + cmdStr);
+                        this.routeResponse(username, 'On it! Setting goal: "' + goalText + '"');
+                        await this.history.add(username, translation);
+                        let result = await executeCommand(this, cmdStr);
+                        if (result) await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
+                    // "show goals" / "what are my goals" / "list goals"
+                    if (msg_lower.match(/(?:show|list|view|what are|what's in).*(?:goal|queue)/)) {
+                        console.log('[NaturalLang] View goals detected');
+                        await this.history.add(username, translation);
+                        const result = this.self_prompter.viewGoals();
+                        this.routeResponse(username, result);
+                        await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
+                    // "add a rule..." / "whenever you see..." / "always collect..."
+                    const ruleMatch = msg_lower.match(/(?:add (?:a )?rule|whenever you (?:see|find|notice)|always (?:collect|mine|pick up|grab))[:\s]+["']?(.+?)["']?\s*$/);
+                    if (ruleMatch) {
+                        const ruleText = ruleMatch[1].trim();
+                        // Try to auto-detect the action from the description
+                        let action = '!nearbyBlocks';  // fallback
+                        if (ruleText.match(/(?:collect|mine|grab|pick up).*(?:diamond)/i))
+                            action = '!collectBlocks("diamond_ore", 3)';
+                        else if (ruleText.match(/(?:collect|mine|grab|pick up).*(?:iron)/i))
+                            action = '!collectBlocks("iron_ore", 5)';
+                        else if (ruleText.match(/(?:collect|mine|grab|pick up).*(?:coal)/i))
+                            action = '!collectBlocks("coal_ore", 5)';
+                        else if (ruleText.match(/(?:collect|mine|grab|pick up).*(?:ore)/i))
+                            action = '!collectBlocks("diamond_ore", 3)';
+                        else if (ruleText.match(/(?:clean|discard|clear).*(?:inventory)/i))
+                            action = '!autoDiscard(5)';
+
+                        const cmdStr = '!addRule("' + ruleText + '", "' + action + '")';
+                        console.log('[NaturalLang] Rule detected: ' + cmdStr);
+                        this.routeResponse(username, 'Rule added: "' + ruleText + '" → ' + action);
+                        await this.history.add(username, translation);
+                        let result = await executeCommand(this, cmdStr);
+                        if (result) await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
+                    // "show rules" / "what are the rules" / "list rules"
+                    if (msg_lower.match(/(?:show|list|view|what are).*(?:rule)/)) {
+                        console.log('[NaturalLang] View rules detected');
+                        await this.history.add(username, translation);
+                        const result = this.self_prompter.viewRules();
+                        this.routeResponse(username, result);
+                        await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
+                    // "remove rule #N" / "delete rule N"
+                    const removeRuleMatch = msg_lower.match(/(?:remove|delete|clear) rule[:\s#]*(\d+)/);
+                    if (removeRuleMatch) {
+                        const ruleId = parseInt(removeRuleMatch[1]);
+                        console.log('[NaturalLang] Remove rule #' + ruleId);
+                        const removed = this.self_prompter.removeRule(ruleId);
+                        const result = removed ? 'Rule #' + ruleId + ' removed.' : 'No rule found with ID #' + ruleId;
+                        this.routeResponse(username, result);
+                        await this.history.add(username, translation);
+                        await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
                     // Detect urgent player commands and execute immediately,
                     // even if the bot is busy generating an LLM response.
                     // Supports compound commands (e.g. "stop your goal and follow me").
-                    const msg_lower = translation.toLowerCase();
                     let urgentCmds = [];
 
                     if (msg_lower.includes('stop') && (msg_lower.includes('goal') || msg_lower.includes('everything') || msg_lower.includes('what you') || msg_lower.includes('doing'))) {
