@@ -203,6 +203,29 @@ export class Agent {
                 else {
                     let translation = await handleEnglishTranslation(message);
 
+                    // Detect urgent player commands and execute immediately,
+                    // even if the bot is busy generating an LLM response.
+                    const msg_lower = translation.toLowerCase();
+                    let urgentCmd = null;
+                    if (msg_lower.includes('stop') && (msg_lower.includes('goal') || msg_lower.includes('everything') || msg_lower.includes('what you') || msg_lower.includes('doing'))) {
+                        urgentCmd = '!endGoal';
+                    } else if (msg_lower.match(/\b(follow me|come here|come with me|follow)\b/)) {
+                        urgentCmd = '!followPlayer("' + username + '", 3)';
+                    } else if (msg_lower.match(/\b(stop|halt|stay|wait)\b/) && !msg_lower.includes('goal')) {
+                        urgentCmd = '!stop';
+                    }
+
+                    if (urgentCmd) {
+                        console.log('[PlayerCommand] Detected urgent command: ' + urgentCmd + ' from ' + username);
+                        await this.self_prompter.stop();
+                        await this.history.add(username, translation);
+                        await this.history.add(this.name, urgentCmd);
+                        let result = await executeCommand(this, urgentCmd);
+                        if (result) await this.history.add('system', result);
+                        this.history.save();
+                        return;
+                    }
+
                     // If the bot is currently generating an LLM response, queue the
                     // player message instead of racing the promptConvo timestamp.
                     if (this.prompter.awaiting_response) {
