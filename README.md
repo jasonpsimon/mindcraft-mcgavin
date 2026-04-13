@@ -3,7 +3,7 @@
 <p align="center"><b>A heavily modified <a href="https://github.com/mindcraft-bots/mindcraft">Mindcraft</a> fork optimized for local LLM inference and autonomous survival gameplay.</b></p>
 
 <p align="center">
-  Built for small context windows (Gemma 4 E4B IT / LM Studio) with custom memory systems, intelligent command routing, and a multi-goal autonomy engine.
+  Built for small context windows (gemma-4-e4b-it / LM Studio) with custom memory systems, intelligent command routing, and a multi-goal autonomy engine.
 </p>
 
 ---
