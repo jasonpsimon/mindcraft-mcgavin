@@ -1,28 +1,102 @@
 diff --git a/node_modules/vectra/lib/LocalIndex.js b/node_modules/vectra/lib/LocalIndex.js
-index fdbfd66..b94c10e 100644
+index fdbfd66..98c1705 100644
 --- a/node_modules/vectra/lib/LocalIndex.js
 +++ b/node_modules/vectra/lib/LocalIndex.js
-@@ -114,7 +114,10 @@ class LocalIndex {
+@@ -114,7 +114,13 @@ class LocalIndex {
                      metadata_config: (_a = config.metadata_config) !== null && _a !== void 0 ? _a : {},
                      items: []
                  };
 -                yield fs.writeFile(path.join(this._folderPath, this._indexName), JSON.stringify(this._data));
-+                // Atomic write: temp file + rename to prevent corruption on crash
++                // Atomic write: temp + fsync + rename to prevent corruption
 +                const tmpPath = path.join(this._folderPath, this._indexName + '.tmp');
 +                yield fs.writeFile(tmpPath, JSON.stringify(this._data));
++                const fh = yield fs.open(tmpPath, 'r');
++                yield fh.sync();
++                yield fh.close();
 +                yield fs.rename(tmpPath, path.join(this._folderPath, this._indexName));
              }
              catch (err) {
                  yield this.deleteIndex();
-@@ -168,7 +171,10 @@ class LocalIndex {
+@@ -167,8 +173,20 @@ class LocalIndex {
+                 throw new Error('No update in progress');
              }
              try {
-                 // Save index
+-                // Save index
 -                yield fs.writeFile(path.join(this._folderPath, this._indexName), JSON.stringify(this._update));
-+                // Atomic write: temp file + rename to prevent corruption on crash
-+                const tmpPath = path.join(this._folderPath, this._indexName + '.tmp');
-+                yield fs.writeFile(tmpPath, JSON.stringify(this._update));
-+                yield fs.rename(tmpPath, path.join(this._folderPath, this._indexName));
++                const indexPath = path.join(this._folderPath, this._indexName);
++                const tmpPath = indexPath + '.tmp';
++                const bakPath = indexPath + '.bak';
++                // 1. Write to temp file
++                const jsonStr = JSON.stringify(this._update);
++                yield fs.writeFile(tmpPath, jsonStr);
++                // 2. fsync to flush to disk (survives power loss, not just process crash)
++                const fh = yield fs.open(tmpPath, 'r');
++                yield fh.sync();
++                yield fh.close();
++                // 3. Rotate current index to .bak (fallback if rename fails)
++                try { yield fs.rename(indexPath, bakPath); } catch (_e) { /* no existing index yet */ }
++                // 4. Atomic rename .tmp -> index.json
++                yield fs.rename(tmpPath, indexPath);
                  this._data = this._update;
                  this._update = undefined;
              }
+@@ -341,8 +359,57 @@ class LocalIndex {
+             if (!(yield this.isIndexCreated())) {
+                 throw new Error('Index does not exist');
+             }
+-            const data = yield fs.readFile(path.join(this._folderPath, this.indexName));
+-            this._data = JSON.parse(data.toString());
++            const indexPath = path.join(this._folderPath, this.indexName);
++            const bakPath = indexPath + '.bak';
++            // Try primary index
++            try {
++                const data = yield fs.readFile(indexPath);
++                this._data = JSON.parse(data.toString());
++                return;
++            } catch (primaryErr) {
++                console.warn(`[Vectra] Primary index corrupt: ${primaryErr.message}`);
++            }
++            // Try .bak fallback
++            try {
++                const bakData = yield fs.readFile(bakPath);
++                this._data = JSON.parse(bakData.toString());
++                // Restore .bak as primary
++                yield fs.writeFile(indexPath, bakData);
++                console.warn(`[Vectra] Restored index from .bak (${this._data.items.length} items)`);
++                return;
++            } catch (bakErr) {
++                console.warn(`[Vectra] Backup also unusable: ${bakErr.message}`);
++            }
++            // Last resort: truncation repair on primary
++            try {
++                const rawData = yield fs.readFile(indexPath);
++                const text = rawData.toString();
++                // Search backwards for the last complete JSON item
++                for (let i = text.length - 1; i > Math.max(0, text.length - 50000); i--) {
++                    if (text[i] === '}') {
++                        try {
++                            const candidate = text.substring(0, i + 1) + ']}';
++                            const parsed = JSON.parse(candidate);
++                            if (parsed.items) {
++                                this._data = parsed;
++                                // Save repaired index
++                                const repaired = JSON.stringify(this._data);
++                                const tmpPath = indexPath + '.tmp';
++                                yield fs.writeFile(tmpPath, repaired);
++                                yield fs.rename(tmpPath, indexPath);
++                                console.warn(`[Vectra] Repaired truncated index — recovered ${this._data.items.length} items`);
++                                return;
++                            }
++                        } catch (_e) { continue; }
++                    }
++                }
++            } catch (repairErr) {
++                console.warn(`[Vectra] Truncation repair failed: ${repairErr.message}`);
++            }
++            // All recovery failed — start fresh
++            console.warn(`[Vectra] All recovery failed, reinitializing empty index`);
++            this._data = { version: 1, metadata_config: {}, items: [] };
++            yield fs.writeFile(indexPath, JSON.stringify(this._data));
+         });
+     }
+     addItemToUpdate(item, unique) {
