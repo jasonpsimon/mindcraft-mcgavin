@@ -428,6 +428,63 @@ export class Agent {
             // self-prompter and causes responses to get discarded
             await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state);
         }
+
+        // Restore goal queue
+        if (save_data?.goal_queue && save_data.goal_queue.length > 0) {
+            this.self_prompter.goalQueue = save_data.goal_queue;
+            console.log('[GoalQueue] Restored ' + save_data.goal_queue.length + ' queued goals from memory');
+        }
+
+        // Restore persistent rules (re-create condition functions from descriptions)
+        if (save_data?.persistent_rules && save_data.persistent_rules.length > 0) {
+            for (const rule of save_data.persistent_rules) {
+                const descLower = rule.description.toLowerCase();
+                let conditionFn;
+
+                if (descLower.includes('diamond ore') || descLower.includes('diamond_ore')) {
+                    conditionFn = (agent) => {
+                        try {
+                            const blocks = agent.bot.findBlocks({ matching: (block) =>
+                                block.name.includes('diamond_ore'), maxDistance: 16, count: 1 });
+                            return blocks.length > 0;
+                        } catch { return false; }
+                    };
+                } else if (descLower.includes('iron ore') || descLower.includes('iron_ore')) {
+                    conditionFn = (agent) => {
+                        try {
+                            const blocks = agent.bot.findBlocks({ matching: (block) =>
+                                block.name.includes('iron_ore'), maxDistance: 16, count: 1 });
+                            return blocks.length > 0;
+                        } catch { return false; }
+                    };
+                } else if (descLower.includes('inventory full') || descLower.includes('clean')) {
+                    conditionFn = (agent) => {
+                        try {
+                            const slots = agent.bot.inventory.slots;
+                            const usedSlots = slots.filter(s => s !== null).length;
+                            return usedSlots >= 33;
+                        } catch { return false; }
+                    };
+                } else if (descLower.includes('low health') || descLower.includes('heal')) {
+                    conditionFn = (agent) => {
+                        try { return agent.bot.health <= 8; } catch { return false; }
+                    };
+                } else if (descLower.includes('ore') && descLower.includes('collect')) {
+                    conditionFn = (agent) => {
+                        try {
+                            const blocks = agent.bot.findBlocks({ matching: (block) =>
+                                block.name.includes('_ore'), maxDistance: 16, count: 1 });
+                            return blocks.length > 0;
+                        } catch { return false; }
+                    };
+                } else {
+                    conditionFn = () => true;
+                }
+
+                this.self_prompter.addRule(rule.description, conditionFn, rule.action);
+            }
+            console.log('[PersistentRules] Restored ' + save_data.persistent_rules.length + ' rules from memory');
+        }
         if (save_data?.last_sender) {
             this.last_sender = save_data.last_sender;
             if (convoManager.otherAgentInGame(this.last_sender)) {

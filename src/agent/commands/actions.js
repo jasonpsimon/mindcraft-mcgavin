@@ -470,6 +470,27 @@ export const actionsList = [
                 conditionFn = () => true;
             }
 
+            // Auto-generate action from description if not provided
+            if (!action) {
+                const dl = ruleDescription.toLowerCase();
+                if (dl.includes('diamond ore') || dl.includes('diamond_ore'))
+                    action = '!collectBlocks("deepslate_diamond_ore", 3)';
+                else if (dl.includes('iron ore') || dl.includes('iron_ore'))
+                    action = '!collectBlocks("deepslate_iron_ore", 3)';
+                else if (dl.includes('gold ore') || dl.includes('gold_ore'))
+                    action = '!collectBlocks("deepslate_gold_ore", 3)';
+                else if (dl.includes('coal') || dl.includes('coal_ore'))
+                    action = '!collectBlocks("coal_ore", 3)';
+                else if (dl.includes('ore') && dl.includes('collect'))
+                    action = '!searchForBlock("diamond_ore", 64)';
+                else if (dl.includes('inventory full') || dl.includes('clean'))
+                    action = '!autoDiscard(5)';
+                else if (dl.includes('low health') || dl.includes('heal'))
+                    action = '!eat';
+                else
+                    action = '!searchForBlock("diamond_ore", 64)';
+            }
+
             const id = agent.self_prompter.addRule(ruleDescription, conditionFn, action);
             return 'Persistent rule #' + id + ' added: "' + ruleDescription + '" → ' + action;
         }

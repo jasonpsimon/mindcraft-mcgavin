@@ -111,6 +111,10 @@ export class History {
                 turns: this.turns,
                 self_prompting_state: this.agent.self_prompter.state,
                 self_prompt: this.agent.self_prompter.isStopped() ? null : this.agent.self_prompter.prompt,
+                goal_queue: this.agent.self_prompter.goalQueue || [],
+                persistent_rules: (this.agent.self_prompter.persistentRules || []).map(r => ({
+                    id: r.id, description: r.description, action: r.action
+                })),
                 taskStart: this.agent.task.taskStartTime,
                 last_sender: this.agent.last_sender
             };
