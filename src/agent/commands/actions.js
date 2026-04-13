@@ -583,6 +583,14 @@ export const actionsList = [
         })
     },
     {
+        name: '!digUp',
+        description: 'Digs up a specified distance using a staircase pattern. Will stop if it reaches lava, water, bedrock, or the surface.',
+        params: {'distance': { type: 'int', description: 'Distance to dig up', domain: [1, Number.MAX_SAFE_INTEGER] }},
+        perform: runAsAction(async (agent, distance) => {
+            await skills.digUp(agent.bot, distance)
+        })
+    },
+    {
         name: '!goToSurface',
         description: 'Moves the bot to the highest block above it (usually the surface).',
         params: {},

@@ -2191,6 +2191,195 @@ export async function digDown(bot, distance = 10) {
     return true;
 }
 
+
+export async function digUp(bot, distance = 10) {
+    /**
+     * Digs up a specified distance using a safe staircase pattern.
+     * Digs in the direction the bot is facing, creating a 1-wide ascending staircase.
+     * Will stop if it reaches lava, water, bedrock, or the surface.
+     * Places floor blocks under the bot when ascending over air gaps.
+     * @param {MinecraftBot} bot, reference to the minecraft bot.
+     * @param {int} distance, the number of blocks to ascend.
+     * @returns {Promise<boolean>} true if successfully dug all the way up.
+     * @example
+     * await skills.digUp(bot, 12);
+     **/
+
+    // Get the bot's facing direction (snapped to nearest cardinal)
+    const yaw = bot.entity.yaw;
+    let dx = 0, dz = 0;
+    const normalized = ((yaw % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+    if (normalized >= 5.5 || normalized < 0.785) {
+        dz = 1;  // south
+    } else if (normalized >= 0.785 && normalized < 2.356) {
+        dx = -1; // west
+    } else if (normalized >= 2.356 && normalized < 3.927) {
+        dz = -1; // north
+    } else {
+        dx = 1;  // east
+    }
+
+    let currentPos = bot.entity.position.floored();
+    let ascended = 0;
+    const dirName = dz === 1 ? 'south' : dz === -1 ? 'north' : dx === -1 ? 'west' : 'east';
+    console.log(`[Skills] digUp: starting at ${currentPos}, heading ${dirName}, distance=${distance}`);
+
+    for (let i = 0; i < distance; i++) {
+        // Next position: one block forward and one block up
+        const nextX = currentPos.x + dx;
+        const nextY = currentPos.y + 1;
+        const nextZ = currentPos.z + dz;
+
+        console.log(`[Skills] digUp: step ${i+1}/${distance} -> (${nextX}, ${nextY}, ${nextZ})`);
+
+        // Check the blocks we need to clear and stand on
+        const feetBlock = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+        const headBlock = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+        const ceilBlock = bot.blockAt(new Vec3(nextX, nextY + 2, nextZ));
+        const floorBlock = bot.blockAt(new Vec3(nextX, nextY - 1, nextZ));
+
+        // Wait for chunks if needed
+        if (!feetBlock || !headBlock || !ceilBlock) {
+            console.log(`[Skills] digUp: waiting for chunks at (${nextX}, ${nextY}, ${nextZ})`);
+            await bot.waitForChunksToLoad();
+            const feetRetry = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+            const headRetry = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+            if (!feetRetry || !headRetry) {
+                log(bot, `Dug up ${ascended} blocks, but chunks not loaded ahead.`);
+                return ascended > 0;
+            }
+        }
+
+        // Re-fetch after potential wait
+        const feet = bot.blockAt(new Vec3(nextX, nextY, nextZ));
+        const head = bot.blockAt(new Vec3(nextX, nextY + 1, nextZ));
+        const ceil = bot.blockAt(new Vec3(nextX, nextY + 2, nextZ));
+        const floor = bot.blockAt(new Vec3(nextX, nextY - 1, nextZ));
+
+        console.log(`[Skills] digUp: blocks — ceil:${ceil?.name||'null'} head:${head?.name||'null'} feet:${feet?.name||'null'} floor:${floor?.name||'null'}`);
+
+        // Safety: lava or water
+        const dangerous = ['lava', 'water'];
+        if (feet && dangerous.includes(feet.name)) {
+            log(bot, `Dug up ${ascended} blocks, but reached ${feet.name} ahead.`);
+            return false;
+        }
+        if (head && dangerous.includes(head.name)) {
+            log(bot, `Dug up ${ascended} blocks, but ${head.name} above the next step.`);
+            return false;
+        }
+        if (ceil && dangerous.includes(ceil.name)) {
+            log(bot, `Dug up ${ascended} blocks, but ${ceil.name} at ceiling level.`);
+            return false;
+        }
+
+        // Safety: bedrock can't be broken
+        if (feet && feet.name === 'bedrock') {
+            log(bot, `Dug up ${ascended} blocks, but hit bedrock.`);
+            return false;
+        }
+        if (head && head.name === 'bedrock') {
+            log(bot, `Dug up ${ascended} blocks, but bedrock above.`);
+            return false;
+        }
+        if (ceil && ceil.name === 'bedrock') {
+            log(bot, `Dug up ${ascended} blocks, but bedrock at ceiling.`);
+            return false;
+        }
+
+        // Check if we've reached the surface (sky above)
+        let skyAbove = true;
+        for (let checkY = nextY + 2; checkY <= nextY + 10; checkY++) {
+            const checkBlock = bot.blockAt(new Vec3(nextX, checkY, nextZ));
+            if (checkBlock && checkBlock.name !== 'air' && checkBlock.name !== 'cave_air') {
+                skyAbove = false;
+                break;
+            }
+        }
+
+        // Dig ceiling block if solid
+        if (ceil && ceil.name !== 'air' && ceil.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY + 2, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase ceiling level.`);
+                return false;
+            }
+        }
+
+        // Dig head block if solid
+        if (head && head.name !== 'air' && head.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY + 1, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase head level.`);
+                return false;
+            }
+        }
+
+        // Dig feet block if solid
+        if (feet && feet.name !== 'air' && feet.name !== 'cave_air') {
+            let dug = await breakBlockAt(bot, nextX, nextY, nextZ);
+            if (!dug) {
+                log(bot, `Failed to break block at staircase feet level.`);
+                return false;
+            }
+        }
+
+        // Place floor block if there's air/cave_air under our destination
+        if (floor && (floor.name === 'air' || floor.name === 'cave_air')) {
+            // Find a placeable block in inventory (cobblestone, stone, dirt, netherrack, etc.)
+            const placeableBlocks = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'netherrack', 'granite', 'diorite', 'andesite', 'tuff', 'blackstone'];
+            let placed = false;
+            for (const blockName of placeableBlocks) {
+                const item = bot.inventory.items().find(it => it.name === blockName);
+                if (item) {
+                    // Place the block below the destination
+                    try {
+                        await bot.equip(item, 'hand');
+                        // We need an adjacent solid block to place against
+                        // The block below the floor position
+                        const belowFloor = bot.blockAt(new Vec3(nextX, nextY - 2, nextZ));
+                        if (belowFloor && belowFloor.name !== 'air' && belowFloor.name !== 'cave_air') {
+                            await bot.placeBlock(belowFloor, new Vec3(0, 1, 0));
+                            placed = true;
+                            console.log(`[Skills] digUp: placed ${blockName} as floor at (${nextX}, ${nextY - 1}, ${nextZ})`);
+                        }
+                    } catch (e) {
+                        console.log(`[Skills] digUp: failed to place floor block: ${e.message}`);
+                    }
+                    break;
+                }
+            }
+            if (!placed) {
+                console.log(`[Skills] digUp: no floor block placed — no suitable blocks in inventory or no adjacent block to place against`);
+            }
+        }
+
+        // Move to the new position
+        console.log(`[Skills] digUp: moving to (${nextX}, ${nextY}, ${nextZ})`);
+        try {
+            await goToPosition(bot, nextX + 0.5, nextY, nextZ + 0.5, 0);
+        } catch (e) {
+            console.log(`[Skills] digUp: pathfinder failed, using jump+forward — ${e.message}`);
+            bot.setControlState('jump', true);
+            bot.setControlState('forward', true);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            bot.setControlState('jump', false);
+            bot.setControlState('forward', false);
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
+        currentPos = new Vec3(nextX, nextY, nextZ);
+        ascended++;
+
+        if (skyAbove) {
+            log(bot, `Dug up ${ascended} blocks and reached the surface!`);
+            return true;
+        }
+    }
+
+    log(bot, `Dug a staircase up ${ascended} blocks.`);
+    return true;
+}
 export async function goToSurface(bot) {
     /**
      * Navigate to the surface (highest non-air block at current x,z).
