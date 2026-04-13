@@ -203,6 +203,24 @@ export class Agent {
                 else {
                     let translation = await handleEnglishTranslation(message);
 
+                    // --- Direct command passthrough: if player types !command, execute it ---
+                    if (translation.trim().startsWith('!')) {
+                        const cmdStr = translation.trim();
+                        console.log('[DirectCommand] Player ' + username + ' issued command: ' + cmdStr);
+                        if (commandExists(cmdStr)) {
+                            await this.history.add(username, cmdStr);
+                            let result = await executeCommand(this, cmdStr);
+                            if (result) {
+                                this.routeResponse(username, result);
+                                await this.history.add('system', result);
+                            }
+                            this.history.save();
+                            return;
+                        } else {
+                            console.log('[DirectCommand] Unknown command, falling through to LLM');
+                        }
+                    }
+
                     // Detect urgent player commands and execute immediately,
                     // even if the bot is busy generating an LLM response.
                     // Supports compound commands (e.g. "stop your goal and follow me").
