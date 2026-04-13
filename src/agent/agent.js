@@ -187,35 +187,7 @@ export class Agent {
                 }
                 else {
                     let translation = await handleEnglishTranslation(message);
-
-                    // Player messages get priority — pause self-prompting so the bot
-                    // stops its current action and responds immediately, then resumes.
-                    const spState = this.self_prompter.isActive() ? 'ACTIVE' : this.self_prompter.isPaused() ? 'PAUSED' : 'STOPPED';
-                    console.log(`[PlayerPriority] Player ${username} spoke. Self-prompter state: ${spState}, loop_active: ${this.self_prompter.loop_active}`);
-                    const wasRunning = !this.self_prompter.isStopped();
-                    if (wasRunning) {
-                        console.log('[PlayerPriority] Pausing self-prompter for player message...');
-                        if (this.self_prompter.isActive()) {
-                            await this.self_prompter.pause();
-                        }
-                        // Inject a system hint so the LLM knows to address the player first
-                        await this.history.add('system', `IMPORTANT: Player ${username} is talking to you. You MUST respond to their message conversationally. Do NOT ignore them. Address what they said, then you can continue your goal.`);
-                        console.log('[PlayerPriority] Hint injected, calling handleMessage...');
-                    }
-
-                    await this.handleMessage(username, translation);
-                    console.log(`[PlayerPriority] handleMessage returned. wasRunning=${wasRunning}, isPaused=${this.self_prompter.isPaused()}`);
-
-                    // Resume self-prompting after responding to player
-                    if (wasRunning && this.self_prompter.isPaused()) {
-                        console.log('[PlayerPriority] Scheduling self-prompter resume in 2s...');
-                        setTimeout(() => {
-                            if (this.self_prompter.isPaused()) {
-                                console.log('[PlayerPriority] Resuming self-prompter now.');
-                                this.self_prompter.start();
-                            }
-                        }, 2000);
-                    }
+                    this.handleMessage(username, translation);
                 }
             } catch (error) {
                 console.error('Error handling message:', error);
