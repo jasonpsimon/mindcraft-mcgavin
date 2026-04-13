@@ -156,6 +156,21 @@ src/
 └── models/
     └── prompter.js            # LLM interface and prompt orchestration
 ```
+## Why I Forked This Project
+
+If you made it this far, I owe you an explanation. This project was forked for a very personal reason: my children.
+
+My daughter has always loved playing Minecraft and often wanted to play with me. But like many parents, I couldn't always be there. Sometimes I had to travel for work, and other times there were responsibilities at home that needed my attention. Playing together isn't just about the game, it's about interaction. No one really wants to play alone. They want someone to share the experience with.
+
+Forking this project gave me a way to create that interaction, even when I couldn't be physically present. It allowed me to build something that could keep her company in the game world and make Minecraft feel more alive and social.
+
+There was another important motivation as well. My youngest child, my son, has been working to improve his reading comprehension in school. Because interacting with the bot involves reading and responding to text, I saw an opportunity to turn playtime into gentle, natural practice. Instead of worksheets or drills, he can learn through conversation and exploration in a game he already enjoys.
+
+And finally, this project simply makes Minecraft more fun for our whole family. It turns the game into a shared experience, encourages creativity, and creates moments of connection, even when life gets busy.
+
+This fork exists because technology can be more than code. It can be a way to show up for the people you love.
+
+If you like what I have done and it has benefit you in some way, any way, please feel free, not obligated, to send me a tip at https://ko-fi.com/jpsimon
 
 ## Credits
 
