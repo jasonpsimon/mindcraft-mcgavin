@@ -193,6 +193,8 @@ export class Agent {
                     const wasActive = this.self_prompter.isActive();
                     if (wasActive) {
                         await this.self_prompter.pause();
+                        // Inject a system hint so the LLM knows to address the player first
+                        this.history.add('system', `PLAYER ${username} is talking to you. Respond to them conversationally BEFORE continuing your goal. Address what they said directly.`);
                     }
 
                     await this.handleMessage(username, translation);
