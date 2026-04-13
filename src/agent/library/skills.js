@@ -970,8 +970,80 @@ export async function safeToss(bot, itemType, metadata, count) {
         return;
     }
 
-    // Find a solid wall direction to dig a 2-deep pocket into.
-    // 2 blocks deep puts items ~2.5 blocks from the bot — outside pickup range (~2 blocks).
+    // --- Underground disposal ---
+    // Strategy 1: Fire pit — dig a hole in the floor, light a fire, toss items in to burn.
+    //             Requires flint_and_steel. Items despawn in ~5 seconds on fire.
+    // Strategy 2: Sealed pocket — dig 2-deep alcove into a wall, toss, seal entrance.
+    //             Fallback when no flint_and_steel is available.
+
+    const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
+
+    if (flintAndSteel) {
+        // --- Fire Pit Strategy ---
+        // Dig 1 block down directly below the bot's feet, light it, toss items in
+        const pitPos = pos.offset(0, -1, 0);
+        const floorBlock = bot.blockAt(pitPos);
+
+        // Need a solid, diggable block below us (not bedrock, air, lava, water)
+        if (floorBlock && floorBlock.diggable
+            && floorBlock.name !== 'air' && floorBlock.name !== 'cave_air'
+            && floorBlock.name !== 'water' && floorBlock.name !== 'lava'
+            && floorBlock.name !== 'bedrock') {
+
+            console.log(`[SafeToss] Fire pit strategy — digging pit at ${pitPos}`);
+            try {
+                // Dig the pit
+                await bot.dig(floorBlock);
+
+                // Light fire on the floor of the pit
+                const pitFloor = bot.blockAt(pos.offset(0, -2, 0));
+                if (pitFloor && pitFloor.name !== 'air') {
+                    await bot.equip(flintAndSteel, 'hand');
+                    // activateBlock lights fire on top of the target block
+                    await bot.activateBlock(pitFloor);
+                    console.log('[SafeToss] Fire lit in pit');
+
+                    // Look down into the pit and toss items
+                    await bot.lookAt(pitPos.offset(0.5, 0.5, 0.5));
+                    await bot.toss(itemType, metadata, count);
+
+                    // Wait for items to burn (~5 seconds in fire)
+                    console.log('[SafeToss] Waiting for items to burn...');
+                    await new Promise(r => setTimeout(r, 5500));
+
+                    // Extinguish the fire by placing a block back over it
+                    // This also plugs the hole so we don't fall in
+                    const sealBlocks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
+                        'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone'];
+                    let sealItem = null;
+                    for (const name of sealBlocks) {
+                        sealItem = bot.inventory.findInventoryItem(name);
+                        if (sealItem) break;
+                    }
+                    if (sealItem) {
+                        try {
+                            const pitFloorRef = bot.blockAt(pos.offset(0, -2, 0));
+                            if (pitFloorRef && pitFloorRef.name !== 'air') {
+                                await bot.equip(sealItem, 'hand');
+                                await bot.placeBlock(pitFloorRef, new Vec3(0, 1, 0));
+                                console.log('[SafeToss] Pit sealed');
+                            }
+                        } catch (e) {
+                            console.warn('[SafeToss] Could not seal pit:', e.message);
+                        }
+                    }
+                    return; // Done — items burned
+                }
+            } catch (e) {
+                console.warn('[SafeToss] Fire pit failed, trying sealed pocket:', e.message);
+                // Fall through to sealed pocket strategy
+            }
+        }
+    }
+
+    // --- Sealed Pocket Fallback ---
+    // No flint_and_steel or fire pit failed. Dig a 2-deep alcove into a wall,
+    // toss items to the back (~2.5 blocks away, outside pickup range), seal entrance.
     const directions = [
         { dx: 1, dz: 0, name: 'east' },
         { dx: -1, dz: 0, name: 'west' },
@@ -982,7 +1054,6 @@ export async function safeToss(bot, itemType, metadata, count) {
     let pocketDir = null;
 
     for (const dir of directions) {
-        // Need both blocks in that direction to be solid and diggable
         const block1 = bot.blockAt(pos.offset(dir.dx, 0, dir.dz));
         const block2 = bot.blockAt(pos.offset(dir.dx * 2, 0, dir.dz * 2));
         if (block1 && block1.diggable && block1.name !== 'air' && block1.name !== 'cave_air'
@@ -995,16 +1066,15 @@ export async function safeToss(bot, itemType, metadata, count) {
     }
 
     if (!pocketDir) {
-        // No 2-deep wall found — fall back to normal toss
+        // No suitable wall — last resort normal toss
         await bot.toss(itemType, metadata, count);
         return;
     }
 
-    // Dig the pocket — 2 blocks deep so items land outside pickup range
     const pocket1Pos = pos.offset(pocketDir.dx, 0, pocketDir.dz);
     const pocket2Pos = pos.offset(pocketDir.dx * 2, 0, pocketDir.dz * 2);
 
-    console.log(`[SafeToss] Digging 2-deep side pocket ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos}`);
+    console.log(`[SafeToss] Sealed pocket fallback ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos}`);
     try {
         const block1 = bot.blockAt(pocket1Pos);
         if (block1 && block1.diggable) await bot.dig(block1);
@@ -1016,35 +1086,28 @@ export async function safeToss(bot, itemType, metadata, count) {
         return;
     }
 
-    // Face the back of the pocket and toss — items land ~2.5 blocks away
     await bot.lookAt(pocket2Pos.offset(0.5, 0.5, 0.5));
     await bot.toss(itemType, metadata, count);
-
-    // Brief pause to let items fly into the pocket
     await new Promise(r => setTimeout(r, 400));
 
-    // Seal the pocket — place a block at the entrance (pocket1Pos)
-    // This walls off the items so the bot can never pick them up
+    // Seal the pocket entrance
     const sealBlocks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
         'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone'];
     let sealItem = null;
-    for (const sealName of sealBlocks) {
-        sealItem = bot.inventory.findInventoryItem(sealName);
+    for (const name of sealBlocks) {
+        sealItem = bot.inventory.findInventoryItem(name);
         if (sealItem) break;
     }
-
     if (sealItem) {
         try {
-            // Place against the floor of the pocket entrance
             const refBlock = bot.blockAt(pocket1Pos.offset(0, -1, 0));
             if (refBlock && refBlock.name !== 'air') {
                 await bot.equip(sealItem, 'hand');
                 await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
-                console.log(`[SafeToss] Sealed pocket entrance with ${sealItem.name}`);
+                console.log(`[SafeToss] Sealed pocket with ${sealItem.name}`);
             }
         } catch (e) {
             console.warn('[SafeToss] Could not seal pocket:', e.message);
-            // Items are 2 blocks deep — they likely won't be picked up even unsealed
         }
     }
 }
@@ -2618,6 +2681,7 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
 
 
 
