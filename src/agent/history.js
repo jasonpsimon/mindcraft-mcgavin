@@ -99,7 +99,12 @@ export class History {
             while (this.turns.length > 0 && this.turns[0].role === 'assistant')
                 chunk.push(this.turns.shift()); // remove until turns starts with system/user message
 
-            await this.summarizeMemories(chunk);
+            // Fire-and-forget: memory summarization runs in the background
+            // under the GenerationLock (Priority.MEMORY) so it won't compete
+            // with in-flight PLAYER or SELF generations.
+            this.summarizeMemories(chunk).catch(err => {
+                console.warn('[History] Background memory summarization failed:', err.message);
+            });
             await this.appendFullHistory(chunk);
         }
     }

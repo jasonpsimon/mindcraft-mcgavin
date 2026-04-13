@@ -12,6 +12,7 @@ import { selectAPI, createModel } from './_model_map.js';
 import { DeltaStateTracker } from '../memory/delta_state.js';
 import { getFullState } from '../agent/library/full_state.js';
 import { ContextBuilder } from '../memory/context_builder.js';
+import { GenerationLock, Priority } from '../agent/generation_lock.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,6 +114,7 @@ export class Prompter {
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
         this.deltaState = new DeltaStateTracker();
         this.contextBuilder = new ContextBuilder(settings.context_builder || {});
+        this.generationLock = new GenerationLock();
         mkdirSync(`./bots/${name}`, { recursive: true });
         writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
             if (err) {
@@ -424,7 +426,7 @@ export class Prompter {
     async promptConvoFast(messages, hint = '') {
         if (this.fast_model === this.chat_model) {
             // No separate fast model configured, use normal path
-            return this.promptConvo(messages);
+            return this.promptConvo(messages, Priority.PLAYER);
         }
 
         await this.checkCooldown();
@@ -441,7 +443,7 @@ export class Prompter {
 
             if (typeof generation !== 'string' || generation.includes('(FROM OTHER BOT)')) {
                 console.warn('[FastModel] Bad response, falling back to full model.');
-                return this.promptConvo(messages);
+                return this.promptConvo(messages, Priority.PLAYER);
             }
 
             generation = stripThinkTags(generation);
@@ -451,63 +453,54 @@ export class Prompter {
             return generation;
         } catch (err) {
             console.warn('[FastModel] Error, falling back to full model:', err.message);
-            return this.promptConvo(messages);
+            return this.promptConvo(messages, Priority.PLAYER);
         }
     }
 
-    async promptConvo(messages) {
-        this.awaiting_response = true;
-        this.most_recent_msg_time = Date.now();
-        let current_msg_time = this.most_recent_msg_time;
-
-        try {
-        for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
-            await this.checkCooldown();
-            if (current_msg_time !== this.most_recent_msg_time) {
-                return '';
-            }
-
-            // Use ContextBuilder when enabled — token-budgeted prompt assembly
-            // _buildContextPrompt handles its own fallback to replaceStrings on failure
-            const prompt = settings.use_context_builder
-                ? await this._buildContextPrompt(messages)
-                : await this.replaceStrings(this.profile.conversing, messages, this.convo_examples);
-            let generation;
-
+    async promptConvo(messages, priority = Priority.SELF) {
+        return this.generationLock.run(priority, async () => {
+            this.awaiting_response = true;
             try {
-                generation = await this.chat_model.sendRequest(messages, prompt);
-                if (typeof generation !== 'string') {
-                    console.error('Error: Generated response is not a string', generation);
-                    throw new Error('Generated response is not a string');
+                for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
+                    await this.checkCooldown();
+
+                    // Use ContextBuilder when enabled — token-budgeted prompt assembly
+                    // _buildContextPrompt handles its own fallback to replaceStrings on failure
+                    const prompt = settings.use_context_builder
+                        ? await this._buildContextPrompt(messages)
+                        : await this.replaceStrings(this.profile.conversing, messages, this.convo_examples);
+                    let generation;
+
+                    try {
+                        generation = await this.chat_model.sendRequest(messages, prompt);
+                        if (typeof generation !== 'string') {
+                            console.error('Error: Generated response is not a string', generation);
+                            throw new Error('Generated response is not a string');
+                        }
+                        console.log("Generated response:", generation);
+                        await this._saveLog(prompt, messages, generation, 'conversation');
+
+                    } catch (error) {
+                        console.error('Error during message generation or file writing:', error);
+                        continue;
+                    }
+
+                    // Check for hallucination or invalid output
+                    if (generation?.includes('(FROM OTHER BOT)')) {
+                        console.warn('LLM hallucinated message as another bot. Trying again...');
+                        continue;
+                    }
+
+                    generation = stripThinkTags(generation);
+
+                    return generation;
                 }
-                console.log("Generated response:", generation);
-                await this._saveLog(prompt, messages, generation, 'conversation');
 
-            } catch (error) {
-                console.error('Error during message generation or file writing:', error);
-                continue;
-            }
-
-            // Check for hallucination or invalid output
-            if (generation?.includes('(FROM OTHER BOT)')) {
-                console.warn('LLM hallucinated message as another bot. Trying again...');
-                continue;
-            }
-
-            if (current_msg_time !== this.most_recent_msg_time) {
-                console.warn(`${this.agent.name} received new message while generating, discarding old response.`);
                 return '';
+            } finally {
+                this.awaiting_response = false;
             }
-
-            generation = stripThinkTags(generation);
-
-            return generation;
-        }
-
-        return '';
-        } finally {
-            this.awaiting_response = false;
-        }
+        });
     }
 
     async promptCoding(messages) {
@@ -527,13 +520,15 @@ export class Prompter {
     }
 
     async promptMemSaving(to_summarize) {
-        await this.checkCooldown();
-        let prompt = this.profile.saving_memory;
-        prompt = await this.replaceStrings(prompt, null, null, to_summarize);
-        let resp = await this.chat_model.sendRequest([], prompt);
-        await this._saveLog(prompt, to_summarize, resp, 'memSaving');
-        resp = stripThinkTags(resp);
-        return resp;
+        return this.generationLock.run(Priority.MEMORY, async () => {
+            await this.checkCooldown();
+            let prompt = this.profile.saving_memory;
+            prompt = await this.replaceStrings(prompt, null, null, to_summarize);
+            let resp = await this.chat_model.sendRequest([], prompt);
+            await this._saveLog(prompt, to_summarize, resp, 'memSaving');
+            resp = stripThinkTags(resp);
+            return resp;
+        });
     }
 
     async promptShouldRespondToBot(new_message) {
@@ -610,3 +605,4 @@ export class Prompter {
         await fs.appendFile(logFile, String(logEntry), 'utf-8');
     }
 }
+

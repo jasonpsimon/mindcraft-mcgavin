@@ -23,6 +23,7 @@ import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { AutoRecoveryEngine } from './auto_recovery.js';
+import { Priority } from './generation_lock.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -553,6 +554,7 @@ export class Agent {
         }
 
         const self_prompt = source === 'system' || source === this.name;
+        const llmPriority = self_prompt ? Priority.SELF : Priority.PLAYER;
         const from_other_bot = convoManager.isOtherAgent(source);
 
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
@@ -637,10 +639,10 @@ export class Agent {
                     if (settings.use_fast_model !== false) {
                         res = await this.prompter.promptConvoFast(history, hint);
                     } else {
-                        res = await this.prompter.promptConvo(history);
+                        res = await this.prompter.promptConvo(history, llmPriority);
                     }
                 } else {
-                    res = await this.prompter.promptConvo(history);
+                    res = await this.prompter.promptConvo(history, llmPriority);
                 }
             }
             // --- End Confidence Engine hook ---
@@ -930,3 +932,4 @@ export class Agent {
         serverProxy.shutdown();
     }
 }
+
