@@ -338,6 +338,13 @@ export const queryList = [
         }
     },
     {
+        name: '!viewRules',
+        description: 'View all active persistent rules that run between goal iterations.',
+        perform: function (agent) {
+            return agent.self_prompter.viewRules();
+        }
+    },
+    {
         name: '!help',
         description: 'Lists all available commands and their descriptions.',
         perform: async function (agent) {

@@ -13,6 +13,14 @@ export class SelfPrompter {
         this.baseCooldown = 2000;
         this.maxCooldown = 10000;  // slow down to 10s when stuck
         this._consecutiveNoProgress = 0;
+
+        // --- Goal Queue: sequential goals that auto-advance ---
+        this.goalQueue = [];
+
+        // --- Persistent Rules: background checks between iterations ---
+        // Each rule: { id, description, condition: function(agent) => bool, action: string }
+        this.persistentRules = [];
+        this._ruleIdCounter = 0;
     }
 
     start(prompt) {
@@ -56,6 +64,80 @@ export class SelfPrompter {
         this.state = PAUSED;
     }
 
+    // --- Goal Queue Methods ---
+
+    addGoal(goalText) {
+        this.goalQueue.push(goalText);
+        console.log(`[GoalQueue] Added goal: "${goalText}" (${this.goalQueue.length} in queue)`);
+        return `Goal queued: "${goalText}" (position ${this.goalQueue.length} in queue)`;
+    }
+
+    viewGoals() {
+        let result = `Current goal: "${this.prompt || '(none)'}"\n`;
+        if (this.goalQueue.length === 0) {
+            result += 'Goal queue: empty';
+        } else {
+            result += 'Goal queue:\n';
+            this.goalQueue.forEach((g, i) => {
+                result += `  ${i + 1}. ${g}\n`;
+            });
+        }
+        return result;
+    }
+
+    advanceGoal() {
+        if (this.goalQueue.length > 0) {
+            const nextGoal = this.goalQueue.shift();
+            console.log(`[GoalQueue] Advancing to next goal: "${nextGoal}" (${this.goalQueue.length} remaining)`);
+            this.prompt = nextGoal;
+            return nextGoal;
+        }
+        return null;
+    }
+
+    // --- Persistent Rules Methods ---
+
+    addRule(description, conditionFn, actionStr) {
+        const id = ++this._ruleIdCounter;
+        this.persistentRules.push({ id, description, condition: conditionFn, action: actionStr });
+        console.log(`[PersistentRule] Added rule #${id}: "${description}"`);
+        return id;
+    }
+
+    removeRule(id) {
+        const idx = this.persistentRules.findIndex(r => r.id === id);
+        if (idx >= 0) {
+            const removed = this.persistentRules.splice(idx, 1)[0];
+            console.log(`[PersistentRule] Removed rule #${id}: "${removed.description}"`);
+            return true;
+        }
+        return false;
+    }
+
+    viewRules() {
+        if (this.persistentRules.length === 0) return 'No persistent rules active.';
+        let result = 'Persistent rules:\n';
+        this.persistentRules.forEach(r => {
+            result += `  #${r.id}: ${r.description}\n`;
+        });
+        return result;
+    }
+
+    async checkPersistentRules() {
+        for (const rule of this.persistentRules) {
+            try {
+                if (rule.condition(this.agent)) {
+                    console.log(`[PersistentRule] Rule #${rule.id} triggered: "${rule.description}"`);
+                    // Execute the rule action directly
+                    await this.agent.handleMessage('system',
+                        `[Persistent rule triggered: ${rule.description}] Execute: ${rule.action}`, -1);
+                }
+            } catch (e) {
+                console.warn(`[PersistentRule] Rule #${rule.id} error:`, e.message);
+            }
+        }
+    }
+
     async startLoop() {
         if (this.loop_active) {
             console.warn('Self-prompt loop is already active. Ignoring request.');
@@ -66,7 +148,19 @@ export class SelfPrompter {
         let no_command_count = 0;
         const MAX_NO_COMMAND = 3;
         while (!this.interrupt) {
-            const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
+
+            // --- Check persistent rules between iterations ---
+            if (this.persistentRules.length > 0) {
+                await this.checkPersistentRules();
+            }
+
+            // --- Build the self-prompt message ---
+            // Include queue awareness so the LLM knows there are more goals
+            let msg = `You are self-prompting with the goal: '${this.prompt}'.`;
+            if (this.goalQueue.length > 0) {
+                msg += ` (${this.goalQueue.length} more goal${this.goalQueue.length > 1 ? 's' : ''} queued after this one.)`;
+            }
+            msg += ` Your next response MUST contain a command with this syntax: !commandName. Respond:`;
             
             let used_command = await this.agent.handleMessage('system', msg, -1);
 

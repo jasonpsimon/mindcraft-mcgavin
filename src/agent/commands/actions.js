@@ -382,10 +382,107 @@ export const actionsList = [
     },
     {
         name: '!endGoal',
-        description: 'Call when you have accomplished your goal. It will stop self-prompting and the current action. ',
+        description: 'Call when you have accomplished your current goal. If more goals are queued, advances to the next one automatically.',
         perform: async function (agent) {
+            const currentGoal = agent.self_prompter.prompt;
+            const nextGoal = agent.self_prompter.advanceGoal();
+            if (nextGoal) {
+                // Auto-advance to next queued goal
+                agent.self_prompter.prompt = nextGoal;
+                const remaining = agent.self_prompter.goalQueue.length;
+                console.log('[GoalQueue] Goal completed, advancing to: "' + nextGoal + '"');
+                return 'Goal completed: "' + currentGoal + '". Now working on: "' + nextGoal + '"' +
+                    (remaining > 0 ? ' (' + remaining + ' more in queue)' : ' (last goal in queue)');
+            }
             agent.self_prompter.stop();
-            return 'Self-prompting stopped.';
+            return 'All goals completed. Self-prompting stopped.';
+        }
+    },
+    {
+        name: '!addGoal',
+        description: 'Add a goal to the queue. It will be worked on after the current goal is completed.',
+        params: {
+            'goalPrompt': { type: 'string', description: 'The goal to add to the queue.' },
+        },
+        perform: async function (agent, goalPrompt) {
+            return agent.self_prompter.addGoal(goalPrompt);
+        }
+    },
+    {
+        name: '!viewGoals',
+        description: 'View the current goal and all queued goals.',
+        perform: async function (agent) {
+            return agent.self_prompter.viewGoals();
+        }
+    },
+    {
+        name: '!addRule',
+        description: 'Add a persistent rule that the bot checks between every goal iteration. Rules auto-trigger actions based on game state.',
+        params: {
+            'ruleDescription': { type: 'string', description: 'What the rule does, e.g. "collect any visible diamond ore"' },
+            'action': { type: 'string', description: 'The command to execute when triggered, e.g. !collectBlocks("diamond_ore", 3)' },
+        },
+        perform: async function (agent, ruleDescription, action) {
+            // Create a rule with a condition that always returns true
+            // The LLM describes the rule; we trust the description for logging
+            // For smart rules, we parse the description for known patterns
+            let conditionFn;
+            const descLower = ruleDescription.toLowerCase();
+
+            if (descLower.includes('diamond ore') || descLower.includes('diamond_ore')) {
+                conditionFn = (agent) => {
+                    try {
+                        const blocks = agent.bot.findBlocks({ matching: (block) =>
+                            block.name.includes('diamond_ore'), maxDistance: 16, count: 1 });
+                        return blocks.length > 0;
+                    } catch { return false; }
+                };
+            } else if (descLower.includes('iron ore') || descLower.includes('iron_ore')) {
+                conditionFn = (agent) => {
+                    try {
+                        const blocks = agent.bot.findBlocks({ matching: (block) =>
+                            block.name.includes('iron_ore'), maxDistance: 16, count: 1 });
+                        return blocks.length > 0;
+                    } catch { return false; }
+                };
+            } else if (descLower.includes('inventory full') || descLower.includes('clean inventory')) {
+                conditionFn = (agent) => {
+                    try {
+                        const slots = agent.bot.inventory.slots;
+                        const usedSlots = slots.filter(s => s !== null).length;
+                        return usedSlots >= 33; // nearly full (36 slots total)
+                    } catch { return false; }
+                };
+            } else if (descLower.includes('low health') || descLower.includes('heal')) {
+                conditionFn = (agent) => {
+                    try { return agent.bot.health <= 8; } catch { return false; }
+                };
+            } else if (descLower.includes('ore') && descLower.includes('collect')) {
+                conditionFn = (agent) => {
+                    try {
+                        const blocks = agent.bot.findBlocks({ matching: (block) =>
+                            block.name.includes('_ore'), maxDistance: 16, count: 1 });
+                        return blocks.length > 0;
+                    } catch { return false; }
+                };
+            } else {
+                // Default: always-true rule (fires every iteration)
+                conditionFn = () => true;
+            }
+
+            const id = agent.self_prompter.addRule(ruleDescription, conditionFn, action);
+            return 'Persistent rule #' + id + ' added: "' + ruleDescription + '" → ' + action;
+        }
+    },
+    {
+        name: '!removeRule',
+        description: 'Remove a persistent rule by its ID number.',
+        params: {
+            'ruleId': { type: 'int', description: 'The ID of the rule to remove.' },
+        },
+        perform: async function (agent, ruleId) {
+            const removed = agent.self_prompter.removeRule(ruleId);
+            return removed ? 'Rule #' + ruleId + ' removed.' : 'No rule found with ID #' + ruleId;
         }
     },
     {
