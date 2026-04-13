@@ -187,7 +187,24 @@ export class Agent {
                 }
                 else {
                     let translation = await handleEnglishTranslation(message);
-                    this.handleMessage(username, translation);
+
+                    // Player messages get priority — pause self-prompting so the bot
+                    // stops its current action and responds immediately, then resumes.
+                    const wasActive = this.self_prompter.isActive();
+                    if (wasActive) {
+                        await this.self_prompter.pause();
+                    }
+
+                    await this.handleMessage(username, translation);
+
+                    // Resume self-prompting after responding to player
+                    if (wasActive && this.self_prompter.isPaused()) {
+                        setTimeout(() => {
+                            if (this.self_prompter.isPaused()) {
+                                this.self_prompter.start();
+                            }
+                        }, 2000);
+                    }
                 }
             } catch (error) {
                 console.error('Error handling message:', error);
