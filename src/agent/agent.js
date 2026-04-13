@@ -249,6 +249,22 @@ export class Agent {
                     if (urgentCmds.length > 0) {
                         console.log('[PlayerCommand] Detected urgent commands: ' + urgentCmds.join(', ') + ' from ' + username);
                         await this.self_prompter.stop();
+
+                        // Build a friendly chat response describing what we're doing
+                        let responseTexts = [];
+                        for (const cmd of urgentCmds) {
+                            if (cmd.includes('endGoal')) responseTexts.push("Alright, stopping my goal!");
+                            else if (cmd.includes('stop')) responseTexts.push("Stopping!");
+                            else if (cmd.includes('followPlayer')) responseTexts.push("Sure, I'll follow you!");
+                            else if (cmd.includes('givePlayer')) {
+                                const itemMatch = cmd.match(/"([^"]+)",\s*"([^"]+)",\s*(\d+)/);
+                                if (itemMatch) responseTexts.push("Here, let me give you " + itemMatch[3] + " " + itemMatch[2].replace(/_/g, ' ') + "!");
+                            }
+                        }
+                        if (responseTexts.length > 0) {
+                            this.routeResponse(username, responseTexts.join(' '));
+                        }
+
                         await this.history.add(username, translation);
                         for (const cmd of urgentCmds) {
                             await this.history.add(this.name, cmd);
