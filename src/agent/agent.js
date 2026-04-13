@@ -347,6 +347,33 @@ export class Agent {
             await this.history.add('system', behavior_log);
         }
 
+        // Detect direct player commands and execute them immediately
+        // This ensures player requests like "stop" and "follow me" aren't ignored by the LLM
+        if (!self_prompt && !from_other_bot) {
+            const msg_lower = message.toLowerCase();
+            let playerCmd = null;
+
+            if (msg_lower.includes('stop') && (msg_lower.includes('goal') || msg_lower.includes('everything') || msg_lower.includes('what you') || msg_lower.includes('doing'))) {
+                playerCmd = '!endGoal';
+                this.routeResponse(source, "Alright, stopping my goal!");
+            } else if (msg_lower.match(/\b(follow me|come here|come with me|follow)\b/)) {
+                playerCmd = `!followPlayer("${source}", 3)`;
+                this.routeResponse(source, `Sure, I'll follow you! ${playerCmd}`);
+            } else if (msg_lower.match(/\b(stop|halt|stay|wait)\b/) && !msg_lower.includes('goal')) {
+                playerCmd = '!stop';
+                this.routeResponse(source, "Stopping! !stop");
+            }
+
+            if (playerCmd) {
+                await this.history.add(source, message);
+                this.history.add(this.name, playerCmd);
+                let result = await executeCommand(this, playerCmd);
+                if (result) this.history.add('system', result);
+                this.history.save();
+                return true;
+            }
+        }
+
         // Handle other user messages
         await this.history.add(source, message);
         this.history.save();
