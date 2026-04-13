@@ -27,7 +27,6 @@ import { AutoRecoveryEngine } from './auto_recovery.js';
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
         this.last_sender = null;
-        this._invFullCount = 0; // tracks consecutive inventory-full failures
         this.count_id = count_id;
         this._disconnectHandled = false;
 
@@ -52,7 +51,6 @@ export class Agent {
         this.memory_bank = new MemoryBank(); // legacy — kept for upstream command compatibility
         this.long_term_memory = new LongTermMemory(this.name, null, settings.long_term_memory || {});
         this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
-        this.auto_recovery = new AutoRecoveryEngine(this);
         this.self_prompter = new SelfPrompter(this);
         this.event_pipeline = new EventPipeline(this);
         convoManager.initAgent(this);
@@ -83,7 +81,8 @@ export class Agent {
 
         console.log(this.name, 'logging into minecraft...');
         this.bot = initBot(this.name);
-        
+        this.auto_recovery = new AutoRecoveryEngine(this);
+
         // Connection Handler
         const onDisconnect = (event, reason) => {
             if (this._disconnectHandled) return;
@@ -723,19 +722,6 @@ export class Agent {
                         if (nbResult) this.history.add('system', nbResult);
                     } catch (e) { /* silent */ }
                     // --- End nearby blocks refresh ---
-                    
-                    // --- Inventory-full loop breaker ---
-                    const execLower = execute_res.toLowerCase();
-                    if (execLower.includes('inventory full') || execLower.includes('inventory is full') || execLower.includes('no place to deposit')) {
-                        this._invFullCount++;
-                        if (this._invFullCount >= 2) {
-                            this.history.add('system', 'WARNING: Your inventory has been full for multiple actions. You MUST run !autoDiscard(5) RIGHT NOW before doing anything else. Do not try to collect or craft until you have free inventory slots.');
-                            this._invFullCount = 0; // reset after nudge
-                        }
-                    } else {
-                        this._invFullCount = 0; // reset on non-full result
-                    }
-                    // --- End inventory-full loop breaker ---
 
                     // --- Auto-Recovery Engine ---
                     // Intercept failures and resolve dependency chains without LLM
@@ -754,6 +740,9 @@ export class Agent {
                                     this.history.add('system', retry_res);
                                 }
                             }
+                        } else if (recovery.result !== execute_res) {
+                            // Recovery couldn't fix it but has advice for the LLM
+                            this.history.add('system', recovery.result);
                         }
                     } catch (recoveryErr) {
                         console.warn('[AutoRecovery] Error during recovery attempt:', recoveryErr.message);
