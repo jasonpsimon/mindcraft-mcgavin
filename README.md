@@ -12,7 +12,7 @@
 
 **mindcraft-mcgavin** started as a fork of [mindcraft](https://github.com/mindcraft-bots/mindcraft) and has diverged significantly. The upstream project is designed for cloud LLMs with large context windows. This fork is engineered to run well on **local models with limited context** (≤8K tokens), while adding systems that make the bot genuinely autonomous — not just reactive.
 
-The bot (`McGavin`) runs on a home server against a local Minecraft world, powered by **Gemma 4 E4B IT** served via **LM Studio** on a Mac Mini.
+The bot (`McGavin`) runs on a home server against a local Minecraft world, powered by **gemma-4-e4b-it** served via **LM Studio** on a M1 Mac Mini with only 16GB of RAM. It is currently utilizing 80% of the 16GB of RAM.
 
 ## Key Differences from Upstream
 
