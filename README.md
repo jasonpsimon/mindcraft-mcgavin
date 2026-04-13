@@ -1,255 +1,168 @@
-<h1 align="center">🧠mindcraft⛏️</h1>
-<h1 align="center">
-  <a href="https://trendshift.io/repositories/9163" target="_blank"><img src="https://trendshift.io/api/badge/repositories/9163" alt="kolbytn%2Fmindcraft | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</h1>
+<h1 align="center">mindcraft-mcgavin</h1>
 
-<p align="center">Crafting minds for Minecraft with LLMs and <a href="https://prismarinejs.github.io/mineflayer/#/">Mineflayer!</a></p>
+<p align="center"><b>A heavily modified <a href="https://github.com/mindcraft-bots/mindcraft">Mindcraft</a> fork optimized for local LLM inference and autonomous survival gameplay.</b></p>
 
 <p align="center">
-  <a href="https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md">FAQ</a> | 
-  <a href="https://discord.gg/mp73p35dzC">Discord Support</a> | 
-  <a href="https://www.youtube.com/watch?v=gRotoL8P8D8">Video Tutorial</a> | 
-  <a href="https://kolbynottingham.com/mindcraft/">Blog Post</a> | 
-  <a href="https://mindcraft-minecollab.github.io/index.html">Paper Website</a> | 
-  <a href="https://github.com/mindcraft-bots/mindcraft/blob/main/minecollab.md">MineCollab</a>
+  Built for small context windows (Gemma 4 E4B IT / LM Studio) with custom memory systems, intelligent command routing, and a multi-goal autonomy engine.
 </p>
 
-> [!Caution]
-Do not connect this bot to public servers with coding enabled. This project allows an LLM to write/execute code on your computer. The code is sandboxed, but still vulnerable to injection attacks. Code writing is disabled by default, you can enable it by setting `allow_insecure_coding` to `true` in `settings.js`. Ye be warned.
+---
 
-# Getting Started
-## Requirements
+## What Is This?
 
-- [Minecraft Java Edition](https://www.minecraft.net/en-us/store/minecraft-java-bedrock-edition-pc) (up to v1.21.11, recommend v1.21.6)
-- [Node.js Installed](https://nodejs.org/) (Node v18 or v20 LTS recommended. Node v24+ may cause issues with native dependencies)
-- At least one API key from a supported API provider. See [supported APIs](#model-customization). OpenAI is the default.
+**mindcraft-mcgavin** started as a fork of [mindcraft](https://github.com/mindcraft-bots/mindcraft) and has diverged significantly. The upstream project is designed for cloud LLMs with large context windows. This fork is engineered to run well on **local models with limited context** (≤8K tokens), while adding systems that make the bot genuinely autonomous — not just reactive.
 
-> [!Important]
-> If installing node on windows, ensure you check `Automatically install the necessary tools`
->
-> If you encounter `npm install` errors on macOS, see the [FAQ](FAQ.md#common-issues) for troubleshooting native module build issues
+The bot (`ThatCoolGuyDude`) runs on a home server against a local Minecraft world, powered by **Gemma 4 E4B IT** served via **LM Studio** on a Mac Mini.
 
-## Install and Run
+## Key Differences from Upstream
 
-1. Make sure you have the requirements above.
+| Area | Upstream Mindcraft | mindcraft-mcgavin |
+|---|---|---|
+| **LLM Target** | Cloud APIs (GPT-4, Claude, Gemini) | Local models via LM Studio/Ollama |
+| **Context Budget** | Large (32K+ tokens) | Tight (~6.9K tokens) |
+| **Prompt Assembly** | Template-based (`$STATS` placeholders) | Token-budgeted `ContextBuilder` with priority sections |
+| **Memory** | Basic conversation history | Multi-tier: episodic, long-term, procedural, seed, confidence engine |
+| **Goal System** | Single goal | Goal queue with auto-advance, persistent rules, compound goals |
+| **Player Interaction** | LLM interprets all chat | Direct command passthrough + natural language detection |
+| **Block Awareness** | `$STATS` placeholder injection | Full `!nearbyBlocks` (16-block radius) injected every prompt |
+| **Ore Handling** | Basic block names | Bidirectional variant mapping (regular ↔ deepslate ↔ nether) |
+| **Command Routing** | All through LLM | Confidence engine caches patterns; direct commands bypass LLM entirely |
 
-2. Download the [latest release](https://github.com/mindcraft-bots/mindcraft/releases/latest) and unzip it, or clone the repository.
+## Custom Systems
 
-3. Rename `keys.example.json` to `keys.json` and fill in your API keys (you only need one). The desired model is set in `andy.json` or other profiles. For other models refer to the table below.
+### ContextBuilder (Token-Budgeted Prompts)
+Every prompt is assembled within a strict character budget. Sections are prioritized: conversation history → command docs → memory → examples → nearby blocks. The builder tracks and logs token usage per section so you can tune the balance.
 
-4. In terminal/command prompt, run `npm install` from the installed directory
+### Confidence Engine
+Caches successful command patterns and replays them for high-confidence matches (≥0.98 threshold). Context key hashes the current goal, trigger, biome, time, health, and hunger. Context-dependent commands (mining, pathfinding, combat) are on a `neverBypass` list so they always go through the LLM.
 
-5. Start a minecraft world and open it to LAN on localhost port `55916`
+### Multi-Tier Memory
+- **Episodic Memory** — recent events stored in Vectra for similarity search
+- **Long-Term Memory** — persistent facts and learned behaviors
+- **Procedural Memory** — command usage patterns
+- **Seed Memory** — bootstrapped knowledge for new sessions
+- **Summarized Memory** — compressed conversation history (500 char limit)
 
-6. Run `node main.js` from the installed directory
+### Goal Queue & Persistent Rules
+- **Goal queue** — stack multiple sequential goals; `!endGoal` auto-advances to the next
+- **Persistent rules** — background checks that run between every self-prompt iteration (e.g., "collect any visible diamond ore"). Smart condition detection parses rule descriptions into actual game-state checks. Rules and goals persist across restarts via `memory.json`.
 
-If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)
+### Player Interaction
+- **Direct command passthrough** — `!commands` from player chat execute immediately without LLM interpretation
+- **Natural language detection** — "add goal Mine 64 diamonds" or "add rule collect visible ore" parsed via regex
+- **Player message queue** — messages that arrive during LLM generation are queued and drained after completion
+- **Urgent command detection** — "stop", "follow me", "come here" are caught before the queue
 
+### Mining & Pathfinding
+- **Ore variant mapping** — searching for "diamond_ore" also finds `deepslate_diamond_ore`; searching for "gold" also finds `nether_gold_ore`. Bidirectional.
+- **`!digDown`** — safe staircase descent with lava/water/void detection
+- **`!digUp`** — safe staircase ascent with floor placement, bedrock/surface detection
+- **Tuned pathfinding** — `thinkTimeout: 10s`, `tickTimeout: 80ms`, `pathfind_timeout: 4s` for underground navigation
 
-# Configuration
-## Model Customization
+## Architecture
 
-You can configure project details in `settings.js`. [See file.](settings.js)
+```
+Player Chat ──→ Direct Command?  ──yes──→ Execute immediately
+                    │ no
+                    ▼
+              Natural Language? ──yes──→ Parse goal/rule, execute
+                    │ no
+                    ▼
+              Confidence Engine ──high──→ Replay cached command
+                    │ miss
+                    ▼
+              ContextBuilder ──→ LLM (Gemma 4 E4B IT) ──→ Parse & Execute
+                    ▲
+                    │
+         ┌─────────┴─────────┐
+    NearbyBlocks     Memory (episodic/LT/procedural)
+    (16-block radius)
+```
 
-You can configure the agent's name, model, and prompts in their profile like `andy.json`. The model can be specified with the `model` field, with values like `model: "gemini-2.5-pro"`. You will need the correct API key for the API provider you choose. See all supported APIs below.
+## Setup
 
-<details>
-<summary><strong>⭐ VIEW SUPPORTED APIs ⭐</strong></summary>
+### Requirements
+- Node.js v18 or v20
+- Minecraft Java Edition (up to v1.21.6)
+- A local LLM server ([LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/), or any OpenAI-compatible API)
 
-| API Name | Config Variable| Docs |
-|------|------|------|
-| `openai` | `OPENAI_API_KEY` | [docs](https://platform.openai.com/docs/models) |
-| `google` | `GEMINI_API_KEY` | [docs](https://ai.google.dev/gemini-api/docs/models/gemini) |
-| `anthropic` | `ANTHROPIC_API_KEY` | [docs](https://docs.anthropic.com/claude/docs/models-overview) |
-| `xai` | `XAI_API_KEY` | [docs](https://docs.x.ai/docs) |
-| `deepseek` | `DEEPSEEK_API_KEY` | [docs](https://api-docs.deepseek.com/) |
-| `ollama` (local) | n/a | [docs](https://ollama.com/library) |
-| `qwen` | `QWEN_API_KEY` | [Intl.](https://www.alibabacloud.com/help/en/model-studio/developer-reference/use-qwen-by-calling-api)/[cn](https://help.aliyun.com/zh/model-studio/getting-started/models) |
-| `mistral` | `MISTRAL_API_KEY` | [docs](https://docs.mistral.ai/getting-started/models/models_overview/) |
-| `replicate` | `REPLICATE_API_KEY` | [docs](https://replicate.com/collections/language-models) |
-| `groq` (not grok) | `GROQCLOUD_API_KEY` | [docs](https://console.groq.com/docs/models) |
-| `huggingface` | `HUGGINGFACE_API_KEY` | [docs](https://huggingface.co/models) |
-| `novita` | `NOVITA_API_KEY` | [docs](https://novita.ai/model-api/product/llm-api?utm_source=github_mindcraft&utm_medium=github_readme&utm_campaign=link) |
-| `openrouter` | `OPENROUTER_API_KEY` | [docs](https://openrouter.ai/models) |
-| `glhf` | `GHLF_API_KEY` | [docs](https://glhf.chat/user-settings/api) |
-| `hyperbolic` | `HYPERBOLIC_API_KEY` | [docs](https://docs.hyperbolic.xyz/docs/getting-started) |
-| `vllm` | n/a | n/a |
-| `cerebras` | `CEREBRAS_API_KEY` | [docs](https://inference-docs.cerebras.ai/introduction) |
-| `mercury` | `MERCURY_API_KEY` | [docs](https://www.inceptionlabs.ai/) |
+### Quick Start
 
-</details>
-
-For more comprehensive model configuration and syntax, see [Model Specifications](#model-specifications).
-
-For local models we support [ollama](https://ollama.com/) and we provide our own finetuned models for you to use. 
-To install our models, install ollama and run the following terminal command:
 ```bash
-ollama pull sweaterdog/andy-4:micro-q8_0 && ollama pull embeddinggemma
+git clone https://github.com/jasonpsimon/mindcraft-mcgavin.git
+cd mindcraft-mcgavin
+npm install
 ```
 
-## Online Servers
-To connect to online servers your bot will need an official Microsoft/Minecraft account. You can use your own personal one, but will need another account if you want to connect too and play with it. To connect, change these lines in `settings.js`:
-```javascript
-"host": "111.222.333.444",
-"port": 55920,
-"auth": "microsoft",
-
-// rest is same...
-```
-> [!Important]
-> The bot's name in the profile.json must exactly match the Minecraft profile name! Otherwise the bot will spam talk to itself.
-
-To use different accounts, Mindcraft will connect with the account that the Minecraft launcher is currently using. You can switch accounts in the launcher, then run `node main.js`, then switch to your main account after the bot has connected.
-
-## Tasks
-
-Tasks automatically start the bot with a prompt and a goal item to acquire or blueprint to construct. To run a simple task that involves collecting 4 oak_logs run 
-
-`node main.js --task_path tasks/basic/single_agent.json --task_id gather_oak_logs`
-
-Here is an example task json format: 
-
-```
+Configure your bot profile (e.g., `ThatCoolGuyDude.json`):
+```json
 {
-    "gather_oak_logs": {
-      "goal": "Collect at least four logs",
-      "initial_inventory": {
-        "0": {
-          "wooden_axe": 1
-        }
-      },
-      "agent_count": 1,
-      "target": "oak_log",
-      "number_of_target": 4,
-      "type": "techtree",
-      "max_depth": 1,
-      "depth": 0,
-      "timeout": 300,
-      "blocked_actions": {
-        "0": [],
-        "1": []
-      },
-      "missing_items": [],
-      "requires_ctable": false
+    "name": "YourBotName",
+    "model": "lmstudio/your-model-name",
+    "url": "http://your-lm-studio-host:1234/v1",
+    "embedding": {
+        "model": "lmstudio/text-embedding-nomic-embed-text-v1.5",
+        "url": "http://your-lm-studio-host:1234/v1"
     }
 }
 ```
 
-The `initial_inventory` is what the bot will have at the start of the episode, `target` refers to the target item and `number_of_target` refers to the number of target items the agent needs to collect to successfully complete the task. 
-
-If you want more optimization and automatic launching of the minecraft world, you will need to follow the instructions in [Minecollab Instructions](minecollab.md#installation)
-
-## Docker Container
-
-If you intend to `allow_insecure_coding`, it is a good idea to run the app in a docker container to reduce risks of running unknown code. This is strongly recommended before connecting to remote servers, although still does not guarantee complete safety.
-
+Update `settings.js` with your server IP and profile path, then:
 ```bash
-docker build -t mindcraft . && docker run --rm --add-host=host.docker.internal:host-gateway -p 8080:8080 -p 3000-3003:3000-3003 -e SETTINGS_JSON='{"auto_open_ui":false,"profiles":["./profiles/gemini.json"],"host":"host.docker.internal"}' --volume ./keys.json:/app/keys.json --name mindcraft mindcraft
-```
-or simply
-```bash
-docker-compose up --build
+node main.js
 ```
 
-When running in docker, if you want the bot to join your local minecraft server, you have to use a special host address `host.docker.internal` to call your localhost from inside your docker container. Put this into your [settings.js](settings.js):
+### In-Game Commands
 
-```javascript
-"host": "host.docker.internal", // instead of "localhost", to join your local minecraft from inside the docker container
+Talk to the bot in Minecraft chat. Commands can be issued directly:
+
+```
+!goal("Mine 64 diamonds and build a house")
+!addGoal("Craft diamond armor")
+!addRule("Collect any visible diamond ore")
+!viewGoals
+!viewRules
+!stop
 ```
 
-To connect to an unsupported minecraft version, you can try to use [viaproxy](services/viaproxy/README.md)
-
-# Bot Profiles
-
-Bot profiles are json files (such as `andy.json`) that define:
-
-1. Bot backend LLMs to use for talking, coding, and embedding.
-2. Prompts used to influence the bot's behavior.
-3. Examples help the bot perform tasks.
-
-## Model Specifications
-
-LLM models can be specified simply as `"model": "gpt-4o"`, or more specifically with `"{api}/{model}"`, like `"openrouter/google/gemini-2.5-pro"`. See all supported APIs [here](#model-customization).
-
-The `model` field can be a string or an object. A model object must specify an `api`, and optionally a `model`, `url`, and additional `params`. You can also use different models/providers for chatting, coding, vision, embedding, and voice synthesis. See the example below.
-
-```json
-"model": {
-  "api": "openai",
-  "model": "gpt-4o",
-  "url": "https://api.openai.com/v1/",
-  "params": {
-    "max_tokens": 1000,
-    "temperature": 1
-  }
-},
-"code_model": {
-  "api": "openai",
-  "model": "gpt-4",
-  "url": "https://api.openai.com/v1/"
-},
-"vision_model": {
-  "api": "openai",
-  "model": "gpt-4o",
-  "url": "https://api.openai.com/v1/"
-},
-"embedding": {
-  "api": "openai",
-  "url": "https://api.openai.com/v1/",
-  "model": "text-embedding-ada-002"
-},
-"speak_model": "openai/tts-1/echo"
+Or use natural language:
+```
+add goal Mine 64 iron
+add rule collect visible ore
+show goals
+remove rule 1
 ```
 
-`model` is used for chat, `code_model` is used for newAction coding, `vision_model` is used for image interpretation, `embedding` is used to embed text for example selection, and `speak_model` is used for voice synthesis. `model` will be used by default for all other models if not specified. Not all APIs support embeddings, vision, or voice synthesis.
+## Project Structure
 
-All apis have default models and urls, so those fields are optional. The `params` field is optional and can be used to specify additional parameters for the model. It accepts any key-value pairs supported by the api. Is not supported for embedding models.
-
-## Embedding Models
-
-Embedding models are used to embed and efficiently select relevant examples for conversation and coding.
-
-Supported Embedding APIs: `openai`, `google`, `replicate`, `huggingface`, `novita`
-
-If you try to use an unsupported model, then it will default to a simple word-overlap method. Expect reduced performance. We recommend using supported embedding APIs.
-
-## Voice Synthesis Models
-
-Voice synthesis models are used to narrate bot responses and specified with `speak_model`. This field is parsed differently than other models and only supports strings formatted as `"{api}/{model}/{voice}"`, like `"openai/tts-1/echo"`. We only support `openai` and `google` for voice synthesis.
-
-## Specifying Profiles via Command Line
-
-By default, the program will use the profiles specified in `settings.js`. You can specify one or more agent profiles using the `--profiles` argument: `node main.js --profiles ./profiles/andy.json ./profiles/jill.json`
-
-
-# Contributing
-
-We welcome contributions to the project! We are generally less responsive to github issues, and more responsive to pull requests. Join the [discord](https://discord.gg/mp73p35dzC) for more active support and direction.
-
-While AI generated code is allowed, please vet it carefully. Submitting tons of sloppy code and documentation actively harms development.
-
-## Patches
-
-Some of the node modules that we depend on have bugs in them. To add a patch, change your local node module file and run `npx patch-package [package-name]`
-
-## Development Team
-Thanks to all who contributed to the project, especially the official development team: [@MaxRobinsonTheGreat](https://github.com/MaxRobinsonTheGreat), [@kolbytn](https://github.com/kolbytn), [@icwhite](https://github.com/icwhite), [@Sweaterdog](https://github.com/Sweaterdog), [@Ninot1Quyi](https://github.com/Ninot1Quyi), [@riqvip](https://github.com/riqvip), [@uukelele-scratch](https://github.com/uukelele-scratch), [@mrelmida](https://github.com/mrelmida)
-
-
-## Citation:
-This work is published in the paper [Collaborating Action by Action: A Multi-agent LLM Framework for Embodied Reasoning](https://arxiv.org/abs/2504.17950). Please use this citation if you use this project in your research:
 ```
-@article{mindcraft2025,
-  title = {Collaborating Action by Action: A Multi-agent LLM Framework for Embodied Reasoning},
-  author = {White*, Isadora and Nottingham*, Kolby and Maniar, Ayush and Robinson, Max and Lillemark, Hansen and Maheshwari, Mehul and Qin, Lianhui and Ammanabrolu, Prithviraj},
-  journal = {arXiv preprint arXiv:2504.17950},
-  year = {2025},
-  url = {https://arxiv.org/abs/2504.17950},
-}
+src/
+├── agent/
+│   ├── agent.js              # Main agent — message handling, command routing
+│   ├── self_prompter.js       # Goal queue, persistent rules, self-prompt loop
+│   ├── commands/
+│   │   ├── actions.js         # !goal, !addGoal, !addRule, !digDown, !digUp, etc.
+│   │   ├── queries.js         # !nearbyBlocks, !stats, !inventory, !viewRules
+│   │   └── index.js           # Command parser and executor
+│   └── library/
+│       └── skills.js          # Pathfinding, mining, building, combat skills
+├── memory/
+│   ├── confidence_engine.js   # Pattern caching and replay
+│   ├── context_builder.js     # Token-budgeted prompt assembly
+│   ├── episodic_memory.js     # Recent event storage (Vectra)
+│   ├── long_term_memory.js    # Persistent facts (Vectra)
+│   ├── procedural_memory.js   # Command usage patterns
+│   └── seed_memory.js         # Bootstrap knowledge
+└── models/
+    └── prompter.js            # LLM interface and prompt orchestration
 ```
 
-## Contributors
+## Credits
 
-Thanks to everyone who has submitted issues on and off Github, made suggestions, and generally helped make this a better project.
+Forked from [mindcraft](https://github.com/mindcraft-bots/mindcraft) by [@kolbytn](https://github.com/kolbytn), [@MaxRobinsonTheGreat](https://github.com/MaxRobinsonTheGreat), and the Mindcraft team.
 
-![Contributors](https://contrib.rocks/image?repo=mindcraft-bots/mindcraft)
+All upstream APIs and model support are preserved — this fork adds local-LLM optimizations on top.
+
+## License
+
+Same as upstream Mindcraft.
