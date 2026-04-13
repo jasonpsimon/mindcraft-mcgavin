@@ -69,6 +69,18 @@ export class SelfPrompter {
             const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
             
             let used_command = await this.agent.handleMessage('system', msg, -1);
+
+            // Drain any player messages that queued up while the LLM was generating
+            if (this.agent._playerMsgQueue && this.agent._playerMsgQueue.length > 0 && !this.agent._processingPlayerMsg) {
+                this.agent._processingPlayerMsg = true;
+                while (this.agent._playerMsgQueue.length > 0) {
+                    const { username, message } = this.agent._playerMsgQueue.shift();
+                    console.log('[PlayerQueue] Draining queued message from ' + username);
+                    await this.agent.handleMessage(username, message);
+                }
+                this.agent._processingPlayerMsg = false;
+            }
+
             if (!used_command) {
                 no_command_count++;
                 this._consecutiveNoProgress++;

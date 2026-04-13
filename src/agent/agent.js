@@ -171,6 +171,21 @@ export class Agent {
             "Gamerule "
         ];
         
+        // Queue for player messages that arrive while the bot is busy generating
+        this._playerMsgQueue = [];
+        this._processingPlayerMsg = false;
+
+        const _drainPlayerQueue = async () => {
+            if (this._processingPlayerMsg || this._playerMsgQueue.length === 0) return;
+            this._processingPlayerMsg = true;
+            while (this._playerMsgQueue.length > 0) {
+                const { username, message } = this._playerMsgQueue.shift();
+                console.log('[PlayerQueue] Processing queued message from ' + username + ': ' + message);
+                await this.handleMessage(username, message);
+            }
+            this._processingPlayerMsg = false;
+        };
+
         const respondFunc = async (username, message) => {
             if (message === "") return;
             if (username === this.name) return;
@@ -187,7 +202,16 @@ export class Agent {
                 }
                 else {
                     let translation = await handleEnglishTranslation(message);
-                    this.handleMessage(username, translation);
+
+                    // If the bot is currently generating an LLM response, queue the
+                    // player message instead of racing the promptConvo timestamp.
+                    if (this.prompter.awaiting_response) {
+                        console.log('[PlayerQueue] Bot busy generating, queuing message from ' + username);
+                        this._playerMsgQueue.push({ username, message: translation });
+                    } else {
+                        await this.handleMessage(username, translation);
+                        await _drainPlayerQueue();
+                    }
                 }
             } catch (error) {
                 console.error('Error handling message:', error);

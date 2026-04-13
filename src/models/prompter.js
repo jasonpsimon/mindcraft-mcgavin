@@ -52,6 +52,7 @@ export class Prompter {
         this.cooldown = this.profile.cooldown ? this.profile.cooldown : 0;
         this.last_prompt_time = 0;
         this.awaiting_coding = false;
+        this.awaiting_response = false;
 
         // for backwards compatibility, move max_tokens to params
         let max_tokens = null;
@@ -433,9 +434,11 @@ export class Prompter {
     }
 
     async promptConvo(messages) {
+        this.awaiting_response = true;
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
 
+        try {
         for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
             await this.checkCooldown();
             if (current_msg_time !== this.most_recent_msg_time) {
@@ -480,6 +483,9 @@ export class Prompter {
         }
 
         return '';
+        } finally {
+            this.awaiting_response = false;
+        }
     }
 
     async promptCoding(messages) {
