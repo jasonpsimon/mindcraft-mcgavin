@@ -55,6 +55,14 @@ Caches successful command patterns and replays them for high-confidence matches 
 - **Player message queue** — messages that arrive during LLM generation are queued and drained after completion
 - **Urgent command detection** — "stop", "follow me", "come here" are caught before the queue
 
+### GenerationLock (Concurrency Control)
+A priority-aware mutex that serializes all LLM calls through a single lock, preventing concurrent requests from overwhelming the single-threaded LM Studio backend.
+
+- **Three priority tiers** — `PLAYER` (highest) → `SELF` (self-prompt cycles) → `MEMORY` (summarization). When multiple callers are waiting, the highest-priority one runs next.
+- **Eliminates response discards** — the old `most_recent_msg_time` race condition is fully removed. No more wasted LLM cycles from overlapping generations.
+- **Deferred memory summarization** — `promptMemSaving` runs at `MEMORY` priority in the background, so it never competes with active player chat or self-prompt generation.
+- **Error-safe** — the lock releases in a `finally` block, so a failed generation never deadlocks the bot.
+
 ### Auto-Recovery Engine (GOAP-Inspired)
 The auto-recovery engine intercepts failed commands and resolves common failure chains automatically — no LLM round-trip required. Inspired by Goal-Oriented Action Planning (GOAP), it recursively resolves prerequisites up to 8 levels deep.
 
@@ -88,6 +96,11 @@ Player Chat ──→ Direct Command?  ──yes──→ Execute immediately
                     ▼
               Confidence Engine ──high──→ Replay cached command
                     │ miss
+                    ▼
+            ┌─ GenerationLock ─┐
+            │  PLAYER > SELF   │
+            │    > MEMORY      │
+            └───────┬──────────┘
                     ▼
               ContextBuilder ──→ LLM (Gemma 4 E4B IT) ──→ Parse & Execute
                     ▲                                          │
@@ -160,6 +173,7 @@ src/
 │   ├── agent.js              # Main agent — message handling, command routing
 │   ├── self_prompter.js       # Goal queue, persistent rules, self-prompt loop
 │   ├── auto_recovery.js        # GOAP-inspired failure recovery engine
+│   ├── generation_lock.js     # Priority-aware LLM serialization (PLAYER > SELF > MEMORY)
 │   ├── commands/
 │   │   ├── actions.js         # !goal, !addGoal, !addRule, !digDown, !digUp, etc.
 │   │   ├── queries.js         # !nearbyBlocks, !stats, !inventory, !viewRules
@@ -203,3 +217,4 @@ All upstream APIs and model support are preserved — this fork adds local-LLM o
 ## License
 
 Same as upstream Mindcraft.
+
