@@ -417,12 +417,12 @@ export const actionsList = [
     },
     {
         name: '!addRule',
-        description: 'Add a persistent rule that the bot checks between every goal iteration. Rules auto-trigger actions based on game state.',
+        description: 'Add a persistent rule that the bot checks between every goal iteration. Rules auto-trigger actions based on game state. The action is auto-detected from the description.',
         params: {
             'ruleDescription': { type: 'string', description: 'What the rule does, e.g. "collect any visible diamond ore"' },
-            'action': { type: 'string', description: 'The command to execute when triggered, e.g. !collectBlocks("diamond_ore", 3)' },
         },
-        perform: async function (agent, ruleDescription, action) {
+        perform: async function (agent, ruleDescription) {
+            let action;
             // Create a rule with a condition that always returns true
             // The LLM describes the rule; we trust the description for logging
             // For smart rules, we parse the description for known patterns
