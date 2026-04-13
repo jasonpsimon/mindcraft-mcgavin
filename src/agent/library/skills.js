@@ -1023,7 +1023,8 @@ export async function safeToss(bot, itemType, metadata, count) {
     // Toss items to the back, reseal the top/entrance with the original material.
 
     if (!isConfined) {
-        // Surface: dig straight down 2 blocks, toss into the hole, seal the top
+        // Surface: dig 2 deep, toss items into the bottom, seal only the top (y-1).
+        // Items sit in a hidden 1-block air gap at y-2 — invisible, never picked up.
         const topPos = pos.offset(0, -1, 0);
         const bottomPos = pos.offset(0, -2, 0);
         const topBlock = bot.blockAt(topPos);
@@ -1035,7 +1036,7 @@ export async function safeToss(bot, itemType, metadata, count) {
             && topBlock.name !== 'bedrock' && bottomBlock.name !== 'bedrock') {
 
             const originalTopName = topBlock.name; // remember for resealing
-            console.log(`[SafeToss] Surface pocket — digging 2-deep below (${originalTopName})`);
+            console.log(`[SafeToss] Surface disposal — digging 2-deep below (${originalTopName})`);
             try {
                 await bot.dig(topBlock);
                 const bottomBlockFresh = bot.blockAt(bottomPos);
@@ -1043,39 +1044,52 @@ export async function safeToss(bot, itemType, metadata, count) {
                     await bot.dig(bottomBlockFresh);
                 }
 
-                // Toss items into the 2-deep hole
+                // Toss items into the 2-deep hole — they fall to y-2
                 await bot.lookAt(bottomPos.offset(0.5, 0.5, 0.5));
                 await bot.toss(itemType, metadata, count);
                 await new Promise(r => setTimeout(r, 400));
 
-                // Reseal the top with the original material
+                // Seal ONLY the top block (y-1) with the original surface material.
+                // Items remain in the air gap at y-2 — hidden, not pushed out.
                 const sealItem = _findSealBlock(bot, originalTopName);
                 if (sealItem) {
                     try {
-                        // Place on the block at y-2 (bottom of pocket) facing up
-                        const refBlock = bot.blockAt(pos.offset(0, -3, 0));
-                        if (refBlock && refBlock.name !== 'air') {
-                            // First seal the bottom slot (y-2)
-                            await bot.equip(sealItem, 'hand');
-                            await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
-                        }
-                        // Now seal the top slot (y-1) with same or any material
-                        const sealItem2 = _findSealBlock(bot, originalTopName);
-                        if (sealItem2) {
-                            const midRef = bot.blockAt(pos.offset(0, -2, 0));
-                            if (midRef && midRef.name !== 'air') {
-                                await bot.equip(sealItem2, 'hand');
-                                await bot.placeBlock(midRef, new Vec3(0, 1, 0));
-                                console.log(`[SafeToss] Surface pocket sealed with ${sealItem2.name}`);
+                        // We need to place at y-1. The block at y-2 is now air (we dug it).
+                        // Place against the wall of the hole — use the side of the y-1 slot.
+                        // Simplest: look at the bottom of the hole (y-3 floor) won't work
+                        // for y-1 placement. Instead, place against a neighboring solid block.
+                        // The block at y-1 is adjacent to solid ground on all sides.
+                        const neighbors = [
+                            pos.offset(1, -1, 0), pos.offset(-1, -1, 0),
+                            pos.offset(0, -1, 1), pos.offset(0, -1, -1),
+                        ];
+                        let placed = false;
+                        await bot.equip(sealItem, 'hand');
+                        for (const nPos of neighbors) {
+                            const neighbor = bot.blockAt(nPos);
+                            if (neighbor && neighbor.name !== 'air' && neighbor.name !== 'cave_air') {
+                                // Calculate the face direction from neighbor to pocket
+                                const face = new Vec3(
+                                    topPos.x - nPos.x,
+                                    topPos.y - nPos.y,
+                                    topPos.z - nPos.z
+                                );
+                                await bot.placeBlock(neighbor, face);
+                                console.log(`[SafeToss] Surface sealed with ${sealItem.name} — items hidden at y-2`);
+                                placed = true;
+                                break;
                             }
                         }
+                        if (!placed) {
+                            console.warn('[SafeToss] No adjacent block to place against');
+                        }
                     } catch (e) {
-                        console.warn('[SafeToss] Could not seal surface pocket:', e.message);
+                        console.warn('[SafeToss] Could not seal surface hole:', e.message);
                     }
                 }
                 return;
             } catch (e) {
-                console.warn('[SafeToss] Surface pocket failed, tossing normally:', e.message);
+                console.warn('[SafeToss] Surface disposal failed, tossing normally:', e.message);
                 await bot.toss(itemType, metadata, count);
                 return;
             }
@@ -2744,6 +2758,7 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
 
 
 
