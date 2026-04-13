@@ -965,16 +965,14 @@ export async function safeToss(bot, itemType, metadata, count) {
         && above.name !== 'cave_air';
 
     if (!isConfined) {
-        // Open space — normal toss is fine
+        // Surface: toss normally — no fire, no pockets needed
         await bot.toss(itemType, metadata, count);
         return;
     }
 
     // --- Underground disposal ---
     // Strategy 1: Fire pit — dig a hole in the floor, light a fire, toss items in to burn.
-    //             Requires flint_and_steel. Items despawn in ~5 seconds on fire.
-    // Strategy 2: Sealed pocket — dig 2-deep alcove into a wall, toss, seal entrance.
-    //             Fallback when no flint_and_steel is available.
+    // Strategy 2: Sealed pocket — 2-deep wall alcove when no flint_and_steel.
 
     const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
 
@@ -2681,6 +2679,9 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
+
+
 
 
 
