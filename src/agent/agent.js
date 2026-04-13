@@ -206,10 +206,15 @@ export class Agent {
                     // --- Direct command passthrough: if player types !command, execute it ---
                     if (translation.trim().startsWith('!')) {
                         const cmdStr = translation.trim();
-                        console.log('[DirectCommand] Player ' + username + ' issued command: ' + cmdStr);
-                        if (commandExists(cmdStr)) {
-                            await this.history.add(username, cmdStr);
-                            let result = await executeCommand(this, cmdStr);
+                        // Extract just the command name (e.g. "!goal" from '!goal("mine diamonds")')
+                        // Normalize: remove space before parens, e.g. !goal ("text") -> !goal("text")
+                        const cmdStrNorm = cmdStr.replace(/^(!\w+)\s*\(/, '$1(');
+                        const cmdNameMatch = cmdStrNorm.match(/^(!\w+)/);
+                        const cmdName = cmdNameMatch ? cmdNameMatch[1] : cmdStr;
+                        console.log('[DirectCommand] Player ' + username + ' issued command: ' + cmdName + ' (full: ' + cmdStr + ')');
+                        if (commandExists(cmdName)) {
+                            await this.history.add(username, cmdStrNorm);
+                            let result = await executeCommand(this, cmdStrNorm);
                             if (result) {
                                 this.routeResponse(username, result);
                                 await this.history.add('system', result);
@@ -217,7 +222,7 @@ export class Agent {
                             this.history.save();
                             return;
                         } else {
-                            console.log('[DirectCommand] Unknown command, falling through to LLM');
+                            console.log('[DirectCommand] Unknown command: ' + cmdName + ', falling through to LLM');
                         }
                     }
 
