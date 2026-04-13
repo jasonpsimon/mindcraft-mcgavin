@@ -218,6 +218,27 @@ export class Agent {
                         urgentCmds.push('!followPlayer("' + username + '", 3)');
                     }
 
+                    // "give me [item]" — parse item name and quantity from player request
+                    const giveMatch = msg_lower.match(/(?:give me|hand over|pass me|drop me|toss me)\s+(?:(?:my|the|your|both|all)\s+)?(?:(\d+|both|all)\s+)?(?:(?:of\s+)?(?:the\s+|your\s+|my\s+)?)?(.+?)(?:\s+back)?(?:\s+from your inventory)?$/);
+                    if (giveMatch) {
+                        let rawItem = giveMatch[2].trim()
+                            .replace(/(regular|enchanted|my|the|your|please)/g, '').trim()
+                            .replace(/\s+/g, '_');
+                        // Depluralize simple cases (swords->sword, pickaxes->pickaxe)
+                        if (rawItem.endsWith('xes')) rawItem = rawItem.slice(0, -2);
+                        else if (rawItem.endsWith('s') && !rawItem.endsWith('ss')) rawItem = rawItem.slice(0, -1);
+                        let qty = 1;
+                        if (giveMatch[1]) {
+                            if (giveMatch[1] === 'both') qty = 2;
+                            else if (giveMatch[1] === 'all') qty = 64;
+                            else qty = parseInt(giveMatch[1]) || 1;
+                        } else if (msg_lower.includes('both')) {
+                            qty = 2;
+                        }
+                        console.log('[PlayerCommand] Give request parsed: item=' + rawItem + ' qty=' + qty + ' to=' + username);
+                        urgentCmds.push('!givePlayer("' + username + '", "' + rawItem + '", ' + qty + ')');
+                    }
+
                     if (urgentCmds.length > 0) {
                         console.log('[PlayerCommand] Detected urgent commands: ' + urgentCmds.join(', ') + ' from ' + username);
                         await this.self_prompter.stop();
@@ -373,33 +394,6 @@ export class Agent {
             }
             behavior_log = 'Recent behaviors log: \n' + behavior_log;
             await this.history.add('system', behavior_log);
-        }
-
-        // Detect direct player commands and execute them immediately
-        // This ensures player requests like "stop" and "follow me" aren't ignored by the LLM
-        if (!self_prompt && !from_other_bot) {
-            const msg_lower = message.toLowerCase();
-            let playerCmd = null;
-
-            if (msg_lower.includes('stop') && (msg_lower.includes('goal') || msg_lower.includes('everything') || msg_lower.includes('what you') || msg_lower.includes('doing'))) {
-                playerCmd = '!endGoal';
-                this.routeResponse(source, "Alright, stopping my goal!");
-            } else if (msg_lower.match(/\b(follow me|come here|come with me|follow)\b/)) {
-                playerCmd = `!followPlayer("${source}", 3)`;
-                this.routeResponse(source, `Sure, I'll follow you! ${playerCmd}`);
-            } else if (msg_lower.match(/\b(stop|halt|stay|wait)\b/) && !msg_lower.includes('goal')) {
-                playerCmd = '!stop';
-                this.routeResponse(source, "Stopping! !stop");
-            }
-
-            if (playerCmd) {
-                await this.history.add(source, message);
-                this.history.add(this.name, playerCmd);
-                let result = await executeCommand(this, playerCmd);
-                if (result) this.history.add('system', result);
-                this.history.save();
-                return true;
-            }
         }
 
         // Handle other user messages
