@@ -12,7 +12,7 @@
 
 **mindcraft-mcgavin** started as a fork of [mindcraft](https://github.com/mindcraft-bots/mindcraft) and has diverged significantly. The upstream project is designed for cloud LLMs with large context windows. This fork is engineered to run well on **local models with limited context** (≤8K tokens), while adding systems that make the bot genuinely autonomous — not just reactive.
 
-The bot (`ThatCoolGuyDude`) runs on a home server against a local Minecraft world, powered by **Gemma 4 E4B IT** served via **LM Studio** on a Mac Mini.
+The bot (`McGavin`) runs on a home server against a local Minecraft world, powered by **Gemma 4 E4B IT** served via **LM Studio** on a Mac Mini.
 
 ## Key Differences from Upstream
 
@@ -94,7 +94,7 @@ cd mindcraft-mcgavin
 npm install
 ```
 
-Configure your bot profile (e.g., `ThatCoolGuyDude.json`):
+Configure your bot profile (e.g., `McGavin.json`):
 ```json
 {
     "name": "YourBotName",
