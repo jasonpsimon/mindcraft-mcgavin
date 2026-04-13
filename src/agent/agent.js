@@ -219,22 +219,29 @@ export class Agent {
                     }
 
                     // "give me [item]" — parse item name and quantity from player request
-                    const giveMatch = msg_lower.match(/(?:give me|hand over|pass me|drop me|toss me)\s+(?:(?:my|the|your|both|all)\s+)?(?:(\d+|both|all)\s+)?(?:(?:of\s+)?(?:the\s+|your\s+|my\s+)?)?(.+?)(?:\s+back)?(?:\s+from your inventory)?$/);
+                    const giveMatch = msg_lower.match(/(?:give me|hand over|pass me|drop me|toss me)\s+(.+)/);
                     if (giveMatch) {
-                        let rawItem = giveMatch[2].trim()
-                            .replace(/(regular|enchanted|my|the|your|please)/g, '').trim()
-                            .replace(/\s+/g, '_');
-                        // Depluralize simple cases (swords->sword, pickaxes->pickaxe)
-                        if (rawItem.endsWith('xes')) rawItem = rawItem.slice(0, -2);
-                        else if (rawItem.endsWith('s') && !rawItem.endsWith('ss')) rawItem = rawItem.slice(0, -1);
+                        let phrase = giveMatch[1].trim()
+                            .replace(/\s*(from your inventory|from inventory|back|please|right now|now)\s*\.?\s*$/g, '')
+                            .replace(/^(my|the|your|both|all|some|a|an)\s+/g, '')
+                            .replace(/^(my|the|your)\s+/g, '');
                         let qty = 1;
-                        if (giveMatch[1]) {
-                            if (giveMatch[1] === 'both') qty = 2;
-                            else if (giveMatch[1] === 'all') qty = 64;
-                            else qty = parseInt(giveMatch[1]) || 1;
+                        const qtyMatch = phrase.match(/^(\d+|both|all)\s+/);
+                        if (qtyMatch) {
+                            if (qtyMatch[1] === 'both') qty = 2;
+                            else if (qtyMatch[1] === 'all') qty = 64;
+                            else qty = parseInt(qtyMatch[1]) || 1;
+                            phrase = phrase.slice(qtyMatch[0].length);
                         } else if (msg_lower.includes('both')) {
                             qty = 2;
                         }
+                        let rawItem = phrase
+                            .replace(/(regular|enchanted|of the|of|my|the|your)/g, '')
+                            .trim()
+                            .replace(/\s+/g, '_');
+                        if (rawItem.endsWith('xes')) rawItem = rawItem.slice(0, -2);
+                        else if (rawItem.endsWith('s') && !rawItem.endsWith('ss')) rawItem = rawItem.slice(0, -1);
+                        rawItem = rawItem.replace(/_+/g, '_').replace(/^_|_$/g, '');
                         console.log('[PlayerCommand] Give request parsed: item=' + rawItem + ' qty=' + qty + ' to=' + username);
                         urgentCmds.push('!givePlayer("' + username + '", "' + rawItem + '", ' + qty + ')');
                     }
