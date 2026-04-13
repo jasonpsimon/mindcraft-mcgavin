@@ -1,0 +1,28 @@
+diff --git a/node_modules/vectra/lib/LocalIndex.js b/node_modules/vectra/lib/LocalIndex.js
+index fdbfd66..b94c10e 100644
+--- a/node_modules/vectra/lib/LocalIndex.js
++++ b/node_modules/vectra/lib/LocalIndex.js
+@@ -114,7 +114,10 @@ class LocalIndex {
+                     metadata_config: (_a = config.metadata_config) !== null && _a !== void 0 ? _a : {},
+                     items: []
+                 };
+-                yield fs.writeFile(path.join(this._folderPath, this._indexName), JSON.stringify(this._data));
++                // Atomic write: temp file + rename to prevent corruption on crash
++                const tmpPath = path.join(this._folderPath, this._indexName + '.tmp');
++                yield fs.writeFile(tmpPath, JSON.stringify(this._data));
++                yield fs.rename(tmpPath, path.join(this._folderPath, this._indexName));
+             }
+             catch (err) {
+                 yield this.deleteIndex();
+@@ -168,7 +171,10 @@ class LocalIndex {
+             }
+             try {
+                 // Save index
+-                yield fs.writeFile(path.join(this._folderPath, this._indexName), JSON.stringify(this._update));
++                // Atomic write: temp file + rename to prevent corruption on crash
++                const tmpPath = path.join(this._folderPath, this._indexName + '.tmp');
++                yield fs.writeFile(tmpPath, JSON.stringify(this._update));
++                yield fs.rename(tmpPath, path.join(this._folderPath, this._indexName));
+                 this._data = this._update;
+                 this._update = undefined;
+             }
