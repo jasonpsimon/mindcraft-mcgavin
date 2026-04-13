@@ -205,23 +205,28 @@ export class Agent {
 
                     // Detect urgent player commands and execute immediately,
                     // even if the bot is busy generating an LLM response.
+                    // Supports compound commands (e.g. "stop your goal and follow me").
                     const msg_lower = translation.toLowerCase();
-                    let urgentCmd = null;
+                    let urgentCmds = [];
+
                     if (msg_lower.includes('stop') && (msg_lower.includes('goal') || msg_lower.includes('everything') || msg_lower.includes('what you') || msg_lower.includes('doing'))) {
-                        urgentCmd = '!endGoal';
-                    } else if (msg_lower.match(/\b(follow me|come here|come with me|follow)\b/)) {
-                        urgentCmd = '!followPlayer("' + username + '", 3)';
-                    } else if (msg_lower.match(/\b(stop|halt|stay|wait)\b/) && !msg_lower.includes('goal')) {
-                        urgentCmd = '!stop';
+                        urgentCmds.push('!endGoal');
+                    } else if (msg_lower.match(/\b(stop|halt|stay|wait)\b/)) {
+                        urgentCmds.push('!stop');
+                    }
+                    if (msg_lower.match(/\b(follow me|come here|come with me|follow)\b/)) {
+                        urgentCmds.push('!followPlayer("' + username + '", 3)');
                     }
 
-                    if (urgentCmd) {
-                        console.log('[PlayerCommand] Detected urgent command: ' + urgentCmd + ' from ' + username);
+                    if (urgentCmds.length > 0) {
+                        console.log('[PlayerCommand] Detected urgent commands: ' + urgentCmds.join(', ') + ' from ' + username);
                         await this.self_prompter.stop();
                         await this.history.add(username, translation);
-                        await this.history.add(this.name, urgentCmd);
-                        let result = await executeCommand(this, urgentCmd);
-                        if (result) await this.history.add('system', result);
+                        for (const cmd of urgentCmds) {
+                            await this.history.add(this.name, cmd);
+                            let result = await executeCommand(this, cmd);
+                            if (result) await this.history.add('system', result);
+                        }
                         this.history.save();
                         return;
                     }
