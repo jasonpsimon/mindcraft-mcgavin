@@ -30,26 +30,31 @@ _Nothing active._
 This is a perfect case study for item #6 (reduce LLM reliance): a 4B model can't derive "I need to walk 350 blocks north before digging" from "digging is blocked." That reasoning must be programmatic.
 
 **Expected behavior:**
-When a destructive action (`breakBlockAt`, `placeBlock`, underground `safeToss`) is blocked by spawn protection, the bot should automatically path OUT of the zone (+ a small buffer) before retrying. No LLM involvement in the escape — it's a pure mechanical response.
+**Proactive, on every spawn.** Before the self-prompter loop starts (before the LLM gets a chance to issue any command), the bot checks if it's inside the spawn protection zone. If yes, it pathfinds out to a point just beyond the boundary. Only after the bot is clear of the zone does normal gameplay begin. The LLM should never encounter spawn-zone blocks under normal conditions.
 
 **Fix sketch:**
 1. New skill `escapeSpawnZone(bot, buffer=10)` in `src/agent/library/skills.js`:
    - Compute vector from `bot.spawnPoint` → `bot.entity.position`.
-   - Scale vector to `SPAWN_PROTECTION_RADIUS + buffer` (360 blocks) from spawn in the same direction.
+   - Scale to `SPAWN_PROTECTION_RADIUS + buffer` (360 blocks) from spawn in the same direction.
    - If bot is AT spawn (dist ≈ 0), pick a cardinal direction (default +X).
    - Wrap in `withBotLock('escapeSpawnZone', ...)` + save/restore movements.
    - Call `goToGoal(bot, new pf.goals.GoalNear(target_x, current_y, target_z, 2))`.
    - Chat: `I'm inside the spawn protection zone. Walking to (X, Z) to escape.`
-2. New failure pattern in `src/agent/auto_recovery.js`:
-   - Match: `/near spawn|inside .* spawn zone|spawn protection/i` → recovery `ESCAPE_SPAWN_ZONE`.
-   - Handler `recoverInsideSpawnZone` calls `skills.escapeSpawnZone(bot)`, then retries the original command.
-3. Make sure error messages from `breakBlockAt`, `placeBlock`, and `safeToss` spawn-zone branches consistently contain "spawn" so the pattern matches.
+2. Hook into the bot's spawn event in `src/agent/agent.js` (or wherever spawn is handled) — **before** the self-prompter loop starts:
+   - `await skills.escapeSpawnZone(bot)` if `_isInSpawnZone(bot, pos.x, pos.z)`.
+   - Block self-prompter startup until the escape completes or fails.
+3. Safety net (secondary): keep a lightweight AutoRecovery pattern for the rare case where the bot somehow ends up back inside the zone mid-session (e.g., respawn after death, teleport). Match on `/near spawn|inside .* spawn zone|spawn protection/i` → call `escapeSpawnZone`.
+
+**Why proactive > reactive:**
+- No failed-command → retry-with-escape dance; the LLM never sees spawn-zone blocks under normal conditions.
+- Clear separation: "escape phase" then "normal gameplay phase."
+- Works from a cold start and from every respawn — the bot always leaves the zone before doing anything else.
 
 **Signals to watch after fix:**
-- `[SpawnEscape] Auto-escaping from (…) to (…)` appears when the bot enters the zone.
-- Bot position delta >> 300 blocks after each escape.
-- `!digDown` completes successfully from outside the zone.
-- `SpawnProtect` Blocked messages drop to near zero during normal play.
+- `[SpawnEscape] Auto-escaping from (…) to (…)` appears on every spawn.
+- Bot position delta >> 300 blocks within seconds of spawn.
+- `!digDown` completes successfully — no more `Blocked break` spam.
+- `SpawnProtect` Blocked messages drop to zero during normal play.
 
 ---
 
