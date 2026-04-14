@@ -6,6 +6,10 @@
   Designed to run (and is currently running) on a 16GB M1 Mac Mini. Built for small context windows (gemma-4-e4b-it / LM Studio) with custom memory sub-systems to help take the weight off of the LLMs (think: "save tokens" and "quicker responses"), intelligent command routing, and a multi-goal autonomy engine.
 </p>
 
+<p align="center">
+  <a href="./WHITEBOARD.md"><b>Project Whiteboard</b></a> — current status, active work, roadmap, and recent history
+</p>
+
 ---
 
 ## What Is This?
