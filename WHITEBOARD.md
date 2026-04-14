@@ -2,28 +2,28 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14 (evening: spawn-zone fix deployed; swim + swamp added)_
+_Last updated: 2026-04-14 (evening: #0 escape logic hardened but defeated by swamp+water; switching focus to #1)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `fix/spawn-zone-escape` — HEAD `527ce2d`. Spawn-zone escape deployed 2026-04-14 evening. Bot fires `escapeSpawnZone` on spawn and walks toward the boundary.
-- **Current observation:** escape skill fires correctly (bot is walking out) but keeps getting stuck on swamp-biome terrain (bushes, water pockets). This surfaces new whiteboard items #2 (swim) and #3 (swamp traversal).
-- Open fixes pending merge to `develop`: spawn-zone escape (commit `527ce2d`), verification dependent on #2/#3 progress.
+- Branch: `fix/spawn-zone-escape` — HEAD `fc303ba`. Escape hardening (timeout, multi-direction, NaN guard, terrain-safe movements) deployed. Code is safe to fall through; won't hang the bot.
+- **Not merging to `develop` yet.** Full escape still defeated by swamp+water terrain — needs #2 (swim) at minimum. `fix/spawn-zone-escape` branch holds the work-in-progress; a v4 segmented-escape design is queued for after #1 stabilizes the bot.
+- Switching focus to **#1 PartialReadError** next. Hypothesis: bumping mineflayer to a version that supports MC 1.21 base will eliminate the disconnect churn and let us validate everything else on a stable session.
 
 ---
 
 ## In-progress
 
-_Nothing active._
+- **#1 PartialReadError / mineflayer version bump** — parking #0 at commit `fc303ba` on `fix/spawn-zone-escape`. Escape logic is hardened but defeated by swamp+water until swim (#2) lands. Tonight: investigate mineflayer version, bump to one that supports MC 1.21 base, restart and watch for `PartialReadError` counts to drop to 0.
 
 ---
 
 ## 0. Spawn-zone auto-escape (bot self-rescue)
 
-**Status:** code deployed on `fix/spawn-zone-escape` (commit `527ce2d`), verification in progress • **Priority:** blocker
+**Status:** parked — escape hardened on `fix/spawn-zone-escape` (HEAD `fc303ba`); full escape still defeated by swamp+water terrain. Resume after #1 (stable session) and at least #2 (swim). • **Priority:** blocker (unparks when #1/#2 land)
 
 **Observed 2026-04-14:** Bot is at `(-26, 85, -44)` — ~51 blocks from spawn, deep inside its own spawn protection zone. Every `!digDown` is blocked by `_isInSpawnZone` and returns `Cannot break blocks near spawn`. The LLM responds to the failure by chat-updating its own memory ("Must move out from spawn limit") — but it's not mechanically smart enough to actually path out. It just issues `!digDown(20)` again. Result: infinite loop of blocked-dig + `mode:unstuck` shuffling the bot 3-5 blocks laterally. **The bot cannot progress until it is rescued or rescues itself.**
 
