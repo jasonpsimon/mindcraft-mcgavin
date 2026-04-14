@@ -1197,18 +1197,57 @@ export async function escapeSpawnZone(bot) {
             { dx: 0, dz: -1, label: '-Z' },
         );
 
+        // Helper: read current bot position and distance from spawn, guarding against NaN
+        // (bot.entity.position can transiently return NaN during chunk/tick boundaries).
+        const readPos = () => {
+            const p = bot.entity?.position;
+            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return null;
+            const dxp = p.x - spawn.x;
+            const dzp = p.z - spawn.z;
+            return {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                dist: Math.sqrt(dxp * dxp + dzp * dzp),
+            };
+        };
+
+        // Helper: are we out of the zone yet?
+        const isOutside = () => {
+            const p = readPos();
+            return p !== null && p.dist > SPAWN_PROTECTION_RADIUS;
+        };
+
         const prevMovements = bot.pathfinder.movements;
         try {
             for (const dir of directions) {
-                const pos = bot.entity.position;  // re-read — may have moved since last attempt
+                // Check escape status before each attempt. A prior attempt may have
+                // moved us outside the zone even if it threw (e.g. goto exception
+                // after significant movement).
+                if (isOutside()) {
+                    const endP = readPos();
+                    console.log(`[SpawnEscape] Cleared zone at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                    return true;
+                }
+
+                let pos = readPos();
+                if (pos === null) {
+                    // Bot position not available yet (transient NaN). Wait a tick and skip.
+                    console.warn(`[SpawnEscape] Attempt ${dir.label}: position unavailable (likely chunk sync). Waiting 1s.`);
+                    await new Promise(r => setTimeout(r, 1000));
+                    pos = readPos();
+                    if (pos === null) {
+                        console.warn(`[SpawnEscape] Attempt ${dir.label}: still no position — skipping direction.`);
+                        continue;
+                    }
+                }
+
                 const tx = Math.floor(spawn.x + dir.dx * SPAWN_ESCAPE_DISTANCE);
                 const tz = Math.floor(spawn.z + dir.dz * SPAWN_ESCAPE_DISTANCE);
                 const ty = Math.floor(pos.y);
 
-                const currDx = pos.x - spawn.x;
-                const currDz = pos.z - spawn.z;
-                const currDist = Math.sqrt(currDx * currDx + currDz * currDz);
-                console.log(`[SpawnEscape] Attempt ${dir.label}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) — ${currDist.toFixed(1)} blocks from spawn. Walking to (${tx}, ${ty}, ${tz}).`);
+                console.log(`[SpawnEscape] Attempt ${dir.label}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) — ${pos.dist.toFixed(1)} blocks from spawn. Walking to (${tx}, ${ty}, ${tz}).`);
                 log(bot, `Trying to leave spawn zone heading ${dir.label} toward (${tx}, ${tz}).`);
 
                 // Race goToGoal against a hard timeout — never hang the bot.
@@ -1223,22 +1262,36 @@ export async function escapeSpawnZone(bot) {
 
                 try {
                     await Promise.race([attempt, timeout]);
-                    clearTimeout(timeoutHandle);
-                    const endPos = bot.entity.position;
-                    const endDist = Math.sqrt((endPos.x - spawn.x) ** 2 + (endPos.z - spawn.z) ** 2);
-                    if (endDist > SPAWN_PROTECTION_RADIUS) {
-                        console.log(`[SpawnEscape] Arrived at (${Math.floor(endPos.x)}, ${Math.floor(endPos.y)}, ${Math.floor(endPos.z)}) — ${endDist.toFixed(1)} blocks from spawn.`);
-                        log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endDist)} blocks from spawn.`);
-                        return true;
-                    }
-                    console.warn(`[SpawnEscape] Path finished but still only ${endDist.toFixed(1)} blocks from spawn. Trying next direction.`);
                 } catch (err) {
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} raised: ${err.message}`);
+                } finally {
                     clearTimeout(timeoutHandle);
-                    console.warn(`[SpawnEscape] Attempt ${dir.label} failed: ${err.message}`);
+                }
+
+                // Always check position after an attempt, regardless of outcome.
+                // Pathfinder can throw after walking us a long way; we count that as progress.
+                if (isOutside()) {
+                    const endP = readPos();
+                    console.log(`[SpawnEscape] Arrived at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                    return true;
+                }
+
+                const endP = readPos();
+                if (endP) {
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} finished with bot at ${endP.dist.toFixed(1)} blocks from spawn — still inside. Trying next direction.`);
                 }
             }
 
-            console.warn('[SpawnEscape] All 4 directions failed. Giving up — self-prompter will start inside zone.');
+            // One final check in case the last attempt moved us out after its exception.
+            if (isOutside()) {
+                const endP = readPos();
+                console.log(`[SpawnEscape] Cleared on final check: (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                return true;
+            }
+
+            console.warn('[SpawnEscape] All attempts finished inside zone. Giving up — self-prompter will start inside zone.');
             log(bot, `I couldn't find a clear path out of the spawn zone in any direction. I'll keep trying as I explore.`);
             return false;
         } finally {
