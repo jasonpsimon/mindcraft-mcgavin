@@ -1114,13 +1114,85 @@ export async function safeToss(bot, itemType, metadata, count) {
  * Check if a position is within the spawn protection zone.
  * Returns true if the position is within SPAWN_RADIUS blocks of world spawn (XZ only).
  */
-const SPAWN_PROTECTION_RADIUS = 350;
+const SPAWN_PROTECTION_RADIUS = 250;
+const SPAWN_ESCAPE_DISTANCE = 350;  // walk to this distance from spawn on escape (100-block buffer past protection)
 function _isInSpawnZone(bot, x, z) {
     const spawn = bot.spawnPoint;
     if (!spawn) return false; // no spawn data yet — allow action
     const dx = x - spawn.x;
     const dz = z - spawn.z;
     return (dx * dx + dz * dz) <= SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS;
+}
+
+/**
+ * Walk the bot out of the spawn protection zone if it's inside it.
+ *
+ * Target: SPAWN_ESCAPE_DISTANCE (350) blocks from spawn in the direction the
+ * bot is already drifting (or +X if bot is exactly at spawn). Leaves a buffer
+ * past the protection boundary so small movements don't push the bot back in.
+ *
+ * Called on every spawn (before the self-prompter starts) and as an
+ * AutoRecovery handler if a destructive action hits spawn protection.
+ *
+ * Returns true if escape completed (or wasn't needed), false on path failure.
+ */
+export async function escapeSpawnZone(bot) {
+    return await withBotLock('escapeSpawnZone', async () => {
+        const spawn = bot.spawnPoint;
+        if (!spawn) {
+            console.log('[SpawnEscape] No spawnPoint data yet — skipping escape');
+            return false;
+        }
+
+        const pos = bot.entity.position;
+        const dx = pos.x - spawn.x;
+        const dz = pos.z - spawn.z;
+        const distSq = dx * dx + dz * dz;
+
+        // Already outside the protection zone — nothing to do
+        if (distSq > SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS) {
+            return true;
+        }
+
+        // Pick a target SPAWN_ESCAPE_DISTANCE blocks from spawn.
+        // Direction: the bot's current drift vector from spawn, or +X if exactly at spawn.
+        let tx, tz;
+        if (distSq < 1) {
+            tx = spawn.x + SPAWN_ESCAPE_DISTANCE;
+            tz = spawn.z;
+        } else {
+            const dist = Math.sqrt(distSq);
+            tx = spawn.x + (dx / dist) * SPAWN_ESCAPE_DISTANCE;
+            tz = spawn.z + (dz / dist) * SPAWN_ESCAPE_DISTANCE;
+        }
+
+        const targetX = Math.floor(tx);
+        const targetZ = Math.floor(tz);
+        const targetY = Math.floor(pos.y);  // stay at roughly the current altitude; pathfinder will adjust terrain
+
+        console.log(`[SpawnEscape] Inside spawn zone (${Math.sqrt(distSq).toFixed(1)} blocks from spawn). Walking to (${targetX}, ${targetY}, ${targetZ}).`);
+        log(bot, `I'm inside the spawn protection zone. Walking to (${targetX}, ${targetZ}) to escape before doing anything else.`);
+
+        const prevMovements = bot.pathfinder.movements;
+        try {
+            await goToGoal(bot, new pf.goals.GoalNear(targetX, targetY, targetZ, 2));
+            const endPos = bot.entity.position;
+            const endDx = endPos.x - spawn.x;
+            const endDz = endPos.z - spawn.z;
+            const endDist = Math.sqrt(endDx * endDx + endDz * endDz);
+            console.log(`[SpawnEscape] Arrived at (${Math.floor(endPos.x)}, ${Math.floor(endPos.y)}, ${Math.floor(endPos.z)}) — ${endDist.toFixed(1)} blocks from spawn.`);
+            log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endDist)} blocks from spawn.`);
+            return true;
+        } catch (err) {
+            console.warn(`[SpawnEscape] Path to escape target failed: ${err.message}`);
+            log(bot, `Couldn't reach the escape point (${err.message}). Will retry on next attempt.`);
+            return false;
+        } finally {
+            if (prevMovements) {
+                try { bot.pathfinder.setMovements(prevMovements); } catch (_) { /* ignore */ }
+            }
+        }
+    });
 }
 
 /**

@@ -25,6 +25,7 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 import { AutoRecoveryEngine } from './auto_recovery.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
+import * as skills from './library/skills.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -138,7 +139,17 @@ export class Agent {
                 
                 console.log(`${this.name} spawned.`);
                 this.clearBotLogs();
-              
+
+                // Vacate the spawn protection zone before anything else happens.
+                // If the bot spawns inside the zone, no destructive action can succeed;
+                // the LLM can't reliably reason its way out of a 250-block exclusion zone,
+                // so this is a pure mechanical pre-game move.
+                try {
+                    await skills.escapeSpawnZone(this.bot);
+                } catch (escapeErr) {
+                    console.warn('[SpawnEscape] Error during spawn escape:', escapeErr.message);
+                }
+
                 this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
               
