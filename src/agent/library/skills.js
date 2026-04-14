@@ -960,69 +960,89 @@ export async function safeToss(bot, itemType, metadata, count) {
     const pos = bot.entity.position.floored();
     const isUnderground = _isUnderground(bot, pos);
 
-    // --- Underground + flint_and_steel: Fire Pit ---
-    // Dig 1 block into floor, light fire, toss, wait for burn, reseal.
     if (isUnderground) {
-        const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
-        if (flintAndSteel) {
-            const pitPos = pos.offset(0, -1, 0);
-            const floorBlock = bot.blockAt(pitPos);
+        // --- Underground: Dump Run ---
+        // Dig a 2-high, 4-block tunnel in a cardinal direction, walk to the end,
+        // toss items there, then walk back. Items land 4+ blocks away — outside
+        // the ~2-block pickup radius — so the bot won't re-collect them.
+        const directions = [
+            { dx: 1, dz: 0, label: '+X' },
+            { dx: -1, dz: 0, label: '-X' },
+            { dx: 0, dz: 1, label: '+Z' },
+            { dx: 0, dz: -1, label: '-Z' },
+        ];
 
-            if (floorBlock && floorBlock.diggable
-                && !_isDangerous(floorBlock.name)) {
-                const originalName = floorBlock.name;
-                console.log(`[SafeToss] Fire pit — digging ${originalName} at ${pitPos}`);
-                try {
-                    await bot.dig(floorBlock);
-                    const pitFloor = bot.blockAt(pos.offset(0, -2, 0));
-                    if (pitFloor && pitFloor.name !== 'air') {
-                        await bot.equip(flintAndSteel, 'hand');
-                        await bot.activateBlock(pitFloor);
-                        console.log('[SafeToss] Fire lit');
-                        await bot.lookAt(pitPos.offset(0.5, 0.5, 0.5));
-                        await bot.toss(itemType, metadata, count);
-                        await new Promise(r => setTimeout(r, 5500));
-                        // Reseal pit
-                        await _sealHole(bot, pitPos, originalName);
-                        return;
-                    }
-                } catch (e) {
-                    console.warn('[SafeToss] Fire pit failed:', e.message);
+        for (const dir of directions) {
+            // Check that all 4 blocks in this direction have diggable walls
+            // at both feet and head level (2-high tunnel)
+            let canDig = true;
+            for (let step = 1; step <= 4; step++) {
+                const feetBlock = bot.blockAt(pos.offset(dir.dx * step, 0, dir.dz * step));
+                const headBlock = bot.blockAt(pos.offset(dir.dx * step, 1, dir.dz * step));
+                if (!feetBlock || !headBlock
+                    || !feetBlock.diggable || !headBlock.diggable
+                    || _isDangerous(feetBlock.name) || _isDangerous(headBlock.name)) {
+                    canDig = false;
+                    break;
                 }
             }
-        }
-    }
+            if (!canDig) continue;
 
-    // --- Universal: Dig 1 block, toss, seal ---
-    // Underground: dig into a wall. Surface: dig into the floor.
-    // Only 1 block deep so the floor/back is solid and we can place against it.
-    if (isUnderground) {
-        // Wall pocket: find a solid adjacent wall block
-        const directions = [
-            { dx: 1, dz: 0 }, { dx: -1, dz: 0 },
-            { dx: 0, dz: 1 }, { dx: 0, dz: -1 },
-        ];
-        for (const dir of directions) {
-            const wallPos = pos.offset(dir.dx, 0, dir.dz);
-            const wallBlock = bot.blockAt(wallPos);
-            if (wallBlock && wallBlock.diggable && !_isDangerous(wallBlock.name)
-                && wallBlock.name !== 'air' && wallBlock.name !== 'cave_air') {
-                const originalName = wallBlock.name;
-                console.log(`[SafeToss] Wall pocket — ${originalName} at ${wallPos}`);
-                try {
-                    await bot.dig(wallBlock);
-                    await bot.lookAt(wallPos.offset(0.5, 0.5, 0.5));
-                    await bot.toss(itemType, metadata, count);
-                    await new Promise(r => setTimeout(r, 400));
-                    await _sealHole(bot, wallPos, originalName);
-                    return;
-                } catch (e) {
-                    console.warn('[SafeToss] Wall pocket failed:', e.message);
+            // Also verify solid floor under the tunnel
+            let hasFloor = true;
+            for (let step = 1; step <= 4; step++) {
+                const floor = bot.blockAt(pos.offset(dir.dx * step, -1, dir.dz * step));
+                if (!floor || floor.name === 'air' || floor.name === 'cave_air'
+                    || _isDangerous(floor.name)) {
+                    hasFloor = false;
+                    break;
                 }
+            }
+            if (!hasFloor) continue;
+
+            console.log(`[SafeToss] Dump run ${dir.label} — digging 4-block tunnel from ${pos}`);
+            const startPos = bot.entity.position.clone();
+            try {
+                // Dig the 2-high tunnel
+                for (let step = 1; step <= 4; step++) {
+                    const feetBlock = bot.blockAt(pos.offset(dir.dx * step, 0, dir.dz * step));
+                    const headBlock = bot.blockAt(pos.offset(dir.dx * step, 1, dir.dz * step));
+                    if (feetBlock && feetBlock.name !== 'air' && feetBlock.name !== 'cave_air') {
+                        await bot.dig(feetBlock);
+                    }
+                    if (headBlock && headBlock.name !== 'air' && headBlock.name !== 'cave_air') {
+                        await bot.dig(headBlock);
+                    }
+                }
+
+                // Walk to the end of the tunnel
+                const endPos = pos.offset(dir.dx * 4, 0, dir.dz * 4);
+                const endGoal = new pf.goals.GoalNear(endPos.x, endPos.y, endPos.z, 0);
+                bot.pathfinder.setMovements(new pf.Movements(bot));
+                await goToGoal(bot, endGoal);
+
+                // Toss the items
+                await bot.lookAt(endPos.offset(dir.dx, 0.5, dir.dz));
+                await bot.toss(itemType, metadata, count);
+                console.log(`[SafeToss] Tossed at ${endPos}, walking back`);
+
+                // Walk back to starting position
+                await new Promise(r => setTimeout(r, 300));
+                const returnGoal = new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1);
+                await goToGoal(bot, returnGoal);
+                console.log('[SafeToss] Dump run complete — back at start');
+                return;
+            } catch (e) {
+                console.warn(`[SafeToss] Dump run ${dir.label} failed:`, e.message);
+                // Try to return to start even if toss failed
+                try {
+                    const returnGoal = new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1);
+                    await goToGoal(bot, returnGoal);
+                } catch (_) { /* best effort */ }
             }
         }
     } else {
-        // Surface: dig 1 block down into the floor
+        // Surface: dig 1 block down into the floor, toss items in, seal the top
         const holePos = pos.offset(0, -1, 0);
         const floorBlock = bot.blockAt(holePos);
         if (floorBlock && floorBlock.diggable && !_isDangerous(floorBlock.name)) {
