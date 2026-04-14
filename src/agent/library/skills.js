@@ -1125,6 +1125,27 @@ function _isInSpawnZone(bot, x, z) {
 }
 
 /**
+ * Configure a pf.Movements instance for safer terrain traversal across biomes,
+ * especially swamps and other dense-plant areas. Non-destructive: mutates the
+ * Movements object in place.
+ *
+ * Rationale: mineflayer-pathfinder's default Movements already treats blocks
+ * with empty boundingBox (grass, ferns, bushes, sugar_cane, vines, flowers,
+ * propagules, etc.) as walk-through. We add:
+ *   - sweet_berry_bush to blocksToAvoid (damages bot on contact)
+ *   - cobweb already avoided by default
+ * Mangrove-specific solid blocks (mangrove_roots, muddy_mangrove_roots) are
+ * physical and must be pathed AROUND or broken via destructive movements.
+ */
+function _configureTerrainSafeMovements(bot, movements) {
+    const hazards = ['sweet_berry_bush'];
+    for (const name of hazards) {
+        const block = bot.registry.blocksByName[name];
+        if (block) movements.blocksToAvoid.add(block.id);
+    }
+}
+
+/**
  * Walk the bot out of the spawn protection zone if it's inside it.
  *
  * Target: SPAWN_ESCAPE_DISTANCE (350) blocks from spawn in the direction the
@@ -1135,7 +1156,15 @@ function _isInSpawnZone(bot, x, z) {
  * AutoRecovery handler if a destructive action hits spawn protection.
  *
  * Returns true if escape completed (or wasn't needed), false on path failure.
+ *
+ * Hardening: each direction attempt is wrapped in a timeout. If goToGoal
+ * hangs on terrain the pathfinder can't navigate (e.g., swamp water without
+ * swim — see whiteboard item #2), the attempt aborts and the next cardinal
+ * direction is tried. If all 4 directions fail, the function returns false
+ * cleanly so the self-prompter can still start.
  */
+const SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS = 120000;  // 2 min per direction
+
 export async function escapeSpawnZone(bot) {
     return await withBotLock('escapeSpawnZone', async () => {
         const spawn = bot.spawnPoint;
@@ -1144,48 +1173,73 @@ export async function escapeSpawnZone(bot) {
             return false;
         }
 
-        const pos = bot.entity.position;
-        const dx = pos.x - spawn.x;
-        const dz = pos.z - spawn.z;
-        const distSq = dx * dx + dz * dz;
+        const startPos = bot.entity.position;
+        const startDx = startPos.x - spawn.x;
+        const startDz = startPos.z - spawn.z;
+        const startDistSq = startDx * startDx + startDz * startDz;
 
         // Already outside the protection zone — nothing to do
-        if (distSq > SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS) {
+        if (startDistSq > SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS) {
             return true;
         }
 
-        // Pick a target SPAWN_ESCAPE_DISTANCE blocks from spawn.
-        // Direction: the bot's current drift vector from spawn, or +X if exactly at spawn.
-        let tx, tz;
-        if (distSq < 1) {
-            tx = spawn.x + SPAWN_ESCAPE_DISTANCE;
-            tz = spawn.z;
-        } else {
-            const dist = Math.sqrt(distSq);
-            tx = spawn.x + (dx / dist) * SPAWN_ESCAPE_DISTANCE;
-            tz = spawn.z + (dz / dist) * SPAWN_ESCAPE_DISTANCE;
+        // Candidate directions, preferred order: drift direction first, then cardinals.
+        // Each entry is a unit vector (dx, dz).
+        const directions = [];
+        if (startDistSq >= 1) {
+            const d = Math.sqrt(startDistSq);
+            directions.push({ dx: startDx / d, dz: startDz / d, label: 'drift' });
         }
-
-        const targetX = Math.floor(tx);
-        const targetZ = Math.floor(tz);
-        const targetY = Math.floor(pos.y);  // stay at roughly the current altitude; pathfinder will adjust terrain
-
-        console.log(`[SpawnEscape] Inside spawn zone (${Math.sqrt(distSq).toFixed(1)} blocks from spawn). Walking to (${targetX}, ${targetY}, ${targetZ}).`);
-        log(bot, `I'm inside the spawn protection zone. Walking to (${targetX}, ${targetZ}) to escape before doing anything else.`);
+        directions.push(
+            { dx: 1, dz: 0, label: '+X' },
+            { dx: 0, dz: 1, label: '+Z' },
+            { dx: -1, dz: 0, label: '-X' },
+            { dx: 0, dz: -1, label: '-Z' },
+        );
 
         const prevMovements = bot.pathfinder.movements;
         try {
-            await goToGoal(bot, new pf.goals.GoalNear(targetX, targetY, targetZ, 2));
-            const endPos = bot.entity.position;
-            const endDx = endPos.x - spawn.x;
-            const endDz = endPos.z - spawn.z;
-            const endDist = Math.sqrt(endDx * endDx + endDz * endDz);
-            console.log(`[SpawnEscape] Arrived at (${Math.floor(endPos.x)}, ${Math.floor(endPos.y)}, ${Math.floor(endPos.z)}) — ${endDist.toFixed(1)} blocks from spawn.`);
-            log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endDist)} blocks from spawn.`);
-            return true;
-        } catch (err) {
-            console.warn(`[SpawnEscape] Path to escape target failed: ${err.message}`);
-            log(bot, `Couldn't reach the escape point (${err.message}). Will retry on next attempt.`);
+            for (const dir of directions) {
+                const pos = bot.entity.position;  // re-read — may have moved since last attempt
+                const tx = Math.floor(spawn.x + dir.dx * SPAWN_ESCAPE_DISTANCE);
+                const tz = Math.floor(spawn.z + dir.dz * SPAWN_ESCAPE_DISTANCE);
+                const ty = Math.floor(pos.y);
+
+                const currDx = pos.x - spawn.x;
+                const currDz = pos.z - spawn.z;
+                const currDist = Math.sqrt(currDx * currDx + currDz * currDz);
+                console.log(`[SpawnEscape] Attempt ${dir.label}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) — ${currDist.toFixed(1)} blocks from spawn. Walking to (${tx}, ${ty}, ${tz}).`);
+                log(bot, `Trying to leave spawn zone heading ${dir.label} toward (${tx}, ${tz}).`);
+
+                // Race goToGoal against a hard timeout — never hang the bot.
+                let timeoutHandle;
+                const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
+                const timeout = new Promise((_, reject) => {
+                    timeoutHandle = setTimeout(
+                        () => reject(new Error(`escape ${dir.label} timed out after ${SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS / 1000}s`)),
+                        SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS
+                    );
+                });
+
+                try {
+                    await Promise.race([attempt, timeout]);
+                    clearTimeout(timeoutHandle);
+                    const endPos = bot.entity.position;
+                    const endDist = Math.sqrt((endPos.x - spawn.x) ** 2 + (endPos.z - spawn.z) ** 2);
+                    if (endDist > SPAWN_PROTECTION_RADIUS) {
+                        console.log(`[SpawnEscape] Arrived at (${Math.floor(endPos.x)}, ${Math.floor(endPos.y)}, ${Math.floor(endPos.z)}) — ${endDist.toFixed(1)} blocks from spawn.`);
+                        log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endDist)} blocks from spawn.`);
+                        return true;
+                    }
+                    console.warn(`[SpawnEscape] Path finished but still only ${endDist.toFixed(1)} blocks from spawn. Trying next direction.`);
+                } catch (err) {
+                    clearTimeout(timeoutHandle);
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} failed: ${err.message}`);
+                }
+            }
+
+            console.warn('[SpawnEscape] All 4 directions failed. Giving up — self-prompter will start inside zone.');
+            log(bot, `I couldn't find a clear path out of the spawn zone in any direction. I'll keep trying as I explore.`);
             return false;
         } finally {
             if (prevMovements) {
@@ -1544,8 +1598,10 @@ export async function goToGoal(bot, goal) {
     }
     nonDestructiveMovements.placeCost = 2;
     nonDestructiveMovements.digCost = 10;
+    _configureTerrainSafeMovements(bot, nonDestructiveMovements);
 
     const destructiveMovements = new pf.Movements(bot);
+    _configureTerrainSafeMovements(bot, destructiveMovements);
 
     // Bump pathfinder timeouts for complex underground terrain
     bot.pathfinder.thinkTimeout = 10000;  // 10s total (default 5s)
