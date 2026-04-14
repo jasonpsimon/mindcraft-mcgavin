@@ -2288,7 +2288,7 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
     // Scan in a grid pattern: every 2 blocks horizontally, every 1 block vertically
     for (let dx = -radius; dx <= radius; dx += 2) {
         for (let dz = -radius; dz <= radius; dz += 2) {
-            for (let y = startY - 1; y >= minY; y--) {
+            for (let y = startY - 3; y >= minY; y--) {
                 const checkPos = pos.offset(dx, y - startY, dz);
                 const block = bot.blockAt(checkPos);
 
@@ -2316,6 +2316,17 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
                 const floor = bot.blockAt(checkPos.offset(0, -1, 0));
                 if (!floor || floor.name === 'air' || floor.name === 'cave_air'
                     || floor.name === 'lava' || floor.name === 'water') continue;
+
+                // Verify there's a solid ceiling above (not open sky)
+                let hasCeiling = false;
+                for (let cy = 1; cy <= 10; cy++) {
+                    const above = bot.blockAt(checkPos.offset(0, cy, 0));
+                    if (above && above.name !== 'air' && above.name !== 'cave_air') {
+                        hasCeiling = true;
+                        break;
+                    }
+                }
+                if (!hasCeiling) continue;
 
                 const dist = Math.sqrt(dx * dx + (y - startY) ** 2 + dz * dz);
                 if (!bestCavern || dist < bestCavern.distance) {
