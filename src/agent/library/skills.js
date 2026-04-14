@@ -658,6 +658,11 @@ export async function breakBlockAt(bot, x, y, z) {
      * await skills.breakBlockAt(bot, position.x, position.y - 1, position.x);
      **/
     if (x == null || y == null || z == null) throw new Error('Invalid position to break block at.');
+    if (_isInSpawnZone(bot, x, z)) {
+        console.log(`[SpawnProtect] Blocked break at (${x}, ${y}, ${z}) — inside ${SPAWN_PROTECTION_RADIUS}-block spawn zone`);
+        log(bot, `Cannot break blocks near spawn (within ${SPAWN_PROTECTION_RADIUS} blocks). Move further away first.`);
+        return false;
+    }
     let block = bot.blockAt(new Vec3(x, y, z));
     if (!block) {
         console.log(`[Skills] breakBlockAt: chunk not loaded at (${x}, ${y}, ${z}), waiting...`);
@@ -722,6 +727,11 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
      * await skills.placeBlock(bot, "oak_log", p.x + 2, p.y, p.x);
      * await skills.placeBlock(bot, "torch", p.x + 1, p.y, p.x, 'side');
      **/
+    if (_isInSpawnZone(bot, x, z)) {
+        console.log(`[SpawnProtect] Blocked place at (${x}, ${y}, ${z}) — inside ${SPAWN_PROTECTION_RADIUS}-block spawn zone`);
+        log(bot, `Cannot place blocks near spawn (within ${SPAWN_PROTECTION_RADIUS} blocks). Move further away first.`);
+        return false;
+    }
     const target_dest = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
 
     if (blockType === 'air') {
@@ -958,6 +968,14 @@ export async function equip(bot, itemName) {
  */
 export async function safeToss(bot, itemType, metadata, count) {
     const pos = bot.entity.position.floored();
+
+    // In spawn zone — no digging allowed, just toss normally
+    if (_isInSpawnZone(bot, pos.x, pos.z)) {
+        console.log('[SafeToss] In spawn protection zone — tossing without digging');
+        await bot.toss(itemType, metadata, count);
+        return;
+    }
+
     const isUnderground = _isUnderground(bot, pos);
 
     if (isUnderground) {
@@ -1071,6 +1089,20 @@ export async function safeToss(bot, itemType, metadata, count) {
     // Last resort — normal toss
     console.log('[SafeToss] No disposal method worked, tossing normally');
     await bot.toss(itemType, metadata, count);
+}
+
+
+/**
+ * Check if a position is within the spawn protection zone.
+ * Returns true if the position is within SPAWN_RADIUS blocks of world spawn (XZ only).
+ */
+const SPAWN_PROTECTION_RADIUS = 350;
+function _isInSpawnZone(bot, x, z) {
+    const spawn = bot.spawnPoint;
+    if (!spawn) return false; // no spawn data yet — allow action
+    const dx = x - spawn.x;
+    const dz = z - spawn.z;
+    return (dx * dx + dz * dz) <= SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS;
 }
 
 /**
