@@ -962,9 +962,10 @@ export async function safeToss(bot, itemType, metadata, count) {
 
     if (isUnderground) {
         // --- Underground: Dump Run ---
-        // Dig a 2-high, 4-block tunnel in a cardinal direction, walk to the end,
-        // toss items there, then walk back. Items land 4+ blocks away — outside
-        // the ~2-block pickup radius — so the bot won't re-collect them.
+        // Dig a 2-high, 8-block tunnel in a cardinal direction, walk to the end,
+        // dig a hole in the floor, drop items in, then walk back to start.
+        // 8 blocks ensures items are well outside the ~2-block pickup radius.
+        const TUNNEL_LEN = 8;
         const directions = [
             { dx: 1, dz: 0, label: '+X' },
             { dx: -1, dz: 0, label: '-X' },
@@ -973,10 +974,9 @@ export async function safeToss(bot, itemType, metadata, count) {
         ];
 
         for (const dir of directions) {
-            // Check that all 4 blocks in this direction have diggable walls
-            // at both feet and head level (2-high tunnel)
+            // Verify all 8 blocks in this direction are diggable at feet+head
             let canDig = true;
-            for (let step = 1; step <= 4; step++) {
+            for (let step = 1; step <= TUNNEL_LEN; step++) {
                 const feetBlock = bot.blockAt(pos.offset(dir.dx * step, 0, dir.dz * step));
                 const headBlock = bot.blockAt(pos.offset(dir.dx * step, 1, dir.dz * step));
                 if (!feetBlock || !headBlock
@@ -988,9 +988,9 @@ export async function safeToss(bot, itemType, metadata, count) {
             }
             if (!canDig) continue;
 
-            // Also verify solid floor under the tunnel
+            // Verify solid floor under the tunnel (including the dump spot)
             let hasFloor = true;
-            for (let step = 1; step <= 4; step++) {
+            for (let step = 1; step <= TUNNEL_LEN; step++) {
                 const floor = bot.blockAt(pos.offset(dir.dx * step, -1, dir.dz * step));
                 if (!floor || floor.name === 'air' || floor.name === 'cave_air'
                     || _isDangerous(floor.name)) {
@@ -1000,11 +1000,15 @@ export async function safeToss(bot, itemType, metadata, count) {
             }
             if (!hasFloor) continue;
 
-            console.log(`[SafeToss] Dump run ${dir.label} — digging 4-block tunnel from ${pos}`);
+            // Also need a diggable floor at the end for the dump hole
+            const dumpFloor = bot.blockAt(pos.offset(dir.dx * TUNNEL_LEN, -1, dir.dz * TUNNEL_LEN));
+            if (!dumpFloor || !dumpFloor.diggable || _isDangerous(dumpFloor.name)) continue;
+
+            console.log(`[SafeToss] Dump run ${dir.label} — digging ${TUNNEL_LEN}-block tunnel from ${pos}`);
             const startPos = bot.entity.position.clone();
             try {
                 // Dig the 2-high tunnel
-                for (let step = 1; step <= 4; step++) {
+                for (let step = 1; step <= TUNNEL_LEN; step++) {
                     const feetBlock = bot.blockAt(pos.offset(dir.dx * step, 0, dir.dz * step));
                     const headBlock = bot.blockAt(pos.offset(dir.dx * step, 1, dir.dz * step));
                     if (feetBlock && feetBlock.name !== 'air' && feetBlock.name !== 'cave_air') {
@@ -1016,29 +1020,32 @@ export async function safeToss(bot, itemType, metadata, count) {
                 }
 
                 // Walk to the end of the tunnel
-                const endPos = pos.offset(dir.dx * 4, 0, dir.dz * 4);
-                const endGoal = new pf.goals.GoalNear(endPos.x, endPos.y, endPos.z, 0);
+                const endPos = pos.offset(dir.dx * TUNNEL_LEN, 0, dir.dz * TUNNEL_LEN);
                 bot.pathfinder.setMovements(new pf.Movements(bot));
-                await goToGoal(bot, endGoal);
+                await goToGoal(bot, new pf.goals.GoalNear(endPos.x, endPos.y, endPos.z, 0));
 
-                // Toss the items
-                await bot.lookAt(endPos.offset(dir.dx, 0.5, dir.dz));
+                // Dig a 1-block hole in the floor at the dump spot
+                const holePos = endPos.offset(0, -1, 0);
+                const holeBlock = bot.blockAt(holePos);
+                if (holeBlock && holeBlock.name !== 'air' && holeBlock.name !== 'cave_air') {
+                    await bot.dig(holeBlock);
+                }
+
+                // Drop items into the hole
+                await bot.lookAt(holePos.offset(0.5, 0.5, 0.5));
                 await bot.toss(itemType, metadata, count);
-                console.log(`[SafeToss] Tossed at ${endPos}, walking back`);
+                console.log(`[SafeToss] Dropped in hole at ${holePos}, walking back`);
 
                 // Walk back to starting position
                 await new Promise(r => setTimeout(r, 300));
-                const returnGoal = new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1);
-                await goToGoal(bot, returnGoal);
+                await goToGoal(bot, new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1));
                 console.log('[SafeToss] Dump run complete — back at start');
                 return;
             } catch (e) {
                 console.warn(`[SafeToss] Dump run ${dir.label} failed:`, e.message);
-                // Try to return to start even if toss failed
                 try {
-                    const returnGoal = new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1);
-                    await goToGoal(bot, returnGoal);
-                } catch (_) { /* best effort */ }
+                    await goToGoal(bot, new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1));
+                } catch (_) { /* best effort return */ }
             }
         }
     } else {
