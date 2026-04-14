@@ -958,227 +958,186 @@ export async function equip(bot, itemName) {
  */
 export async function safeToss(bot, itemType, metadata, count) {
     const pos = bot.entity.position.floored();
+    const isUnderground = _isUnderground(bot, pos);
 
-    // Check if we're in a confined space (underground)
-    const above = bot.blockAt(pos.offset(0, 2, 0));
-    const isConfined = above && above.name !== 'air' && above.name !== 'short_grass'
-        && above.name !== 'cave_air';
-
-    // --- Strategy 1 (underground only): Fire Pit ---
-    // Dig a hole in the floor, light a fire, toss items in to burn.
-    // Reseal with the original block material.
-    if (isConfined) {
+    // --- Underground + flint_and_steel: Fire Pit ---
+    // Dig 1 block into floor, light fire, toss, wait for burn, reseal.
+    if (isUnderground) {
         const flintAndSteel = bot.inventory.findInventoryItem('flint_and_steel');
         if (flintAndSteel) {
             const pitPos = pos.offset(0, -1, 0);
             const floorBlock = bot.blockAt(pitPos);
 
             if (floorBlock && floorBlock.diggable
-                && floorBlock.name !== 'air' && floorBlock.name !== 'cave_air'
-                && floorBlock.name !== 'water' && floorBlock.name !== 'lava'
-                && floorBlock.name !== 'bedrock') {
-
-                const originalFloorName = floorBlock.name; // remember for resealing
-                console.log(`[SafeToss] Fire pit — digging ${originalFloorName} at ${pitPos}`);
+                && !_isDangerous(floorBlock.name)) {
+                const originalName = floorBlock.name;
+                console.log(`[SafeToss] Fire pit — digging ${originalName} at ${pitPos}`);
                 try {
                     await bot.dig(floorBlock);
-
                     const pitFloor = bot.blockAt(pos.offset(0, -2, 0));
                     if (pitFloor && pitFloor.name !== 'air') {
                         await bot.equip(flintAndSteel, 'hand');
                         await bot.activateBlock(pitFloor);
-                        console.log('[SafeToss] Fire lit in pit');
-
+                        console.log('[SafeToss] Fire lit');
                         await bot.lookAt(pitPos.offset(0.5, 0.5, 0.5));
                         await bot.toss(itemType, metadata, count);
-
-                        console.log('[SafeToss] Waiting for items to burn...');
                         await new Promise(r => setTimeout(r, 5500));
-
-                        // Reseal with the original material, fall back to any available block
-                        const sealItem = _findSealBlock(bot, originalFloorName);
-                        if (sealItem) {
-                            try {
-                                const pitFloorRef = bot.blockAt(pos.offset(0, -2, 0));
-                                if (pitFloorRef && pitFloorRef.name !== 'air') {
-                                    await bot.equip(sealItem, 'hand');
-                                    await bot.placeBlock(pitFloorRef, new Vec3(0, 1, 0));
-                                    console.log(`[SafeToss] Pit resealed with ${sealItem.name}`);
-                                }
-                            } catch (e) {
-                                console.warn('[SafeToss] Could not reseal pit:', e.message);
-                            }
-                        }
-                        return; // Done — items burned
+                        // Reseal pit
+                        await _sealHole(bot, pitPos, originalName);
+                        return;
                     }
                 } catch (e) {
-                    console.warn('[SafeToss] Fire pit failed, trying sealed pocket:', e.message);
+                    console.warn('[SafeToss] Fire pit failed:', e.message);
                 }
             }
         }
     }
 
-    // --- Strategy 2 (surface and underground): Sealed 2-Deep Pocket ---
-    // Dig a 2-block-deep alcove into the ground (surface) or wall (underground).
-    // Toss items to the back, reseal the top/entrance with the original material.
-
-    if (!isConfined) {
-        // Surface: dig 2 deep, toss items into the bottom, seal only the top (y-1).
-        // Items sit in a hidden 1-block air gap at y-2 — invisible, never picked up.
-        const topPos = pos.offset(0, -1, 0);
-        const bottomPos = pos.offset(0, -2, 0);
-        const topBlock = bot.blockAt(topPos);
-        const bottomBlock = bot.blockAt(bottomPos);
-
-        if (topBlock && topBlock.diggable && bottomBlock && bottomBlock.diggable
-            && topBlock.name !== 'water' && topBlock.name !== 'lava'
-            && bottomBlock.name !== 'water' && bottomBlock.name !== 'lava'
-            && topBlock.name !== 'bedrock' && bottomBlock.name !== 'bedrock') {
-
-            const originalTopName = topBlock.name; // remember for resealing
-            console.log(`[SafeToss] Surface disposal — digging 2-deep below (${originalTopName})`);
-            try {
-                await bot.dig(topBlock);
-                const bottomBlockFresh = bot.blockAt(bottomPos);
-                if (bottomBlockFresh && bottomBlockFresh.diggable) {
-                    await bot.dig(bottomBlockFresh);
+    // --- Universal: Dig 1 block, toss, seal ---
+    // Underground: dig into a wall. Surface: dig into the floor.
+    // Only 1 block deep so the floor/back is solid and we can place against it.
+    if (isUnderground) {
+        // Wall pocket: find a solid adjacent wall block
+        const directions = [
+            { dx: 1, dz: 0 }, { dx: -1, dz: 0 },
+            { dx: 0, dz: 1 }, { dx: 0, dz: -1 },
+        ];
+        for (const dir of directions) {
+            const wallPos = pos.offset(dir.dx, 0, dir.dz);
+            const wallBlock = bot.blockAt(wallPos);
+            if (wallBlock && wallBlock.diggable && !_isDangerous(wallBlock.name)
+                && wallBlock.name !== 'air' && wallBlock.name !== 'cave_air') {
+                const originalName = wallBlock.name;
+                console.log(`[SafeToss] Wall pocket — ${originalName} at ${wallPos}`);
+                try {
+                    await bot.dig(wallBlock);
+                    await bot.lookAt(wallPos.offset(0.5, 0.5, 0.5));
+                    await bot.toss(itemType, metadata, count);
+                    await new Promise(r => setTimeout(r, 400));
+                    await _sealHole(bot, wallPos, originalName);
+                    return;
+                } catch (e) {
+                    console.warn('[SafeToss] Wall pocket failed:', e.message);
                 }
-
-                // Toss items into the 2-deep hole — they fall to y-2
-                await bot.lookAt(bottomPos.offset(0.5, 0.5, 0.5));
+            }
+        }
+    } else {
+        // Surface: dig 1 block down into the floor
+        const holePos = pos.offset(0, -1, 0);
+        const floorBlock = bot.blockAt(holePos);
+        if (floorBlock && floorBlock.diggable && !_isDangerous(floorBlock.name)) {
+            const originalName = floorBlock.name;
+            console.log(`[SafeToss] Surface hole — ${originalName} at ${holePos}`);
+            try {
+                await bot.dig(floorBlock);
+                await bot.lookAt(holePos.offset(0.5, 0.5, 0.5));
                 await bot.toss(itemType, metadata, count);
                 await new Promise(r => setTimeout(r, 400));
-
-                // Seal ONLY the top block (y-1) with the original surface material.
-                // Items remain in the air gap at y-2 — hidden, not pushed out.
-                const sealItem = _findSealBlock(bot, originalTopName);
-                if (sealItem) {
-                    try {
-                        // We need to place at y-1. The block at y-2 is now air (we dug it).
-                        // Place against the wall of the hole — use the side of the y-1 slot.
-                        // Simplest: look at the bottom of the hole (y-3 floor) won't work
-                        // for y-1 placement. Instead, place against a neighboring solid block.
-                        // The block at y-1 is adjacent to solid ground on all sides.
-                        const neighbors = [
-                            pos.offset(1, -1, 0), pos.offset(-1, -1, 0),
-                            pos.offset(0, -1, 1), pos.offset(0, -1, -1),
-                        ];
-                        let placed = false;
-                        await bot.equip(sealItem, 'hand');
-                        for (const nPos of neighbors) {
-                            const neighbor = bot.blockAt(nPos);
-                            if (neighbor && neighbor.name !== 'air' && neighbor.name !== 'cave_air') {
-                                // Calculate the face direction from neighbor to pocket
-                                const face = new Vec3(
-                                    topPos.x - nPos.x,
-                                    topPos.y - nPos.y,
-                                    topPos.z - nPos.z
-                                );
-                                await bot.placeBlock(neighbor, face);
-                                console.log(`[SafeToss] Surface sealed with ${sealItem.name} — items hidden at y-2`);
-                                placed = true;
-                                break;
-                            }
-                        }
-                        if (!placed) {
-                            console.warn('[SafeToss] No adjacent block to place against');
-                        }
-                    } catch (e) {
-                        console.warn('[SafeToss] Could not seal surface hole:', e.message);
-                    }
-                }
+                await _sealHole(bot, holePos, originalName);
                 return;
             } catch (e) {
-                console.warn('[SafeToss] Surface disposal failed, tossing normally:', e.message);
-                await bot.toss(itemType, metadata, count);
+                console.warn('[SafeToss] Surface hole failed:', e.message);
+            }
+        }
+    }
+
+    // Last resort — normal toss
+    console.log('[SafeToss] No disposal method worked, tossing normally');
+    await bot.toss(itemType, metadata, count);
+}
+
+/**
+ * Determine if the bot is underground by counting solid blocks around it.
+ * Underground = 3+ of 4 cardinal neighbors at feet level are solid,
+ * OR the bot is below Y=50 (deep enough to be in a mine shaft).
+ */
+function _isUnderground(bot, pos) {
+    // Deep underground — definitely not surface
+    if (pos.y < 50) return true;
+
+    // Count solid walls around the bot at feet level
+    let solidCount = 0;
+    const checks = [
+        pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+        pos.offset(0, 0, 1), pos.offset(0, 0, -1),
+    ];
+    for (const checkPos of checks) {
+        const block = bot.blockAt(checkPos);
+        if (block && block.name !== 'air' && block.name !== 'cave_air'
+            && block.name !== 'short_grass' && block.name !== 'tall_grass') {
+            solidCount++;
+        }
+    }
+    // Also check above — if there's a solid ceiling, we're underground
+    const ceiling = bot.blockAt(pos.offset(0, 2, 0));
+    const hasCeiling = ceiling && ceiling.name !== 'air' && ceiling.name !== 'cave_air'
+        && ceiling.name !== 'short_grass';
+
+    return solidCount >= 3 || (solidCount >= 2 && hasCeiling);
+}
+
+/**
+ * Check if a block name is dangerous (lava, water, bedrock).
+ */
+function _isDangerous(name) {
+    return ['lava', 'water', 'bedrock', 'air', 'cave_air'].includes(name);
+}
+
+/**
+ * Seal a 1-block hole by placing a block into it.
+ * Uses the floor/back of the hole as the reference block and places on top/face.
+ * Prefers the original material, falls back to common blocks.
+ */
+async function _sealHole(bot, holePos, originalName) {
+    const sealItem = _findSealBlock(bot, originalName);
+    if (!sealItem) {
+        console.warn('[SafeToss] No blocks available to seal hole');
+        return;
+    }
+
+    try {
+        await bot.equip(sealItem, 'hand');
+
+        // Try placing against the block below the hole (floor)
+        const below = bot.blockAt(holePos.offset(0, -1, 0));
+        if (below && below.name !== 'air' && below.name !== 'cave_air') {
+            await bot.placeBlock(below, new Vec3(0, 1, 0));
+            console.log(`[SafeToss] Sealed with ${sealItem.name} (placed on floor)`);
+            return;
+        }
+
+        // Try placing against any adjacent solid block
+        const neighbors = [
+            { pos: holePos.offset(1, 0, 0), face: new Vec3(-1, 0, 0) },
+            { pos: holePos.offset(-1, 0, 0), face: new Vec3(1, 0, 0) },
+            { pos: holePos.offset(0, 0, 1), face: new Vec3(0, 0, -1) },
+            { pos: holePos.offset(0, 0, -1), face: new Vec3(0, 0, 1) },
+            { pos: holePos.offset(0, 1, 0), face: new Vec3(0, -1, 0) },
+        ];
+        for (const n of neighbors) {
+            const block = bot.blockAt(n.pos);
+            if (block && block.name !== 'air' && block.name !== 'cave_air') {
+                await bot.placeBlock(block, n.face);
+                console.log(`[SafeToss] Sealed with ${sealItem.name} (placed against neighbor)`);
                 return;
             }
         }
 
-        // Surface but can't dig down — normal toss as last resort
-        await bot.toss(itemType, metadata, count);
-        return;
-    }
-
-    // --- Underground wall pocket fallback ---
-    // No flint_and_steel or fire pit failed. Dig 2-deep into a wall, reseal entrance.
-    const directions = [
-        { dx: 1, dz: 0, name: 'east' },
-        { dx: -1, dz: 0, name: 'west' },
-        { dx: 0, dz: 1, name: 'south' },
-        { dx: 0, dz: -1, name: 'north' },
-    ];
-
-    let pocketDir = null;
-    let originalWallName = null;
-
-    for (const dir of directions) {
-        const block1 = bot.blockAt(pos.offset(dir.dx, 0, dir.dz));
-        const block2 = bot.blockAt(pos.offset(dir.dx * 2, 0, dir.dz * 2));
-        if (block1 && block1.diggable && block1.name !== 'air' && block1.name !== 'cave_air'
-            && block1.name !== 'water' && block1.name !== 'lava'
-            && block2 && block2.diggable && block2.name !== 'air' && block2.name !== 'cave_air'
-            && block2.name !== 'water' && block2.name !== 'lava') {
-            pocketDir = dir;
-            originalWallName = block1.name; // remember for resealing
-            break;
-        }
-    }
-
-    if (!pocketDir) {
-        await bot.toss(itemType, metadata, count);
-        return;
-    }
-
-    const pocket1Pos = pos.offset(pocketDir.dx, 0, pocketDir.dz);
-    const pocket2Pos = pos.offset(pocketDir.dx * 2, 0, pocketDir.dz * 2);
-
-    console.log(`[SafeToss] Wall pocket ${pocketDir.name} at ${pocket1Pos} → ${pocket2Pos} (${originalWallName})`);
-    try {
-        const block1 = bot.blockAt(pocket1Pos);
-        if (block1 && block1.diggable) await bot.dig(block1);
-        const block2 = bot.blockAt(pocket2Pos);
-        if (block2 && block2.diggable) await bot.dig(block2);
+        console.warn('[SafeToss] No reference block found to place seal');
     } catch (e) {
-        console.warn('[SafeToss] Failed to dig pocket, tossing normally:', e.message);
-        await bot.toss(itemType, metadata, count);
-        return;
-    }
-
-    await bot.lookAt(pocket2Pos.offset(0.5, 0.5, 0.5));
-    await bot.toss(itemType, metadata, count);
-    await new Promise(r => setTimeout(r, 400));
-
-    // Reseal entrance with original wall material
-    const sealItem = _findSealBlock(bot, originalWallName);
-    if (sealItem) {
-        try {
-            const refBlock = bot.blockAt(pocket1Pos.offset(0, -1, 0));
-            if (refBlock && refBlock.name !== 'air') {
-                await bot.equip(sealItem, 'hand');
-                await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
-                console.log(`[SafeToss] Pocket sealed with ${sealItem.name}`);
-            }
-        } catch (e) {
-            console.warn('[SafeToss] Could not seal pocket:', e.message);
-        }
+        console.warn('[SafeToss] Seal placement failed:', e.message);
     }
 }
 
 /**
- * Find a block in inventory to seal a pocket/pit.
+ * Find a block in inventory to seal a hole.
  * Prefers the original material, falls back to common blocks.
- * @param {object} bot
- * @param {string} preferredName - the original block name to match first
- * @returns {object|null} inventory item or null
  */
 function _findSealBlock(bot, preferredName) {
-    // Try the original material first
     if (preferredName) {
         const preferred = bot.inventory.findInventoryItem(preferredName);
         if (preferred) return preferred;
     }
-    // Fall back to common cheap blocks
     const fallbacks = ['cobblestone', 'dirt', 'andesite', 'diorite', 'granite',
         'tuff', 'cobbled_deepslate', 'deepslate', 'netherrack', 'stone',
         'grass_block', 'mud', 'sand', 'gravel'];
@@ -2290,6 +2249,74 @@ function stringifyItem(bot, item) {
     return text;
 }
 
+
+/**
+ * Scan for nearby open caverns/caves below the bot's current position.
+ * Checks a grid pattern below and around the bot for clusters of air/cave_air blocks.
+ * Returns the position of the nearest cavern entrance, or null if none found.
+ * @param {MinecraftBot} bot
+ * @param {number} radius - horizontal scan radius (default 16)
+ * @param {number} depthBelow - how many blocks below to scan (default 30)
+ * @returns {{ pos: Vec3, distance: number, airCount: number }|null}
+ */
+export function scanForCaverns(bot, radius = 16, depthBelow = 30) {
+    const pos = bot.entity.position.floored();
+    const startY = pos.y;
+    const minY = Math.max(startY - depthBelow, -64); // don't scan below world floor
+    let bestCavern = null;
+
+    // Scan in a grid pattern: every 2 blocks horizontally, every 1 block vertically
+    for (let dx = -radius; dx <= radius; dx += 2) {
+        for (let dz = -radius; dz <= radius; dz += 2) {
+            for (let y = startY - 1; y >= minY; y--) {
+                const checkPos = pos.offset(dx, y - startY, dz);
+                const block = bot.blockAt(checkPos);
+
+                if (!block) continue;
+                if (block.name !== 'air' && block.name !== 'cave_air') continue;
+
+                // Found an air block underground — check if it's a real cavern
+                // (not just a 1-block gap). Count connected air blocks.
+                let airCount = 0;
+                for (let ax = -1; ax <= 1; ax++) {
+                    for (let az = -1; az <= 1; az++) {
+                        for (let ay = 0; ay <= 2; ay++) {
+                            const neighbor = bot.blockAt(checkPos.offset(ax, ay, az));
+                            if (neighbor && (neighbor.name === 'air' || neighbor.name === 'cave_air')) {
+                                airCount++;
+                            }
+                        }
+                    }
+                }
+
+                // Need at least 6 air blocks to be a real cavern (roughly 2x3 space)
+                if (airCount < 6) continue;
+
+                // Check that there's a solid floor (not floating in a ravine)
+                const floor = bot.blockAt(checkPos.offset(0, -1, 0));
+                if (!floor || floor.name === 'air' || floor.name === 'cave_air'
+                    || floor.name === 'lava' || floor.name === 'water') continue;
+
+                const dist = Math.sqrt(dx * dx + (y - startY) ** 2 + dz * dz);
+                if (!bestCavern || dist < bestCavern.distance) {
+                    bestCavern = {
+                        pos: new Vec3(pos.x + dx, y, pos.z + dz),
+                        distance: dist,
+                        airCount,
+                    };
+                }
+            }
+        }
+    }
+
+    if (bestCavern) {
+        console.log(`[CavernScan] Found cavern at ${bestCavern.pos} (${bestCavern.airCount} air blocks, ${bestCavern.distance.toFixed(1)} blocks away)`);
+    } else {
+        console.log('[CavernScan] No caverns found nearby');
+    }
+    return bestCavern;
+}
+
 export async function digDown(bot, distance = 10) {
     /**
      * Digs down a specified distance using a safe staircase pattern.
@@ -2301,6 +2328,21 @@ export async function digDown(bot, distance = 10) {
      * @example
      * await skills.digDown(bot, 10);
      **/
+
+    // --- Cavern detection: look for existing caves before digging blindly ---
+    try {
+        const cavern = scanForCaverns(bot, 16, 30);
+        if (cavern && cavern.distance < distance * 2) {
+            console.log(`[digDown] Found cavern at ${cavern.pos}, pathing there instead of digging`);
+            log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z}! Heading there instead of digging.`);
+            // Path to the cavern entrance
+            bot.pathfinder.setMovements(new pf.Movements(bot));
+            await goToGoal(bot, new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2));
+            return true;
+        }
+    } catch (e) {
+        console.warn('[digDown] Cavern scan failed, digging normally:', e.message);
+    }
 
     // Get the bot's facing direction (snapped to nearest cardinal)
     const yaw = bot.entity.yaw;
@@ -2758,6 +2800,9 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
+
+
 
 
 
