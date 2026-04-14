@@ -2,15 +2,16 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14_
+_Last updated: 2026-04-14 (late afternoon: spawn-zone trap found, PartialReadError demoted)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `b17b17a`. Includes bot action mutex fix (merge `6fdcff2`) and WHITEBOARD docs. Mutex fix validated stable over 3-hour runtime on 2026-04-14.
-- Next priority: item #0 (`PartialReadError` reconnect storms) — bot reconnecting ~4×/hour due to mineflayer/MC version drift.
+- Branch: `develop` — HEAD `9906611`. Includes bot action mutex fix (merge `6fdcff2`) and WHITEBOARD docs. Mutex fix validated stable over 3-hour runtime on 2026-04-14.
+- **Bot is currently stuck** at roughly `(-27, 87, -46)` — inside its own 350-block spawn protection zone, unable to dig, looping digDown → spawn-protection-block → mode:unstuck → tiny lateral move → repeat.
+- Next priority: item #0 (spawn-zone auto-escape). Until the bot can self-rescue, we cannot validate anything else.
 
 ---
 
@@ -20,11 +21,45 @@ _Nothing active._
 
 ---
 
-## 0. `PartialReadError` reconnect storms (promoted from deferred)
+## 0. Spawn-zone auto-escape (bot self-rescue)
 
 **Status:** not started • **Priority:** blocker — do first
 
-Over a 3-hour stability window on 2026-04-14, the bot **reconnected 13 times** due to `PartialReadError` on `SlotComponent` parsing. Every reconnect interrupts whatever the bot was doing (usually `!digDown`), wipes in-memory state, and restarts. This is more disruptive than any of items 1–4 and effectively bounds the bot's useful session length.
+**Observed 2026-04-14:** Bot is at `(-26, 85, -44)` — ~51 blocks from spawn, deep inside its own 350-block spawn protection zone. Every `!digDown` is blocked by `_isInSpawnZone` and returns `Cannot break blocks near spawn`. The LLM responds to the failure by chat-updating its own memory ("Must move out from spawn limit (<350b)") — but it's not mechanically smart enough to actually path out. It just issues `!digDown(20)` again. Result: infinite loop of blocked-dig + `mode:unstuck` shuffling the bot 3-5 blocks laterally. **The bot cannot progress until it is rescued or rescues itself.**
+
+This is a perfect case study for item #6 (reduce LLM reliance): a 4B model can't derive "I need to walk 350 blocks north before digging" from "digging is blocked." That reasoning must be programmatic.
+
+**Expected behavior:**
+When a destructive action (`breakBlockAt`, `placeBlock`, underground `safeToss`) is blocked by spawn protection, the bot should automatically path OUT of the zone (+ a small buffer) before retrying. No LLM involvement in the escape — it's a pure mechanical response.
+
+**Fix sketch:**
+1. New skill `escapeSpawnZone(bot, buffer=10)` in `src/agent/library/skills.js`:
+   - Compute vector from `bot.spawnPoint` → `bot.entity.position`.
+   - Scale vector to `SPAWN_PROTECTION_RADIUS + buffer` (360 blocks) from spawn in the same direction.
+   - If bot is AT spawn (dist ≈ 0), pick a cardinal direction (default +X).
+   - Wrap in `withBotLock('escapeSpawnZone', ...)` + save/restore movements.
+   - Call `goToGoal(bot, new pf.goals.GoalNear(target_x, current_y, target_z, 2))`.
+   - Chat: `I'm inside the spawn protection zone. Walking to (X, Z) to escape.`
+2. New failure pattern in `src/agent/auto_recovery.js`:
+   - Match: `/near spawn|inside .* spawn zone|spawn protection/i` → recovery `ESCAPE_SPAWN_ZONE`.
+   - Handler `recoverInsideSpawnZone` calls `skills.escapeSpawnZone(bot)`, then retries the original command.
+3. Make sure error messages from `breakBlockAt`, `placeBlock`, and `safeToss` spawn-zone branches consistently contain "spawn" so the pattern matches.
+
+**Signals to watch after fix:**
+- `[SpawnEscape] Auto-escaping from (…) to (…)` appears when the bot enters the zone.
+- Bot position delta >> 300 blocks after each escape.
+- `!digDown` completes successfully from outside the zone.
+- `SpawnProtect` Blocked messages drop to near zero during normal play.
+
+---
+
+## 1. `PartialReadError` reconnect storms
+
+**Status:** not started • **Priority:** high (validation-blocker)
+
+Over a 3-hour stability window on 2026-04-14, the bot **reconnected 13 times** due to `PartialReadError` on `SlotComponent` parsing. Every reconnect interrupts whatever the bot was doing (usually `!digDown`), wipes in-memory state, and restarts. Only 1 in 4 commands survives to completion. Gameplay throughput is tiny.
+
+Demoted from blocker to high-priority after the spawn-zone trap was identified as the primary gameplay blocker. Still critical because it prevents validation of fixes for items 0 and 2–6 — a bot that disconnects every 15 minutes never stays up long enough to exercise disposal, item pickup, tool selection, or anything else.
 
 **Root cause:** Protocol drift between mineflayer (`^4.33.0`) and the Minecraft server (`1.21` base). Slot-component packet format changed in 1.20.5+. Supported mineflayer versions per startup log: up through `1.21.11`. Server is below that.
 
@@ -42,7 +77,7 @@ Try option 1 first. If it doesn't hold, option 2.
 
 ---
 
-## 1. Wrong tool for the block
+## 2. Wrong tool for the block
 
 **Status:** not started • **Priority:** high
 
@@ -61,7 +96,7 @@ Add a single helper `_equipBestTool(bot, block_or_entity)` and call it before ev
 
 ---
 
-## 2. No torches when dark
+## 3. No torches when dark
 
 **Status:** not started • **Priority:** medium
 
@@ -77,7 +112,7 @@ Mimic real human gameplay — if `bot.time.timeOfDay` indicates night OR the bot
 
 ---
 
-## 3. Strategic torch placement underground (left-wall convention)
+## 4. Strategic torch placement underground (left-wall convention)
 
 **Status:** not started • **Priority:** medium
 
@@ -101,7 +136,7 @@ Also extend `goToSurface()` to prefer paths that pass known torch positions (cou
 
 ---
 
-## 4. Humanized action delays
+## 5. Humanized action delays
 
 **Status:** not started • **Priority:** low-medium
 
@@ -129,7 +164,7 @@ Don't apply delays to mode-triggered actions (self_preservation, self_defense) �
 
 ---
 
-## 5. Reduce LLM reliance through programmatic enhancements
+## 6. Reduce LLM reliance through programmatic enhancements
 
 **Status:** not started • **Priority:** ongoing architectural theme
 
@@ -160,21 +195,25 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 
 ## Notes
 
-- **Item 0 is a blocker** — the bot keeps dropping and reconnecting, which interrupts long-running work and makes any other fix harder to validate (since the bot doesn't stay up long enough to exercise it). Do #0 first.
-- Items 2 and 3 will interact — the torch inventory check in #2 + placement convention in #3 should share a common helper.
-- Item 1 is the biggest latent performance bug after #0. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
-- Item 4 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
-- Item 5 is a philosophy that shapes how we approach 1–4 and everything beyond. As we implement 1–4, we should be thinking "is this programmatic or LLM-reliant?" and pushing toward programmatic wherever it makes sense.
+- **Item 0 is an acute blocker** — the bot is literally stuck in a loop right now. Fix this first so it can self-rescue and actually test anything else.
+- **Item 1 is a validation blocker** — without fixing PartialReadError reconnects, we can't empirically confirm any other fix holds over a realistic session length.
+- Items 3 and 4 will interact — the torch inventory check in #3 + placement convention in #4 should share a common helper.
+- Item 2 is the biggest latent performance bug after #0 and #1. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
+- Item 5 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
+- Item 6 is a philosophy that shapes how we approach 0–5 and everything beyond. Item #0 is a direct application of #6: the LLM shouldn't be reasoning about spawn-zone escape, the code should.
 
 ---
 
 ## Recently completed
 
-### Post-merge stability check — bot mutex validated (2026-04-14)
+### Post-merge stability check — bot mutex validated, two root causes surfaced (2026-04-14)
 
 3-hour runtime on `develop` (commit `b17b17a`). Zero concurrency errors: 0 `goal was changed`, 0 `Digging aborted`, 0 SafeToss fallbacks across all observed windows. Mode wrap exercised cleanly by `mode:unstuck` (2 clean acquire/release pairs). `item_collecting ↔ SafeToss` scenario didn't naturally trigger (inventory never filled), so that specific race remains empirically untested — but every other mutex path is clean, so confidence is high.
 
-The check surfaced the `PartialReadError` reconnect rate (13 in 3h), which was promoted out of "Known deferred" into to-do item #0.
+The check surfaced **two** previously-unknown issues that explain why the bot accomplishes so little:
+
+1. **Spawn-zone trap** — bot is physically inside its own 350-block spawn protection zone and cannot dig. It loops: `!digDown` → `[SpawnProtect] Blocked` → `Action was interrupted` → `mode:unstuck` → 3-5 blocks lateral → repeat. LLM knows it needs to move (wrote "Must move out from spawn limit" in its own memory) but can't figure out how. → Promoted to item #0.
+2. **`PartialReadError` disconnect rate** — 13 reconnects in 3 hours. Only 1 in 4 commands completes before a disconnect aborts it. → Promoted to item #1.
 
 ### Bot action mutex — concurrency fix (2026-04-14, merged `6fdcff2`)
 
@@ -198,9 +237,9 @@ Also: save/restore `bot.pathfinder.movements` across `safeToss` and `digDown` to
 
 ---
 
-## Known issues (deferred — out of scope for items 0–5)
+## Known issues (deferred — out of scope for items 0–6)
 
 - **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
 - **`self_preservation` mode now waits on the bot mutex.** In rare cases (bot drowning during a long SafeToss), emergency response could be delayed by several seconds. Trade-off accepted for now vs. the constant disposal failure the race was causing. Can carve a priority-mutex exception later if it becomes a problem.
 
-_(PartialReadError was here — promoted to item #0 after 2026-04-14 stability check showed 13 reconnects in 3 hours.)_
+_(PartialReadError was here — promoted to item #1 after 2026-04-14 stability check showed 13 reconnects in 3 hours.)_
