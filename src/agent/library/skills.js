@@ -2259,7 +2259,7 @@ function stringifyItem(bot, item) {
  * @param {number} depthBelow - how many blocks below to scan (default 30)
  * @returns {{ pos: Vec3, distance: number, airCount: number }|null}
  */
-export function scanForCaverns(bot, radius = 16, depthBelow = 30) {
+export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
     const pos = bot.entity.position.floored();
     const startY = pos.y;
     const minY = Math.max(startY - depthBelow, -64); // don't scan below world floor
@@ -2331,14 +2331,18 @@ export async function digDown(bot, distance = 10) {
 
     // --- Cavern detection: look for existing caves before digging blindly ---
     try {
-        const cavern = scanForCaverns(bot, 16, 30);
+        const cavern = scanForCaverns(bot, 100, 30);
         if (cavern && cavern.distance < distance * 2) {
             console.log(`[digDown] Found cavern at ${cavern.pos}, pathing there instead of digging`);
             log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z}! Heading there instead of digging.`);
-            // Path to the cavern entrance
-            bot.pathfinder.setMovements(new pf.Movements(bot));
-            await goToGoal(bot, new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2));
-            return true;
+            try {
+                bot.pathfinder.setMovements(new pf.Movements(bot));
+                await goToGoal(bot, new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2));
+                return true;
+            } catch (pathErr) {
+                console.warn(`[digDown] Could not path to cavern at ${cavern.pos}, digging normally:`, pathErr.message);
+                log(bot, `Cavern found but unreachable — digging down instead.`);
+            }
         }
     } catch (e) {
         console.warn('[digDown] Cavern scan failed, digging normally:', e.message);
