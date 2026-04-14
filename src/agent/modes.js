@@ -4,6 +4,7 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
+import { withBotLock } from './bot_mutex.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -311,7 +312,11 @@ async function execute(mode, agent, func, timeout=-1) {
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
-        await func();
+        // Serialize with LLM commands, AutoRecovery, SafeToss, digDown.
+        // Mode update loop stays non-blocking (execute is fire-and-forget from
+        // update), but the mode's actual bot actions queue behind any active
+        // lock holder instead of racing pathfinder.setGoal.
+        await withBotLock(`mode:${mode.name}`, () => func());
     }, { timeout });
     mode.active = false;
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
