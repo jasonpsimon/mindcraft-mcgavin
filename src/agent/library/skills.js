@@ -2328,6 +2328,24 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
                 }
                 if (!hasCeiling) continue;
 
+                // Verify walls are rock-type (not dirt/grass surface depressions)
+                const rockTypes = new Set([
+                    'stone', 'deepslate', 'granite', 'diorite', 'andesite',
+                    'tuff', 'calcite', 'dripstone_block', 'cobblestone',
+                    'cobbled_deepslate', 'basalt', 'blackstone', 'netherrack',
+                    'sandstone', 'red_sandstone', 'smooth_basalt',
+                ]);
+                let rockWalls = 0;
+                const wallChecks = [
+                    checkPos.offset(1, 0, 0), checkPos.offset(-1, 0, 0),
+                    checkPos.offset(0, 0, 1), checkPos.offset(0, 0, -1),
+                ];
+                for (const wc of wallChecks) {
+                    const wb = bot.blockAt(wc);
+                    if (wb && rockTypes.has(wb.name)) rockWalls++;
+                }
+                if (rockWalls < 1) continue; // at least 1 rock wall
+
                 const dist = Math.sqrt(dx * dx + (y - startY) ** 2 + dz * dz);
                 if (!bestCavern || dist < bestCavern.distance) {
                     bestCavern = {
