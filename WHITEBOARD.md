@@ -9,13 +9,36 @@ _Last updated: 2026-04-14_
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — merge commit `6fdcff2` includes the bot action mutex fix.
+- Branch: `develop` — HEAD `b17b17a`. Includes bot action mutex fix (merge `6fdcff2`) and WHITEBOARD docs. Mutex fix validated stable over 3-hour runtime on 2026-04-14.
+- Next priority: item #0 (`PartialReadError` reconnect storms) — bot reconnecting ~4×/hour due to mineflayer/MC version drift.
 
 ---
 
 ## In-progress
 
-- **Post-merge stability check** — scheduled task `mindcraft-mutex-stability-check` fires at 1:15 PM CDT 2026-04-14 to verify bot_mutex behavior over ~2 hours of runtime. Will report scoreboard + recommendation (stable / needs follow-up).
+_Nothing active._
+
+---
+
+## 0. `PartialReadError` reconnect storms (promoted from deferred)
+
+**Status:** not started • **Priority:** blocker — do first
+
+Over a 3-hour stability window on 2026-04-14, the bot **reconnected 13 times** due to `PartialReadError` on `SlotComponent` parsing. Every reconnect interrupts whatever the bot was doing (usually `!digDown`), wipes in-memory state, and restarts. This is more disruptive than any of items 1–4 and effectively bounds the bot's useful session length.
+
+**Root cause:** Protocol drift between mineflayer (`^4.33.0`) and the Minecraft server (`1.21` base). Slot-component packet format changed in 1.20.5+. Supported mineflayer versions per startup log: up through `1.21.11`. Server is below that.
+
+**Fix paths (pick one):**
+- **Bump mineflayer / prismarine-protocol** to the latest that supports `1.21` base cleanly. Check `package.json` and `npm outdated`; mineflayer 4.34.0+ may cover it. Lowest-risk.
+- **Pin the MC server to a patch version mineflayer supports** (e.g. 1.21.1, 1.21.3, 1.21.4). Requires server-side change; may affect world compat.
+- **Patch protodef locally** to tolerate undefined `readBool` on unknown slot components (works but masks the drift).
+
+Try option 1 first. If it doesn't hold, option 2.
+
+**Signals to watch after fix:**
+- `grep -c PartialReadError` on tmux buffer → target 0
+- `ThatCoolGuyDude spawned` events per hour → target 1 (initial only)
+- No mid-task disconnects during `!digDown` or `!collectBlocks`
 
 ---
 
@@ -137,14 +160,21 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 
 ## Notes
 
+- **Item 0 is a blocker** — the bot keeps dropping and reconnecting, which interrupts long-running work and makes any other fix harder to validate (since the bot doesn't stay up long enough to exercise it). Do #0 first.
 - Items 2 and 3 will interact — the torch inventory check in #2 + placement convention in #3 should share a common helper.
-- Item 1 is the biggest latent performance bug and should probably go first. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
+- Item 1 is the biggest latent performance bug after #0. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
 - Item 4 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
 - Item 5 is a philosophy that shapes how we approach 1–4 and everything beyond. As we implement 1–4, we should be thinking "is this programmatic or LLM-reliant?" and pushing toward programmatic wherever it makes sense.
 
 ---
 
 ## Recently completed
+
+### Post-merge stability check — bot mutex validated (2026-04-14)
+
+3-hour runtime on `develop` (commit `b17b17a`). Zero concurrency errors: 0 `goal was changed`, 0 `Digging aborted`, 0 SafeToss fallbacks across all observed windows. Mode wrap exercised cleanly by `mode:unstuck` (2 clean acquire/release pairs). `item_collecting ↔ SafeToss` scenario didn't naturally trigger (inventory never filled), so that specific race remains empirically untested — but every other mutex path is clean, so confidence is high.
+
+The check surfaced the `PartialReadError` reconnect rate (13 in 3h), which was promoted out of "Known deferred" into to-do item #0.
 
 ### Bot action mutex — concurrency fix (2026-04-14, merged `6fdcff2`)
 
@@ -168,8 +198,9 @@ Also: save/restore `bot.pathfinder.movements` across `safeToss` and `digDown` to
 
 ---
 
-## Known issues (deferred — out of scope for items 1–5)
+## Known issues (deferred — out of scope for items 0–5)
 
-- **PartialReadError spam on `SlotComponent` parsing.** Minecraft server is on 1.21 (base); mineflayer 4.33.0 supports up to 1.21.11. Protocol drift on slot-component packet format introduced in 1.20.5+. Bot connects and runs anyway, but inventory state may be subtly wrong. Fix path: bump mineflayer, or pin server to a supported patch version.
 - **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
 - **`self_preservation` mode now waits on the bot mutex.** In rare cases (bot drowning during a long SafeToss), emergency response could be delayed by several seconds. Trade-off accepted for now vs. the constant disposal failure the race was causing. Can carve a priority-mutex exception later if it becomes a problem.
+
+_(PartialReadError was here — promoted to item #0 after 2026-04-14 stability check showed 13 reconnects in 3 hours.)_
