@@ -2,16 +2,16 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14 (late afternoon: spawn-zone trap found, PartialReadError demoted)_
+_Last updated: 2026-04-14 (evening: spawn-zone fix deployed; swim + swamp added)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `9906611`. Includes bot action mutex fix (merge `6fdcff2`) and WHITEBOARD docs. Mutex fix validated stable over 3-hour runtime on 2026-04-14.
-- **Bot is currently stuck** at roughly `(-27, 87, -46)` — inside its own 350-block spawn protection zone, unable to dig, looping digDown → spawn-protection-block → mode:unstuck → tiny lateral move → repeat.
-- Next priority: item #0 (spawn-zone auto-escape). Until the bot can self-rescue, we cannot validate anything else.
+- Branch: `fix/spawn-zone-escape` — HEAD `527ce2d`. Spawn-zone escape deployed 2026-04-14 evening. Bot fires `escapeSpawnZone` on spawn and walks toward the boundary.
+- **Current observation:** escape skill fires correctly (bot is walking out) but keeps getting stuck on swamp-biome terrain (bushes, water pockets). This surfaces new whiteboard items #2 (swim) and #3 (swamp traversal).
+- Open fixes pending merge to `develop`: spawn-zone escape (commit `527ce2d`), verification dependent on #2/#3 progress.
 
 ---
 
@@ -23,9 +23,11 @@ _Nothing active._
 
 ## 0. Spawn-zone auto-escape (bot self-rescue)
 
-**Status:** not started • **Priority:** blocker — do first
+**Status:** code deployed on `fix/spawn-zone-escape` (commit `527ce2d`), verification in progress • **Priority:** blocker
 
-**Observed 2026-04-14:** Bot is at `(-26, 85, -44)` — ~51 blocks from spawn, deep inside its own 350-block spawn protection zone. Every `!digDown` is blocked by `_isInSpawnZone` and returns `Cannot break blocks near spawn`. The LLM responds to the failure by chat-updating its own memory ("Must move out from spawn limit (<350b)") — but it's not mechanically smart enough to actually path out. It just issues `!digDown(20)` again. Result: infinite loop of blocked-dig + `mode:unstuck` shuffling the bot 3-5 blocks laterally. **The bot cannot progress until it is rescued or rescues itself.**
+**Observed 2026-04-14:** Bot is at `(-26, 85, -44)` — ~51 blocks from spawn, deep inside its own spawn protection zone. Every `!digDown` is blocked by `_isInSpawnZone` and returns `Cannot break blocks near spawn`. The LLM responds to the failure by chat-updating its own memory ("Must move out from spawn limit") — but it's not mechanically smart enough to actually path out. It just issues `!digDown(20)` again. Result: infinite loop of blocked-dig + `mode:unstuck` shuffling the bot 3-5 blocks laterally. **The bot cannot progress until it is rescued or rescues itself.**
+
+**Radius decisions:** protection zone shrunk to **250 blocks** (was 350). Bot's escape target is **350 blocks from spawn** — 100-block buffer past the boundary so tiny movements don't push it back inside.
 
 This is a perfect case study for item #6 (reduce LLM reliance): a 4B model can't derive "I need to walk 350 blocks north before digging" from "digging is blocked." That reasoning must be programmatic.
 
@@ -82,7 +84,66 @@ Try option 1 first. If it doesn't hold, option 2.
 
 ---
 
-## 2. Wrong tool for the block
+## 2. Bot swim capabilities
+
+**Status:** not started • **Priority:** high (navigation blocker in aquatic biomes)
+
+The bot currently doesn't know how to swim. When its path takes it into water deeper than its head, it either gets stuck or drowns. This blocks travel across rivers, oceans, swamps (see #3), and anything with surface water.
+
+**Expected behavior:**
+- Detect when bot is in water (`bot.entity.isInWater`, block-at-head = water).
+- While in water: jump to stay at the surface (`setControlState('jump', true)` with periodic release), face the direction of travel, swim forward.
+- Detect deeper water and switch to **swim-down** mode if destination requires it (control state `sneak` submerges; otherwise head stays at surface).
+- Auto-equip underwater-breathing gear (turtle shell helmet, potion of water breathing) if in inventory.
+- Exit water cleanly when destination reached — path to nearest shore block.
+
+**Fix sketch:**
+New skill `swim(bot, targetPos)` in `src/agent/library/skills.js` that wraps `setControlState` sequences for aquatic movement. Integrate with `goToGoal` so pathfinder paths-through-water trigger swim mode automatically:
+- On each `goToGoal` step, check if the bot's head is in water.
+- If yes, activate swim: hold `jump`, forward toward the next path node, release `jump` periodically to let the bot breathe.
+- On exit, release all control states.
+
+Configure `pf.Movements` to include `water` as traversable (it likely already does; may need `canSwim = true`).
+
+**Signals to watch after fix:**
+- Bot successfully crosses rivers without drowning.
+- `bot.health` / `bot.food` not dropping from in-water suffocation.
+- No "stuck" mode firing while swimming.
+
+---
+
+## 3. Swamp biome traversal
+
+**Status:** not started • **Priority:** high (actively blocking bot travel — observed 2026-04-14)
+
+**Observed:** during spawn-zone escape, bot got stuck trying to walk through a swamp bush. Swamp biomes combine terrain hazards that the default pathfinder handles poorly: shallow water pockets, lily pads, mangrove roots, tall grass, bushes, vines. Pathfinder treats bushes as solid (stops), water as unswimmable without #2, lily pads as walkable floor (then bot falls through).
+
+**Expected behavior:**
+Programmatic adjustments to pathfinder movement rules when the bot is in a swamp biome:
+- Treat `dead_bush`, `fern`, `tall_grass`, `large_fern`, `sugar_cane`, `cobweb` as walk-through (break if necessary — costs ~0 time).
+- Treat `lily_pad` as walkable surface (path on top without falling through).
+- Treat shallow water (≤1 block deep) as walkable if floor is solid.
+- Treat deep water as swimmable (depends on #2).
+- Treat `mangrove_roots` and `mangrove_propagule` as breakable-for-passage.
+
+**Fix sketch:**
+1. New helper `_configureSwampMovements(movements)` in `skills.js` that mutates a `pf.Movements` instance to add the above exceptions:
+   - `movements.blocksCantBreak.delete(id)` for bushes/grass/vines.
+   - `movements.blocksToAvoid.delete(water_id)` (allow water steps in shallow areas).
+   - Add lily pad to walkable-surface list (may require custom block collision override).
+2. In `goToGoal`, detect swamp biome (`bot.world.getBiome(bot.entity.position)` returns biome ID — check against swamp IDs `swamp`, `mangrove_swamp`) and call `_configureSwampMovements` before pathfinding.
+3. Consider an auto-break helper: when pathfinder says "path not found" and bot is in swamp, break the obstructing plant-block in front and retry.
+
+This item and #2 share terrain-awareness logic — consider a single "terrain profiles" abstraction where different biomes activate different pathfinder configurations.
+
+**Signals to watch after fix:**
+- Bot escape from spawn zone completes even when path crosses swamp.
+- No "stuck" mode firing on dead_bush, lily_pad, or tall_grass.
+- `SpawnEscape Arrived` log line appears consistently within ~2 minutes of spawn.
+
+---
+
+## 4. Wrong tool for the block
 
 **Status:** not started • **Priority:** high
 
@@ -101,7 +162,7 @@ Add a single helper `_equipBestTool(bot, block_or_entity)` and call it before ev
 
 ---
 
-## 3. No torches when dark
+## 5. No torches when dark
 
 **Status:** not started • **Priority:** medium
 
@@ -117,7 +178,7 @@ Mimic real human gameplay — if `bot.time.timeOfDay` indicates night OR the bot
 
 ---
 
-## 4. Strategic torch placement underground (left-wall convention)
+## 6. Strategic torch placement underground (left-wall convention)
 
 **Status:** not started • **Priority:** medium
 
@@ -141,7 +202,7 @@ Also extend `goToSurface()` to prefer paths that pass known torch positions (cou
 
 ---
 
-## 5. Humanized action delays
+## 7. Humanized action delays
 
 **Status:** not started • **Priority:** low-medium
 
@@ -169,7 +230,7 @@ Don't apply delays to mode-triggered actions (self_preservation, self_defense) �
 
 ---
 
-## 6. Reduce LLM reliance through programmatic enhancements
+## 8. Reduce LLM reliance through programmatic enhancements
 
 **Status:** not started • **Priority:** ongoing architectural theme
 
@@ -200,12 +261,13 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 
 ## Notes
 
-- **Item 0 is an acute blocker** — the bot is literally stuck in a loop right now. Fix this first so it can self-rescue and actually test anything else.
+- **Item 0 is deployed** but its first real validation run got interrupted by items 2/3 (swim + swamp). The code works; the bot just can't traverse the terrain it needs to cross to leave the zone.
 - **Item 1 is a validation blocker** — without fixing PartialReadError reconnects, we can't empirically confirm any other fix holds over a realistic session length.
-- Items 3 and 4 will interact — the torch inventory check in #3 + placement convention in #4 should share a common helper.
-- Item 2 is the biggest latent performance bug after #0 and #1. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
-- Item 5 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
-- Item 6 is a philosophy that shapes how we approach 0–5 and everything beyond. Item #0 is a direct application of #6: the LLM shouldn't be reasoning about spawn-zone escape, the code should.
+- **Items 2 and 3 are linked** — both are terrain/navigation issues. Probably share a common "movement profile" abstraction. Fix together.
+- Items 5 and 6 will interact — the torch inventory check in #5 + placement convention in #6 should share a common helper.
+- Item 4 is the biggest latent performance bug after #0–#3. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
+- Item 7 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
+- Item 8 is a philosophy that shapes how we approach 0–7 and everything beyond. Items #0, #2, #3 are all direct applications of #8: the LLM shouldn't be reasoning about spawn-zone escape, swimming, or swamp bush traversal — the code should.
 
 ---
 
@@ -242,7 +304,7 @@ Also: save/restore `bot.pathfinder.movements` across `safeToss` and `digDown` to
 
 ---
 
-## Known issues (deferred — out of scope for items 0–6)
+## Known issues (deferred — out of scope for items 0–8)
 
 - **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
 - **`self_preservation` mode now waits on the bot mutex.** In rare cases (bot drowning during a long SafeToss), emergency response could be delayed by several seconds. Trade-off accepted for now vs. the constant disposal failure the race was causing. Can carve a priority-mutex exception later if it becomes a problem.
