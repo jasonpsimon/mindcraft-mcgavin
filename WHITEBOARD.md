@@ -202,7 +202,34 @@ Also extend `goToSurface()` to prefer paths that pass known torch positions (cou
 
 ---
 
-## 7. Humanized action delays
+## 7. Respect player-built structures (50-block no-disturb radius)
+
+**Status:** not started • **Priority:** medium (protective feature, no active blocker)
+
+The bot must not disturb player-built structures. No breaking, placing, digging, tossing items, or otherwise modifying blocks within **50 blocks of any player-built structure**. Treat player structures as sacrosanct — including buildings, walls, farms, redstone contraptions, and decorative builds.
+
+**Expected behavior:**
+- Maintain a registry of known structure centroids (configured manually or detected automatically via heuristics — dense clusters of placed blocks near a player's activity).
+- Before every `breakBlockAt`, `placeBlock`, and SafeToss dig, check if the target position is within 50 blocks (XZ + Y) of any registered structure. If yes, block the action with a clear error message (pattern-matchable by AutoRecovery, similar to spawn-zone check).
+- Natural block-gathering is still allowed outside the 50-block radius.
+- Chat message when the bot respects the boundary so the player sees it happening.
+
+**Fix sketch:**
+1. New config file or in-world registry `player_structures.json` — list of `{name, x, y, z, radius}` entries. Start manually curated, add auto-detection later.
+2. New helper `_isNearPlayerStructure(bot, x, y, z)` in `skills.js` — checks distance to every registered structure (similar shape to `_isInSpawnZone`).
+3. Add check inline in `breakBlockAt`, `placeBlock`, and SafeToss underground dig branch. On violation, `return false` with a `"near player structure"` error — matchable by AutoRecovery if needed.
+4. **Reuses spawn-zone infrastructure:** this is conceptually the same feature as #0 but for multiple zones. Worth factoring out a `ProtectedZone` abstraction once #0 is fully stable — one `_isInAnyProtectedZone(x, y, z)` gate handles spawn + all player structures.
+
+**Auto-detection (later):** watch for sequences of `placeBlock` events from the player, cluster by proximity + time, promote to a protected structure automatically after N placements. Defer to a follow-up item.
+
+**Signals to watch after fix:**
+- Bot attempting to dig/place near a player structure sees `[StructureProtect] Blocked` log + chat message.
+- No player-built blocks damaged or altered.
+- Natural resources outside the 50-block radius remain accessible.
+
+---
+
+## 8. Humanized action delays
 
 **Status:** not started • **Priority:** low-medium
 
@@ -230,7 +257,7 @@ Don't apply delays to mode-triggered actions (self_preservation, self_defense) �
 
 ---
 
-## 8. Reduce LLM reliance through programmatic enhancements
+## 9. Reduce LLM reliance through programmatic enhancements
 
 **Status:** not started • **Priority:** ongoing architectural theme
 
@@ -265,9 +292,10 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 - **Item 1 is a validation blocker** — without fixing PartialReadError reconnects, we can't empirically confirm any other fix holds over a realistic session length.
 - **Items 2 and 3 are linked** — both are terrain/navigation issues. Probably share a common "movement profile" abstraction. Fix together.
 - Items 5 and 6 will interact — the torch inventory check in #5 + placement convention in #6 should share a common helper.
+- Items 0 and 7 share infrastructure — both are "protected zone" rules. Factor out a `ProtectedZone` abstraction when #0 is fully stable.
 - Item 4 is the biggest latent performance bug after #0–#3. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
-- Item 7 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
-- Item 8 is a philosophy that shapes how we approach 0–7 and everything beyond. Items #0, #2, #3 are all direct applications of #8: the LLM shouldn't be reasoning about spawn-zone escape, swimming, or swamp bush traversal — the code should.
+- Item 8 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
+- Item 9 is a philosophy that shapes how we approach 0–8 and everything beyond. Items #0, #2, #3, #7 are all direct applications of #9: the LLM shouldn't be reasoning about spawn-zone escape, swimming, swamp bush traversal, or structure boundaries — the code should.
 
 ---
 
@@ -304,7 +332,7 @@ Also: save/restore `bot.pathfinder.movements` across `safeToss` and `digDown` to
 
 ---
 
-## Known issues (deferred — out of scope for items 0–8)
+## Known issues (deferred — out of scope for items 0–9)
 
 - **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
 - **`self_preservation` mode now waits on the bot mutex.** In rare cases (bot drowning during a long SafeToss), emergency response could be delayed by several seconds. Trade-off accepted for now vs. the constant disposal failure the race was causing. Can carve a priority-mutex exception later if it becomes a problem.
