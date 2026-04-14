@@ -13,6 +13,7 @@
 
 import { autoDiscard, getDiscardSuggestions, isDiscardCooldownActive } from '../utils/inventory_utils.js';
 import * as skills from './library/skills.js';
+import { withBotLock } from './bot_mutex.js';
 
 // ============================================================
 // FAILURE PATTERN REGISTRY
@@ -253,8 +254,11 @@ export class AutoRecoveryEngine {
                 this._snapshotInventory();
 
                 try {
-                    const recoveryResult = await this.executeRecovery(
-                        pattern.recovery, commandName, result, originalCommand
+                    // Hold the bot exclusively for the entire recovery — blocks any
+                    // LLM-issued command (also wrapped in withBotLock) from racing us.
+                    const recoveryResult = await withBotLock(
+                        `autoRecovery:${pattern.name}`,
+                        () => this.executeRecovery(pattern.recovery, commandName, result, originalCommand)
                     );
                     return recoveryResult;
                 } catch (e) {

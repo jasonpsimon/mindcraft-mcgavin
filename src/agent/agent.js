@@ -24,6 +24,7 @@ import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { AutoRecoveryEngine } from './auto_recovery.js';
 import { Priority } from './generation_lock.js';
+import { withBotLock } from './bot_mutex.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -697,7 +698,10 @@ export class Agent {
                         this.routeResponse(source, pre_message);
                 }
 
-                let execute_res = await executeCommand(this, res);
+                let execute_res = await withBotLock(
+                    `cmd:${command_name}`,
+                    () => executeCommand(this, res)
+                );
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
@@ -739,7 +743,10 @@ export class Agent {
                             // If recovery provides a retry command, execute it immediately
                             if (recovery.retry) {
                                 console.log(`[AutoRecovery] Retrying: ${recovery.retry}`);
-                                let retry_res = await executeCommand(this, recovery.retry);
+                                let retry_res = await withBotLock(
+                                    `cmd:retry:${command_name}`,
+                                    () => executeCommand(this, recovery.retry)
+                                );
                                 if (retry_res) {
                                     console.log(`[AutoRecovery] Retry result:`, retry_res);
                                     this.history.add('system', retry_res);
