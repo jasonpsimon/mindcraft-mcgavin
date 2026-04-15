@@ -248,3 +248,68 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
         : 'Failed to auto-discard items.';
 }
 
+/**
+ * Count how many inventory slots are occupied by "junk" (value <= 1, goal-aware).
+ * Tier 0 = trash (rotten_flesh, spider_eye, poisonous_potato).
+ * Tier 1 = bulk junk (cobblestone, dirt, gravel, sand, netherrack, etc.).
+ * Items bumped to tier 4 by the current goal are excluded.
+ * @param {object} bot - The mineflayer bot
+ * @param {string|null} goal - The bot's current goal (to protect relevant items)
+ * @returns {number} Number of inventory slots containing junk items.
+ */
+export function getJunkStackCount(bot, goal = null) {
+    const goalProtected = getGoalProtectedItems(goal);
+    let stacks = 0;
+    for (const slot of bot.inventory.slots) {
+        if (slot == null || !slot.name) continue;
+        if (getItemValue(slot.name, goalProtected) <= 1) stacks++;
+    }
+    return stacks;
+}
+
+/**
+ * Discard ALL junk items in one pass (goal-aware). Drains every tier 0 and tier 1 stack.
+ * Use this when you want to fully clear the bot's junk backlog — not just free a few slots.
+ * Collapses what would otherwise be N future SafeToss cycles into a single disposal run.
+ * @param {object} bot - The mineflayer bot
+ * @param {string|null} goal - The bot's current goal (to protect relevant items)
+ * @returns {Promise<string>} Description of what was discarded
+ */
+export async function autoDiscardAllJunk(bot, goal = null) {
+    const goalProtected = getGoalProtectedItems(goal);
+
+    // Aggregate every junk stack (tier 0 + tier 1, goal-aware)
+    const inventory = {};
+    for (const slot of bot.inventory.slots) {
+        if (slot == null || !slot.name) continue;
+        if (getItemValue(slot.name, goalProtected) > 1) continue;
+        if (!inventory[slot.name]) inventory[slot.name] = 0;
+        inventory[slot.name] += slot.count;
+    }
+
+    const items = Object.entries(inventory).map(([name, count]) => ({ name, count }));
+    if (items.length === 0) return 'No junk items found to auto-discard.';
+
+    const discarded = [];
+    for (const item of items) {
+        try {
+            let remaining = item.count;
+            while (remaining > 0) {
+                const found = bot.inventory.findInventoryItem(item.name);
+                if (!found) break;
+                const toDrop = Math.min(remaining, found.count);
+                await safeToss(bot, found.type, null, toDrop);
+                remaining -= toDrop;
+            }
+            discarded.push(`${item.count} ${item.name}`);
+            markDiscarded();
+        } catch (e) {
+            // Skip items that fail to discard; keep draining the rest
+        }
+    }
+
+    return discarded.length > 0
+        ? `Auto-discarded all junk: ${discarded.join(', ')}. Drained ${discarded.length} slot(s).`
+        : 'Failed to auto-discard junk items.';
+}
+

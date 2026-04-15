@@ -11,7 +11,7 @@
  *   recursively → execute corrective chain → retry original command
  */
 
-import { autoDiscard, getDiscardSuggestions, isDiscardCooldownActive } from '../utils/inventory_utils.js';
+import { autoDiscard, autoDiscardAllJunk, getDiscardSuggestions, getJunkStackCount, isDiscardCooldownActive } from '../utils/inventory_utils.js';
 import * as skills from './library/skills.js';
 import { withBotLock } from './bot_mutex.js';
 
@@ -354,9 +354,10 @@ export class AutoRecoveryEngine {
         }
 
         const goal = this.agent.self_prompter?.prompt || null;
-        console.log('[AutoRecovery] Clearing inventory (goal-aware discard)...');
+        const junkStacks = getJunkStackCount(this.agent.bot, goal);
+        console.log(`[AutoRecovery] Clearing inventory (goal-aware drain-all-junk, ${junkStacks} junk stack(s) to drain)...`);
 
-        const discardResult = await autoDiscard(this.agent.bot, 5, goal);
+        const discardResult = await autoDiscardAllJunk(this.agent.bot, goal);
         this._invalidateSnapshot();
         console.log(`[AutoRecovery] Discard result: ${discardResult}`);
 

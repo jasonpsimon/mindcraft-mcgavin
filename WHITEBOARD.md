@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (whiteboard reorganized; #4 wrong-tool resolved)_
+_Last updated: 2026-04-15 (inventory drain-all-junk landed; fewer SafeToss cycles during targeted collects)_
 
 ---
 
@@ -11,7 +11,7 @@ _Last updated: 2026-04-15 (whiteboard reorganized; #4 wrong-tool resolved)_
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
 - Branch: `develop` — HEAD `1c5b741`. All fixes merged + pushed to GitHub.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19). Tool selection now equipping correctly before every dig.
+- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19). Tool selection now equipping correctly before every dig. Inventory full → drains ALL junk in one pass (goal-aware tier 0+1) instead of freeing 5 slots at a time — collapses N future SafeToss cycles into 1.
 - Bot escapes spawn zone in 1 hop (226 → 265 blocks observed). Mining iron_ore yields drops (proves pickaxe equip is working).
 
 ---
@@ -150,6 +150,19 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — Drain-all-junk disposal (SafeToss loop reduction) ✅
+
+Observed behavior: during a big `!collectBlocks("iron_ore", 50)` in a junky biome, bot was chaining SafeToss cycles back-to-back — each cycle only freed 5 slots worth of one or two item types, so a 7-type junk inventory triggered ~4 separate cycles before stabilizing. Each cycle is ~30-60s of dig-tunnel-toss-return, so this looked like "bot is visually stuck" to an observer.
+
+**Fix:** two small additions to the existing goal-aware classification system in `src/utils/inventory_utils.js`:
+
+- **`getJunkStackCount(bot, goal)`** — diagnostic helper returning the count of inventory slots holding tier 0 (trash: rotten_flesh, spider_eye, poisonous_potato) or tier 1 (bulk junk: cobblestone, dirt, gravel, sand, netherrack, andesite, diorite, granite, deepslate variants, tuff, mud, clay_ball, dripstone, calcite, mossy_cobblestone) items. Goal-aware — items bumped to tier 4 by the current goal (e.g., cobblestone during a "build" or "stone" goal) are excluded.
+- **`autoDiscardAllJunk(bot, goal)`** — like `autoDiscard`, but drains every tier 0+1 stack in one pass instead of stopping once N slots are free. Same goal-awareness, same `markDiscarded` cooldown behavior, same SafeToss under the hood.
+
+Then in `src/agent/auto_recovery.js` `recoverInventoryFull`, swapped `autoDiscard(bot, 5, goal)` for `autoDiscardAllJunk(bot, goal)` and added a log line showing the junk stack count before draining. The other two call sites (`recoverWrongTool`, `recoverNeedCraftingTable`, `recoverNeedFurnace` tool-craft pre-checks at `slotsNeeded=2`) intentionally keep the targeted `getDiscardSuggestions` — they only need a sliver of space, not a full drain.
+
+**Expected effect:** during targeted collects, inventory-full fires once, bot drains every junk stack in one SafeToss session, then has a clean 60s+ window (per `DISCARD_COOLDOWN_MS`) before any further disposal — usually long enough to finish the collect. Instead of 4 cycles × 45s = 3 min lost to disposal, it's one cycle of equivalent length. Cobblestone still gets protected when the goal involves building or stone work.
 
 ### 2026-04-15 — #4 Wrong tool for the block ✅
 
