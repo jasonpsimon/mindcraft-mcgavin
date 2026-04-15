@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14 (evening: #0 escape logic hardened but defeated by swamp+water; switching focus to #1)_
+_Last updated: 2026-04-14 (late evening: #1 resolved via ViaBackwards on server; bot now stays connected cleanly)_
 
 ---
 
@@ -60,9 +60,17 @@ This is a perfect case study for item #6 (reduce LLM reliance): a 4B model can't
 
 ---
 
-## 1. `PartialReadError` reconnect storms
+## 1. `PartialReadError` reconnect storms — ✅ resolved 2026-04-14
 
-**Status:** not started • **Priority:** high (validation-blocker)
+**Status:** resolved via ViaBackwards 5.0.4 on server + `minecraft_version=1.21.4` on bot • **Priority:** was high, now done
+
+**Resolution summary:**
+- Root cause: mineflayer 4.37 (latest) does not support MC 1.21.0 base — it supports 1.21.1, 1.21.3-6, 1.21.8-9, 1.21.11. Server runs Fabric 1.21.0. Mineflayer was decoding 1.21.1 SlotComponent packets against a 1.21.0 server → repeated `PartialReadError` → reconnects.
+- Fix: installed `ViaBackwards-5.0.4.jar` in the server's `mods/` folder (companion to existing ViaFabric 0.4.14+73 which bundles ViaVersion 5.0.0). Bot pinned to `minecraft_version: "1.21.4"` (protocol 769). ViaBackwards translates 769 → 767 on the server.
+- Verification (post-deploy 2026-04-14 ~21:38): 7+ min uptime, **0 reconnects** (was ~4/hr), **2 total PartialReadErrors** both during initial inventory sync.
+- Commit: `70d1446` on `fix/spawn-zone-escape`.
+
+**Operational note:** if the server gets a MC version upgrade in the future (e.g., to 1.21.1+), this workaround becomes unnecessary — set `minecraft_version` back to `"auto"` and the raw protocol should work. ViaBackwards can be removed or kept (harmless).
 
 Over a 3-hour stability window on 2026-04-14, the bot **reconnected 13 times** due to `PartialReadError` on `SlotComponent` parsing. Every reconnect interrupts whatever the bot was doing (usually `!digDown`), wipes in-memory state, and restarts. Only 1 in 4 commands survives to completion. Gameplay throughput is tiny.
 
