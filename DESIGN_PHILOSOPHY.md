@@ -13,7 +13,7 @@ The fork was built to make a Minecraft bot:
 - **Affordable** — no cloud inference costs, ever
 - **Private** — local model, no external API traffic
 - **Available** — doesn't require internet, API keys, or third-party uptime
-- **Useful** — a companion for JP's family; a platform where craft matters more than compute
+- **Useful** — a better minecraft companion for all
 
 ## What this project is not
 
