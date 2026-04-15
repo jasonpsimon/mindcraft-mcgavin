@@ -2620,18 +2620,35 @@ export async function digDown(bot, distance = 10) {
     try {
 
     // --- Cavern detection: look for existing caves before digging blindly ---
+    // Short-circuit ONLY if a NON-DESTRUCTIVE walk-in path exists. If reaching
+    // the cavern requires digging, fall through to the 45-degree staircase
+    // instead of letting pathfinder dig a straight-down vertical shaft.
     try {
         const cavern = scanForCaverns(bot, 100, 30);
         if (cavern && cavern.distance < distance * 2) {
-            console.log(`[digDown] Found cavern at ${cavern.pos}, pathing there instead of digging`);
-            log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z}! Heading there instead of digging.`);
+            const goal = new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2);
+            const nonDestructiveMovements = new pf.Movements(bot);
+            nonDestructiveMovements.canDig = false;  // hard-require walk-in path
+
+            let walkInPathFound = false;
             try {
-                // goToGoal sets its own movements internally — no need to reset here
-                await goToGoal(bot, new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2));
-                return true;
-            } catch (pathErr) {
-                console.warn(`[digDown] Could not path to cavern at ${cavern.pos}, digging normally:`, pathErr.message);
-                log(bot, `Cavern found but unreachable — digging down instead.`);
+                const result = await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, 4000);
+                walkInPathFound = result.status === 'success';
+            } catch (_) { /* pathfinder failed — treat as no walk-in path */ }
+
+            if (walkInPathFound) {
+                console.log(`[digDown] Found cavern at ${cavern.pos} with walk-in path — heading there`);
+                log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z} with a walk-in path! Heading there instead of digging.`);
+                try {
+                    await goToGoal(bot, goal);
+                    return true;
+                } catch (pathErr) {
+                    console.warn(`[digDown] Walk-in path failed mid-journey at ${cavern.pos}, falling back to staircase:`, pathErr.message);
+                    log(bot, `Walk-in path to cavern got interrupted — digging a staircase instead.`);
+                }
+            } else {
+                console.log(`[digDown] Cavern at ${cavern.pos} exists but requires digging to reach — using 45-degree staircase instead`);
+                log(bot, `Nearby cavern at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z} but no walk-in path. Digging a staircase toward it.`);
             }
         }
     } catch (e) {
