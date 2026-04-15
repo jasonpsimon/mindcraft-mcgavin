@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (self_preservation mutex-wait entry audited and removed; Known issues now empty)_
+_Last updated: 2026-04-15 (#11 TIERED_ITEMS shipped — tools/weapons/armor now protected by tier hierarchy, not flat KEEP_ALWAYS)_
 
 ---
 
@@ -30,25 +30,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 ---
 
 **⏳ Not started**
-
-### 11. Tool / weapon / armor tier hierarchies (keep best, drop lower tiers)
-
-**Status:** ⏳ not started • **Priority:** medium (pairs well with the inventory overhaul; same file, same patterns)
-
-Currently all tools, weapons, and armor are in KEEP_ALWAYS (tier 5, unlimited). If the bot has wooden + stone + iron pickaxe, all three are kept forever. Should keep only the best tier of each role; lower tiers become tier 1 junk.
-
-**Fix sketch:**
-1. New `TOOL_HIERARCHY` in `inventory_utils.js` — per role (pickaxe, axe, shovel, hoe, sword), list tiers ordered best→worst (netherite > diamond > iron > stone > wooden).
-2. New `ARMOR_SLOTS` — four per-slot hierarchies (helmet, chestplate, leggings, boots), each netherite > diamond > iron > golden > leather (chainmail if present — rare).
-3. Extend `snapshotInventory` with a fifth check (after STACK_CAPS): for each role, find the best tier the bot owns → tier 5; lower tiers in that role → tier 1 junk with `discardable = total`.
-4. Remove individual tool/weapon/armor item names from KEEP_ALWAYS — the new hierarchy logic supersedes them.
-
-**Caveats (document, don't solve):**
-- **Durability not considered.** A half-broken iron pickaxe still beats a fresh wooden one. Practically fine — bots craft new when tools break.
-- **Enchantments not considered.** An enchanted wooden pickaxe (Efficiency V) would still be classified as junk if iron exists. Edge case for gemma-4.
-- **Golden tools** stay out of hierarchies (rare drops, terrible durability, not crafted by bot).
-
-**Signals to watch:** bot doesn't accumulate a wooden_pickaxe trail while mining iron; after crafting iron tools, AutoRecovery drains the stone tier on next inventory-full.
 
 ### 7. Respect player-built structures (50-block no-disturb radius)
 
@@ -211,11 +192,35 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 - **Items 0 and 7 share infrastructure** — both are "protected zone" rules. Factor out `ProtectedZone` abstraction once #7 ships.
 - **Item 8 should be last** — don't add delays on top of an unfinished bot. Fix behavior first, then slow it down.
 - **Item 9 is the philosophy** — every routine/mechanical decision the LLM is asked to make is a candidate to convert to code. Items #0, #2, #3, #4, #7, #10, #11, and today's inventory overhaul are all applications.
-- **#11 builds on today's inventory overhaul** — same file (`inventory_utils.js`), same `snapshotInventory` priority chain. Extending with tool/armor hierarchy is structurally a 5th check after STACK_CAPS. Factor once, extend cheaply.
+- **#11 shipped as the fifth priority step** in `snapshotInventory` (`SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > TIERED_ITEMS > getItemValue`). The "factor once, extend cheaply" bet paid off — adding a whole new classification dimension took one lookup table, one helper, and one new step in the chain.
 
 ---
 
 ## Recently completed
+
+### 2026-04-15 — #11 TIERED_ITEMS: best-tier tool/armor classification ✅
+
+Commit `8657d9b`. Closed whiteboard item #11. Before this change, tools, weapons, and armor lived in `KEEP_ALWAYS` as individual entries (tier 5, unlimited). Bots accumulating wooden + stone + iron pickaxe kept all three forever, hoarding slots. After this change, `snapshotInventory` runs a tier-aware classifier: only the best-owned tier per role is protected; lower tiers become tier 1 junk.
+
+**New in `src/utils/inventory_utils.js`:**
+- `TIERED_ITEMS`: 9-role lookup (pickaxe, axe, shovel, hoe, sword + helmet, chestplate, leggings, boots), each best→worst array. 54 items total (netherite/diamond/iron/stone/wooden/golden for tools; netherite/diamond/iron/chainmail/golden/leather for armor).
+- `TIERED_ITEM_NAMES`: flat Set built once at module load for O(1) membership.
+- `_computeBestTierPerRole(totals)`: scans totals top-down per role, records the best-owned index. Roles with zero owned items omitted.
+- `classifyByTier(name, bestTierPerRole)`: returns `{isJunk, role}` or `null` for non-tiered items.
+- `snapshotInventory` priority chain extended: **SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > TIERED_ITEMS > getItemValue** (five steps).
+- `autoDiscardAllJunk` now emits three distinguishable log labels: `"N lower-tier X"` (tier-junk), `"N extra X"` (singleton/bed/stack cap extras), `"N X"` (plain tier 0/1 junk).
+
+**`KEEP_ALWAYS` pruned:** all 24 tiered tool/weapon/armor entries removed. Non-tiered tools stay (`bow`, `crossbow`, `shield`, `fishing_rod`, `flint_and_steel`, `shears`).
+
+**Rule 5 (no adverse effects) mitigated with a 29-test local harness** (`test-tier-classification.mjs`) covering: TIERED_ITEMS structural sanity, `_computeBestTierPerRole` on empty/partial/full inventories, `classifyByTier` at each tier position, **CORE SAFETY — best-tier tools never classified as junk** (explicit test at every tier), armor slot independence, only-lowest-tier protection, multi-stack best-tier retention, non-tiered-tool protection via SINGLETON_KEEPS, ore-block classification unchanged from earlier fix, chainmail < iron ordering. **All 29 passed before deploy.**
+
+Audit of 4 external `inventory_utils` importers (`actions.js`, `skills.js`, `auto_recovery.js`, `modes.js`) confirmed no caller reaches into the classification constants directly — all interact via exported functions whose contracts are unchanged. Zero callsite changes required.
+
+**Philosophy / rules adherence** (verified pre-code):
+- DESIGN_PHILOSOPHY #1 (reduce LLM reliance), #5 (finish migrations — kills the hoarded-tiers pattern), #8 (fail loudly — distinguishable log labels).
+- CODE_RULES #1 (flexible — lookup table, not branches), #2 (elegant — `classifyByTier` helper keeps snapshot loop flat), #3 (commented — 40+ line header on TIERED_ITEMS), #4 (root cause — KEEP_ALWAYS couldn't express tier), #5 (no adverse effects — audit + 29 unit tests).
+
+**Caveats carried forward unsolved (documented in TIERED_ITEMS header):** durability ignored, enchantments ignored, `recoverWrongTool` handles no-tool-available case.
 
 ### 2026-04-15 — `self_preservation` mutex-wait Known Issue audited and closed ✅
 
