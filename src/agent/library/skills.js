@@ -1126,23 +1126,85 @@ function _isInSpawnZone(bot, x, z) {
 
 /**
  * Configure a pf.Movements instance for safer terrain traversal across biomes,
- * especially swamps and other dense-plant areas. Non-destructive: mutates the
- * Movements object in place.
+ * especially swamps, dripstone caves, nether, and other damage-prone terrain.
+ * Non-destructive: mutates the Movements object in place.
  *
  * Rationale: mineflayer-pathfinder's default Movements already treats blocks
  * with empty boundingBox (grass, ferns, bushes, sugar_cane, vines, flowers,
- * propagules, etc.) as walk-through. We add:
- *   - sweet_berry_bush to blocksToAvoid (damages bot on contact)
- *   - cobweb already avoided by default
- * Mangrove-specific solid blocks (mangrove_roots, muddy_mangrove_roots) are
- * physical and must be pathed AROUND or broken via destructive movements.
+ * propagules, hanging_roots, etc.) as walk-through, and already avoids fire +
+ * cobweb + lava. We add additional damage-on-contact blocks so pathfinder
+ * routes around them instead of through them.
+ *
+ * Solid blocks that require destruction (mangrove_roots, muddy_mangrove_roots)
+ * are handled via destructive movements (pathfinder breaks them) + the
+ * autoBreakStuckPlant helper when pathfinder can't find a path at all.
  */
 function _configureTerrainSafeMovements(bot, movements) {
-    const hazards = ['sweet_berry_bush'];
+    // Damage-on-contact blocks — pathfinder should route around these
+    const hazards = [
+        'sweet_berry_bush',     // damages bot on contact
+        'pointed_dripstone',    // falls from ceiling, damages on landing
+        'cactus',               // damages adjacent entities
+        'wither_rose',          // inflicts Wither effect
+        'magma_block',          // damages entities standing on it
+        'fire',                 // already in default, belt + suspenders
+        'soul_fire',            // high damage fire variant
+        'powder_snow',          // can trap bot, slow freeze damage
+    ];
     for (const name of hazards) {
         const block = bot.registry.blocksByName[name];
         if (block) movements.blocksToAvoid.add(block.id);
     }
+}
+
+/**
+ * Attempt to unstick the bot by breaking an adjacent plant-type block.
+ * Call this after pathfinder reports no path — often a single plant-like
+ * block is blocking forward progress. Scans cardinal + diagonal neighbors
+ * at feet and head height for names matching plant-like patterns, breaks
+ * the first matching block found.
+ *
+ * Respects spawn protection: will NOT break inside the spawn protection
+ * zone, regardless of block type. Player-structure protection (whiteboard
+ * item #7) should be added here once implemented.
+ *
+ * Returns true if a block was broken (caller should retry their pathfind).
+ */
+const PLANT_BLOCK_PATTERN = /bush|fern|grass|roots|propagule|vine|leaves|sapling|seedling|flower|sprout|stem|lichen|moss|fungus|bamboo|sugar_cane|dead_bush|nether_sprouts/i;
+
+export async function autoBreakStuckPlant(bot) {
+    return await withBotLock('autoBreakStuckPlant', async () => {
+        const pos = bot.entity.position.floored();
+        // Cardinal + diagonal neighbors at feet and head level (8 around feet, 8 around head)
+        const offsets = [
+            [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+            [1, 0, 1], [1, 0, -1], [-1, 0, 1], [-1, 0, -1],
+            [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+            [1, 1, 1], [1, 1, -1], [-1, 1, 1], [-1, 1, -1],
+        ];
+        for (const [dx, dy, dz] of offsets) {
+            const p = pos.offset(dx, dy, dz);
+            const block = bot.blockAt(p);
+            if (!block) continue;
+            if (!PLANT_BLOCK_PATTERN.test(block.name)) continue;
+            if (_isDangerous(block.name)) continue;
+
+            // Spawn protection — never break inside spawn zone
+            if (_isInSpawnZone(bot, p.x, p.z)) {
+                console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is in spawn zone — skipping`);
+                continue;
+            }
+
+            console.log(`[AutoBreakPlant] Breaking ${block.name} at (${p.x}, ${p.y}, ${p.z}) to free movement`);
+            try {
+                await bot.dig(block);
+                return true;
+            } catch (err) {
+                console.warn(`[AutoBreakPlant] Failed to break ${block.name}: ${err.message}`);
+            }
+        }
+        return false;
+    });
 }
 
 /**
@@ -1683,7 +1745,30 @@ export async function goToGoal(bot, goal) {
         return true;
     } catch (err) {
         clearInterval(doorCheckInterval);
-        // we need to catch so we can clean up the door check interval, then rethrow the error
+        // Before giving up, try to auto-clear a plant-like obstacle and retry
+        // ONCE. Handles common swamp/jungle stuck cases (mangrove propagule,
+        // dense ferns, vines). autoBreakStuckPlant respects spawn protection.
+        const errMsg = err?.message || '';
+        const isStuckError = /Path was stopped|no path|goal was changed|could not be completed/i.test(errMsg);
+        if (isStuckError) {
+            try {
+                const broke = await autoBreakStuckPlant(bot);
+                if (broke) {
+                    log(bot, `Broke a blocking plant and retrying path.`);
+                    const retryInterval = startDoorInterval(bot);
+                    try {
+                        await bot.pathfinder.goto(goal);
+                        clearInterval(retryInterval);
+                        return true;
+                    } catch (retryErr) {
+                        clearInterval(retryInterval);
+                        // Fall through — rethrow the original error with a note
+                    }
+                }
+            } catch (breakErr) {
+                console.warn(`[goToGoal] autoBreakStuckPlant failed: ${breakErr.message}`);
+            }
+        }
         throw err;
     }
 }
