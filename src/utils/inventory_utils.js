@@ -87,6 +87,52 @@ const STACK_CAPS = new Map([
     ['quartz', 64],
 ]);
 
+// Tiered items — tools, weapons, and armor that exist in a fixed quality hierarchy.
+//
+// Purpose: replace the per-item "tools/weapons/armor are all KEEP_ALWAYS tier 5"
+// rule with a tier-aware classifier. When the bot owns multiple tiers of the
+// same role (e.g., wooden + stone + iron pickaxe), only the best-tier instances
+// stay protected; lower-tier instances become tier 1 junk and are discarded by
+// autoDiscardAllJunk.
+//
+// Each role's array is ordered BEST → WORST. "Best" = has highest index 0.
+// The bot is considered to "own" a tier if inventory total for that name > 0;
+// durability and count are not consulted.
+//
+// Caveats intentionally not solved (document, don't code around):
+//   - Durability ignored: a 1-use iron_pickaxe still beats a freshly-crafted
+//     wooden one. Practically fine — bots craft replacements when tools break,
+//     and recoverWrongTool handles the no-tool case.
+//   - Enchantments ignored: an Efficiency V wooden_pickaxe would be classified
+//     as junk if plain iron exists. Edge case for gemma-4 (no enchanting yet).
+//   - Non-tiered tools (bow, crossbow, shield, fishing_rod, flint_and_steel,
+//     shears) are handled elsewhere — bow/shield/flint_and_steel via
+//     SINGLETON_KEEPS; crossbow/fishing_rod/shears remain unlimited in
+//     KEEP_ALWAYS.
+//
+// Inclusion rationale:
+//   - Chainmail: rare (loot/trade only, uncraftable) but present in vanilla.
+//     Ranked below iron (matches protection-point hierarchy), above golden.
+//   - Golden: mediocre durability but present in vanilla. Included so the bot
+//     doesn't hoard golden pickaxes when better tiers exist.
+//   - Hoes: seldom crafted by a survival bot but MC supports them. Included
+//     for consistency.
+const TIERED_ITEMS = {
+    pickaxe:    ['netherite_pickaxe',    'diamond_pickaxe',    'iron_pickaxe',    'stone_pickaxe',    'wooden_pickaxe',    'golden_pickaxe'],
+    axe:        ['netherite_axe',        'diamond_axe',        'iron_axe',        'stone_axe',        'wooden_axe',        'golden_axe'],
+    shovel:     ['netherite_shovel',     'diamond_shovel',     'iron_shovel',     'stone_shovel',     'wooden_shovel',     'golden_shovel'],
+    hoe:        ['netherite_hoe',        'diamond_hoe',        'iron_hoe',        'stone_hoe',        'wooden_hoe',        'golden_hoe'],
+    sword:      ['netherite_sword',      'diamond_sword',      'iron_sword',      'stone_sword',      'wooden_sword',      'golden_sword'],
+    helmet:     ['netherite_helmet',     'diamond_helmet',     'iron_helmet',     'chainmail_helmet',     'golden_helmet',     'leather_helmet'],
+    chestplate: ['netherite_chestplate', 'diamond_chestplate', 'iron_chestplate', 'chainmail_chestplate', 'golden_chestplate', 'leather_chestplate'],
+    leggings:   ['netherite_leggings',   'diamond_leggings',   'iron_leggings',   'chainmail_leggings',   'golden_leggings',   'leather_leggings'],
+    boots:      ['netherite_boots',      'diamond_boots',      'iron_boots',      'chainmail_boots',      'golden_boots',      'leather_boots'],
+};
+
+// Flat set of every name that appears in any TIERED_ITEMS role, built once at
+// module load for fast membership check in the snapshot/label helpers.
+const TIERED_ITEM_NAMES = new Set(Object.values(TIERED_ITEMS).flat());
+
 // Beds are interchangeable across color variants — keep 1 of any, rest are junk.
 const BED_GROUP = new Set([
     'bed',                  // generic / plain
@@ -106,23 +152,21 @@ const SHULKER_BOXES = [
     'brown_shulker_box', 'green_shulker_box', 'red_shulker_box', 'black_shulker_box',
 ];
 
-// Items the bot should NEVER discard (high value)
-// NOTE: lava_bucket and chest were removed 2026-04-15 — both are now tier 1 junk.
-// Items in SINGLETON_KEEPS / STACK_CAPS / BED_GROUP take precedence over KEEP_ALWAYS
-// via snapshotInventory, so duplicates here are safe.
+// Items the bot should NEVER discard (high value).
+//
+// Tools, weapons, and armor used to live here — they were moved to TIERED_ITEMS
+// in 2026-04-15's #11 commit, where snapshotInventory now protects only the best
+// tier the bot owns per role and treats lower tiers as tier 1 junk.
+//
+// Non-tiered tools (bow, crossbow, shield, fishing_rod, flint_and_steel, shears)
+// stay here. Some of those also appear in SINGLETON_KEEPS — the chain in
+// snapshotInventory checks SINGLETON_KEEPS first, so "keep exactly 1" wins over
+// "keep unlimited" for items in both sets.
+//
+// Also removed 2026-04-15: lava_bucket and chest, both now tier 1 junk.
 const KEEP_ALWAYS = new Set([
-    // Tools & weapons
-    'diamond_sword', 'diamond_pickaxe', 'diamond_axe', 'diamond_shovel', 'diamond_hoe',
-    'iron_sword', 'iron_pickaxe', 'iron_axe', 'iron_shovel',
-    'stone_sword', 'stone_pickaxe', 'stone_axe', 'stone_shovel',
-    'wooden_pickaxe', 'wooden_axe', 'wooden_sword', 'wooden_shovel',
-    'netherite_sword', 'netherite_pickaxe', 'netherite_axe', 'netherite_shovel',
-    'bow', 'crossbow', 'shield', 'fishing_rod', 'flint_and_steel',
-    // Armor
-    'diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots',
-    'iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots',
-    'netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots',
-    'golden_helmet', 'golden_chestplate', 'golden_leggings', 'golden_boots',
+    // Non-tiered tools & weapons — no quality hierarchy, so unlimited is fine
+    'bow', 'crossbow', 'shield', 'fishing_rod', 'flint_and_steel', 'shears',
     // Precious resources
     'diamond', 'emerald', 'gold_ingot', 'iron_ingot', 'raw_iron', 'raw_gold',
     'lapis_lazuli', 'redstone', 'ender_pearl', 'blaze_rod', 'nether_star',
@@ -292,17 +336,69 @@ function getItemValue(itemName, goalProtected = new Set()) {
 }
 
 /**
+ * Given inventory totals and the bot's best-owned tier per role, classify a
+ * single item by tier.
+ *
+ * Returns { isJunk: true } when `name` is a lower-tier entry in a role where
+ * the bot owns at least one higher-tier item. Returns { isJunk: false } when
+ * `name` is the best tier the bot owns in its role (or tied, if multiple
+ * tiers shouldn't happen since tiers are unique names). Returns `null` when
+ * `name` isn't a tiered item at all — caller falls through to next check.
+ *
+ * @param {string} name - Inventory item name (e.g., "stone_pickaxe")
+ * @param {Object<string, number>} bestTierPerRole - Role → best tier index
+ *   (0 = best available in bot's inventory). Built by _computeBestTierPerRole.
+ * @returns {{isJunk: boolean, role: string} | null}
+ */
+function classifyByTier(name, bestTierPerRole) {
+    if (!TIERED_ITEM_NAMES.has(name)) return null;
+    for (const [role, tierList] of Object.entries(TIERED_ITEMS)) {
+        const idx = tierList.indexOf(name);
+        if (idx === -1) continue;
+        const bestIdx = bestTierPerRole[role];
+        // bestIdx being undefined means the bot doesn't own ANY item in this
+        // role — impossible when `name` itself is in this role and has total>0,
+        // but guard anyway. Treat as "not junk" so we don't accidentally discard.
+        if (bestIdx === undefined) return { isJunk: false, role };
+        return { isJunk: idx > bestIdx, role };
+    }
+    return null;
+}
+
+/**
+ * Scan totals and determine, for each role in TIERED_ITEMS, the index of the
+ * best tier the bot currently owns (lower index = better). Roles where the
+ * bot owns nothing are omitted.
+ *
+ * @param {Object<string, number>} totals - Aggregated inventory counts
+ * @returns {Object<string, number>} role → best tier index
+ */
+function _computeBestTierPerRole(totals) {
+    const best = {};
+    for (const [role, tierList] of Object.entries(TIERED_ITEMS)) {
+        for (let i = 0; i < tierList.length; i++) {
+            if ((totals[tierList[i]] || 0) > 0) {
+                best[role] = i;
+                break;
+            }
+        }
+    }
+    return best;
+}
+
+/**
  * Walk the bot's inventory and return { name -> { total, discardable, value } }.
  *   - `total`: total count across all stacks.
  *   - `discardable`: count the bot can safely dispose. Depends on limit rules:
  *       * SINGLETON_KEEPS (keep 1)  → discardable = total - 1
  *       * BED_GROUP (keep 1 across all colors)  → keeper color discardable = total-1, other colors = total
  *       * STACK_CAPS (keep up to cap)  → discardable = max(0, total - cap)
+ *       * TIERED_ITEMS (keep best-tier owned)  → lower-tier discardable = total, best-tier not in snapshot
  *       * default  → discardable = total
- *   - `value`: effective tier. Capped/singleton/bed extras are forced to tier 1
- *     (junk); everything else uses getItemValue.
+ *   - `value`: effective tier. Capped/singleton/bed/lower-tier-tool extras are
+ *     forced to tier 1 (junk); everything else uses getItemValue.
  *
- * Priority of checks: SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue.
+ * Priority of checks: SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > TIERED_ITEMS > getItemValue.
  * Entries where `discardable <= 0` are omitted from the snapshot — those items
  * are fully protected.
  *
@@ -316,6 +412,9 @@ function snapshotInventory(bot, goalProtected) {
         if (!totals[slot.name]) totals[slot.name] = 0;
         totals[slot.name] += slot.count;
     }
+
+    // Precompute best-owned tier per role once, before per-item classification.
+    const bestTierPerRole = _computeBestTierPerRole(totals);
 
     const snapshot = {};
     // BED_GROUP: first bed color encountered with total > 0 is the keeper;
@@ -354,7 +453,17 @@ function snapshotInventory(bot, goalProtected) {
             continue;
         }
 
-        // 4. Default — classification via getItemValue
+        // 4. Tiered items (tools/weapons/armor) — keep only best tier owned
+        const tiered = classifyByTier(name, bestTierPerRole);
+        if (tiered !== null) {
+            if (tiered.isJunk) {
+                snapshot[name] = { total, discardable: total, value: 1 };
+            }
+            // else: best tier — no snapshot entry, fully protected
+            continue;
+        }
+
+        // 5. Default — classification via getItemValue
         snapshot[name] = { total, discardable: total, value: getItemValue(name, goalProtected) };
     }
     return snapshot;
@@ -494,15 +603,22 @@ export async function autoDiscardAllJunk(bot, goal = null) {
                 remaining -= toDrop;
             }
             // snapshot.discardable already accounts for SINGLETON_KEEPS / BED_GROUP
-            // / STACK_CAPS — so `item.count` is exactly what we need to drop, and
-            // the `remaining` cap guarantees we never drop below the limit regardless
-            // of how stacks are split across inventory slots.
-            const isLimited = SINGLETON_KEEPS.has(item.name)
-                || BED_GROUP.has(item.name)
-                || STACK_CAPS.has(item.name);
-            const label = isLimited
-                ? `${item.count} extra ${item.name}`
-                : `${item.count} ${item.name}`;
+            // / STACK_CAPS / TIERED_ITEMS — so `item.count` is exactly what we need
+            // to drop, and the `remaining` cap guarantees we never drop below the
+            // limit regardless of how stacks are split across inventory slots.
+            //
+            // Three label categories, distinguishable at a glance in logs:
+            //   "N lower-tier X"  — X is an inferior tier, better exists in inventory
+            //   "N extra X"       — X hit a SINGLETON_KEEPS / BED_GROUP / STACK_CAPS cap
+            //   "N X"             — X is plain tier 0/1 junk (ores, bulk stone, etc.)
+            let label;
+            if (TIERED_ITEM_NAMES.has(item.name)) {
+                label = `${item.count} lower-tier ${item.name}`;
+            } else if (SINGLETON_KEEPS.has(item.name) || BED_GROUP.has(item.name) || STACK_CAPS.has(item.name)) {
+                label = `${item.count} extra ${item.name}`;
+            } else {
+                label = `${item.count} ${item.name}`;
+            }
             discarded.push(label);
             markDiscarded();
         } catch (e) {
