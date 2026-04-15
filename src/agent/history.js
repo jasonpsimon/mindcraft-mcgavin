@@ -46,7 +46,8 @@ export class History {
     }
 
     async summarizeMemories(turns) {
-        // Store in episodic memory (non-lossy, vector-embedded)
+        // Store in episodic memory (non-lossy, vector-embedded).
+        // This is the real memory capture — it runs unconditionally.
         try {
             const currentGoal = this.agent.self_prompter?.isStopped?.()
                 ? null : this.agent.self_prompter?.prompt;
@@ -55,16 +56,24 @@ export class History {
             console.warn('[History] Episodic memory storage failed:', err.message);
         }
 
-        // Also maintain legacy summary for backwards compatibility with $MEMORY placeholder
-        console.log("Storing memories...");
-        this.memory = await this.agent.prompter.promptMemSaving(turns);
+        // Legacy 500-char freeform summary — upstream kolbytn/mindcraft behavior.
+        // When ContextBuilder is on (mcgavin default), conversation prompts route
+        // through episodic + long-term memory at priority 6 and never read
+        // `history.memory`. The coding template had $MEMORY removed as part of
+        // the D1 deprecation (2026-04-15), so nothing reads this value anymore.
+        // Skip the LLM call entirely when CB is enabled — saves one inference per
+        // 5 turns and eliminates the "Memory truncated to 500 chars" warning.
+        if (!settings.use_context_builder) {
+            console.log("Storing memories (legacy summary path)...");
+            this.memory = await this.agent.prompter.promptMemSaving(turns);
 
-        if (this.memory.length > 500) {
-            this.memory = this.memory.slice(0, 500);
-            this.memory += '...(Memory truncated to 500 chars. Compress it more next time)';
+            if (this.memory.length > 500) {
+                this.memory = this.memory.slice(0, 500);
+                this.memory += '...(Memory truncated to 500 chars. Compress it more next time)';
+            }
+
+            console.log("Memory updated to: ", this.memory);
         }
-
-        console.log("Memory updated to: ", this.memory);
     }
 
     async appendFullHistory(to_store) {
