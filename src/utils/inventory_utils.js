@@ -19,6 +19,24 @@ export function isDiscardCooldownActive() {
 }
 
 
+// Wood-type convenience lists. Covers every plank / log / sapling variant up
+// through MC 1.21 (oak, birch, spruce, dark_oak, jungle, acacia, mangrove,
+// cherry, bamboo, pale_oak). Mangrove uses "propagule" instead of "sapling".
+const ALL_PLANKS = [
+    'oak_planks', 'birch_planks', 'spruce_planks', 'dark_oak_planks',
+    'jungle_planks', 'acacia_planks', 'mangrove_planks', 'cherry_planks',
+    'bamboo_planks', 'pale_oak_planks',
+];
+const ALL_LOGS = [
+    'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log',
+    'jungle_log', 'acacia_log', 'mangrove_log', 'cherry_log', 'pale_oak_log',
+];
+const ALL_SAPLINGS = [
+    'oak_sapling', 'birch_sapling', 'spruce_sapling', 'dark_oak_sapling',
+    'jungle_sapling', 'acacia_sapling', 'cherry_sapling', 'pale_oak_sapling',
+    'mangrove_propagule',
+];
+
 // Items the bot should NEVER discard (high value)
 const KEEP_ALWAYS = new Set([
     // Tools & weapons
@@ -41,16 +59,19 @@ const KEEP_ALWAYS = new Set([
     'torch', 'bed', 'red_bed', 'cyan_bed',
 ]);
 
-// Goal keyword → items that become protected when that keyword is in the goal
+// Goal keyword → items that become protected when that keyword is in the goal.
+// Items already in KEEP_ALWAYS (crafting_table, furnace, chest, torch, buckets,
+// bed, precious resources) are always protected regardless of goal — listing
+// them here is explicit/defensive, not required.
 const GOAL_ITEM_MAP = {
     // Building materials
-    'build': ['cobblestone', 'stone', 'oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'glass', 'brick', 'sandstone'],
-    'house': ['cobblestone', 'stone', 'oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'glass', 'oak_door', 'oak_fence'],
-    'shelter': ['cobblestone', 'stone', 'oak_planks', 'oak_log', 'dirt'],
-    'stone': ['cobblestone', 'stone', 'smooth_stone', 'andesite', 'diorite', 'granite'],
+    'build': ['cobblestone', 'stone', ...ALL_PLANKS, ...ALL_LOGS, 'glass', 'brick', 'sandstone', 'crafting_table'],
+    'house': ['cobblestone', 'stone', ...ALL_PLANKS, ...ALL_LOGS, 'glass', 'oak_door', 'oak_fence', 'crafting_table', 'furnace', 'bed', 'torch'],
+    'shelter': ['cobblestone', 'stone', ...ALL_PLANKS, ...ALL_LOGS, 'dirt', 'crafting_table', 'torch'],
+    'stone': ['cobblestone', 'stone', 'smooth_stone', 'andesite', 'diorite', 'granite', 'tuff'],
     'wall': ['cobblestone', 'stone', 'deepslate', 'cobbled_deepslate', 'brick'],
-    'bridge': ['cobblestone', 'stone', 'oak_planks'],
-    'tower': ['cobblestone', 'stone', 'oak_planks', 'ladder'],
+    'bridge': ['cobblestone', 'stone', ...ALL_PLANKS],
+    'tower': ['cobblestone', 'stone', ...ALL_PLANKS, 'ladder'],
     'castle': ['cobblestone', 'stone', 'stone_bricks', 'deepslate', 'cobbled_deepslate'],
     'farm': ['dirt', 'wheat', 'wheat_seeds', 'bone_meal', 'oak_fence', 'water_bucket'],
     'garden': ['dirt', 'grass_block', 'flower_pot', 'bone_meal'],
@@ -64,27 +85,27 @@ const GOAL_ITEM_MAP = {
     // Combat & survival
     'fight': ['arrow', 'string', 'bone', 'gunpowder', 'flint'],
     'combat': ['arrow', 'string', 'bone', 'gunpowder', 'flint'],
-    'survive': ['coal', 'torch', 'cooked_beef', 'cooked_porkchop', 'bread', 'cobblestone'],
-    'food': ['wheat', 'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'egg'],
-    'cook': ['coal', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton'],
+    'survive': ['coal', 'torch', 'cooked_beef', 'cooked_porkchop', 'bread', 'cobblestone', 'crafting_table', 'furnace'],
+    'food': ['wheat', 'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'egg', 'furnace'],
+    'cook': ['coal', 'charcoal', 'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton', 'furnace'],
 
     // Crafting & tools
-    'craft': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot'],
-    'tool': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
-    'pickaxe': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
-    'sword': ['oak_planks', 'stick', 'oak_log', 'cobblestone', 'iron_ingot', 'diamond'],
-    'armor': ['iron_ingot', 'diamond', 'leather', 'gold_ingot'],
-    'smelt': ['coal', 'charcoal', 'raw_iron', 'raw_gold', 'raw_copper', 'cobblestone'],
-    'furnace': ['cobblestone', 'coal', 'charcoal'],
+    'craft': [...ALL_PLANKS, 'stick', ...ALL_LOGS, 'cobblestone', 'iron_ingot', 'crafting_table'],
+    'tool':  [...ALL_PLANKS, 'stick', ...ALL_LOGS, 'cobblestone', 'iron_ingot', 'diamond', 'crafting_table'],
+    'pickaxe': [...ALL_PLANKS, 'stick', ...ALL_LOGS, 'cobblestone', 'iron_ingot', 'diamond', 'crafting_table'],
+    'sword': [...ALL_PLANKS, 'stick', ...ALL_LOGS, 'cobblestone', 'iron_ingot', 'diamond', 'crafting_table'],
+    'armor': ['iron_ingot', 'diamond', 'leather', 'gold_ingot', 'crafting_table'],
+    'smelt': ['coal', 'charcoal', 'raw_iron', 'raw_gold', 'raw_copper', 'cobblestone', 'furnace'],
+    'furnace': ['cobblestone', 'coal', 'charcoal', 'furnace'],
 
     // Mining
-    'mine': ['torch', 'coal', 'cobblestone', 'oak_planks', 'stick'],
-    'diamond': ['iron_ingot', 'torch', 'coal', 'cobblestone', 'oak_planks', 'stick', 'water_bucket'],
-    'iron': ['cobblestone', 'coal', 'torch', 'stick', 'oak_planks'],
+    'mine': ['torch', 'coal', 'cobblestone', ...ALL_PLANKS, 'stick', 'crafting_table', 'furnace'],
+    'diamond': ['iron_ingot', 'torch', 'coal', 'cobblestone', ...ALL_PLANKS, 'stick', 'water_bucket', 'crafting_table', 'furnace'],
+    'iron': ['cobblestone', 'coal', 'torch', 'stick', ...ALL_PLANKS, 'crafting_table', 'furnace'],
 
     // Redstone
-    'redstone': ['redstone', 'cobblestone', 'stick', 'torch'],
-    'piston': ['cobblestone', 'redstone', 'iron_ingot', 'oak_planks'],
+    'redstone': ['redstone', 'cobblestone', 'stick', 'torch', 'crafting_table'],
+    'piston': ['cobblestone', 'redstone', 'iron_ingot', ...ALL_PLANKS, 'crafting_table'],
 
     // Decoration
     'decorate': ['flower_pot', 'amethyst_block', 'calcite', 'dripstone_block'],
@@ -112,6 +133,11 @@ function getGoalProtectedItems(goal) {
 
 // Lower score = more discardable
 function getItemValue(itemName, goalProtected = new Set()) {
+    // Tier 5: KEEP_ALWAYS always wins — check FIRST so goal-protection never
+    // downgrades a never-discard item from 5 to 4. (Value 4 items can still
+    // appear in getDiscardSuggestions as last-resort candidates.)
+    if (KEEP_ALWAYS.has(itemName)) return 5;
+
     // If the goal needs this item, bump it to "valuable"
     if (goalProtected.has(itemName)) return 4;
 
@@ -120,40 +146,56 @@ function getItemValue(itemName, goalProtected = new Set()) {
         'rotten_flesh', 'poisonous_potato', 'spider_eye',
     ].includes(itemName)) return 0;
 
-    // Tier 1: Bulk stone & common blocks — usually junk
+    // Tier 1: Bulk stone/soil & common bulk blocks — usually junk
     if ([
-        'cobblestone', 'andesite', 'diorite', 'granite', 'tuff',
-        'cobbled_deepslate', 'deepslate', 'netherrack', 'basalt', 'smooth_basalt',
-        'blackstone', 'dirt', 'gravel', 'sand', 'mud', 'clay_ball',
-        'dripstone_block', 'calcite', 'mossy_cobblestone',
+        // Cobblestone / igneous
+        'cobblestone', 'mossy_cobblestone',
+        'andesite', 'diorite', 'granite', 'tuff',
+        // Deepslate family
+        'deepslate', 'cobbled_deepslate',
+        // Nether stone
+        'netherrack', 'basalt', 'smooth_basalt', 'blackstone', 'magma_block',
+        'soul_sand', 'soul_soil',
+        // Sandstone family
+        'sandstone', 'red_sandstone',
+        // End
+        'end_stone',
+        // Ocean-monument bulk
+        'prismarine', 'prismarine_bricks', 'dark_prismarine',
+        // Soil variants (collected with shovel — harmless to discard)
+        'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
+        // Loose ground / clay
+        'gravel', 'sand', 'red_sand', 'mud', 'clay_ball',
+        // Cave-decorative bulk
+        'dripstone_block', 'calcite',
+        // Badlands
+        'terracotta',
     ].includes(itemName)) return 1;
 
     // Tier 2: Common drops & basic materials
     if ([
         'string', 'bone', 'arrow', 'gunpowder', 'feather', 'ink_sac',
         'egg', 'leather', 'flint', 'snowball', 'vine',
-        'oak_sapling', 'birch_sapling', 'spruce_sapling', 'jungle_sapling',
+        ...ALL_SAPLINGS,
         'oak_leaves', 'flower_pot', 'oak_fence',
         'amethyst_block', 'amethyst_shard',
     ].includes(itemName)) return 2;
 
     // Tier 3: Useful but not critical
     if ([
-        'oak_planks', 'birch_planks', 'spruce_planks', 'stick',
-        'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'jungle_log',
+        ...ALL_PLANKS, 'stick',
+        ...ALL_LOGS,
         'coal', 'charcoal', 'wheat', 'bread',
         'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton',
         'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
     ].includes(itemName)) return 3;
 
-    // Tier 4: Valuable materials
+    // Tier 4: Valuable materials (note: raw_iron/gold/copper/ingots also in
+    //   KEEP_ALWAYS so they'll return 5 earlier. Kept here for clarity.)
     if ([
         'iron_ingot', 'raw_iron', 'gold_ingot', 'raw_gold',
         'redstone', 'lapis_lazuli', 'copper_ingot', 'raw_copper',
     ].includes(itemName)) return 4;
-
-    // Tier 5: Never discard
-    if (KEEP_ALWAYS.has(itemName)) return 5;
 
     // Default: medium value (unknown items get benefit of the doubt)
     return 2;

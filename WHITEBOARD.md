@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (inventory drain-all-junk landed; fewer SafeToss cycles during targeted collects)_
+_Last updated: 2026-04-15 (inventory classification expanded — all wood types, more stone/soil variants, KEEP_ALWAYS ordering fix)_
 
 ---
 
@@ -150,6 +150,20 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — Inventory classification overhaul (wood coverage, junk coverage, ordering) ✅
+
+Three follow-on fixes to `src/utils/inventory_utils.js` after the drain-all-junk landing.
+
+**1. KEEP_ALWAYS ordering bug.** `getItemValue` checked `goalProtected` before `KEEP_ALWAYS`, which meant items in both sets (e.g., `crafting_table` during a "craft" goal, `torch` during a "mine" goal) were downgraded from value=5 (never discard) to value=4 (last-resort discardable — `getDiscardSuggestions` filters `< 5`). Fix: check KEEP_ALWAYS first. Value 4 goal-protected items can still appear as last-resort discards as designed; value 5 KEEP_ALWAYS items truly never do.
+
+**2. All wood types protected.** Introduced `ALL_PLANKS`, `ALL_LOGS`, `ALL_SAPLINGS` constants covering every MC 1.21 wood variant (oak, birch, spruce, dark_oak, jungle, acacia, mangrove, cherry, bamboo, pale_oak — mangrove uses `propagule` instead of `sapling`). `GOAL_ITEM_MAP` entries that previously listed only oak/birch/spruce now use `...ALL_PLANKS` / `...ALL_LOGS`, so a birch-forest bot with a "craft tools" goal no longer loses its birch_planks when AutoRecovery drains. Tier 3 plank/log list and tier 2 sapling list updated to match.
+
+**3. Explicit crafting_table/furnace in GOAL_ITEM_MAP.** Already in KEEP_ALWAYS tier 5, but explicitly listed under goals that need them (`craft`, `tool`, `pickaxe`, `sword`, `armor`, `smelt`, `furnace`, `house`, `shelter`, `survive`, `food`, `cook`, `mine`, `iron`, `diamond`, `build`) for defense-in-depth and readability.
+
+**4. Tier 1 junk expanded** to cover biome-specific bulk blocks that were previously unclassified (defaulting to value=2, which autoDiscardAllJunk doesn't drain): `magma_block`, `soul_sand`, `soul_soil`, `sandstone`, `red_sandstone`, `red_sand`, `end_stone`, `prismarine`, `prismarine_bricks`, `dark_prismarine`, `coarse_dirt`, `rooted_dirt`, `podzol`, `mycelium`, `terracotta`. Bot in a desert, nether, end, or ocean-monument biome now correctly treats the local bulk blocks as disposable.
+
+Net effect: classification now matches intuition across every vanilla biome and wood type. During any goal-driven work, goal-relevant items (including all wood variants and utility blocks) are preserved, and junk (including biome-specific bulk) drains cleanly in a single pass.
 
 ### 2026-04-15 — Drain-all-junk disposal (SafeToss loop reduction) ✅
 
