@@ -528,13 +528,34 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             
             return movements.safeToBreak(block) || unsafeBlocks.includes(block.name);
-        }, 64, 1);
+        }, 64, 8);
+
+        // #7 ProtectedZone enforcement: filter out any candidates inside a
+        // protected zone (spawn / manual structure / auto-detected village).
+        // Without this, collectBlock would dig grass_block/dirt/ore in spawn
+        // via bot.dig or bot.collectBlock.collect — both bypass breakBlockAt.
+        // Regression observed 2026-04-15: bot broke grass_block in spawn.
+        const totalFound = blocks.length;
+        blocks = blocks.filter(b => {
+            const p = b.position || b;
+            return !_isInAnyProtectedZone(bot, p.x, p.y, p.z);
+        });
+        const filtered = totalFound - blocks.length;
+        if (filtered > 0) {
+            console.log(`[ProtectedZone] collectBlock filtered ${filtered} candidate ${blockType} block(s) inside protected zones`);
+        }
 
         if (blocks.length === 0) {
-            if (collected === 0)
+            if (totalFound > 0 && filtered === totalFound) {
+                // All candidates were in protected zones — actionable error for the
+                // LLM. Wording matches the AutoRecovery `inside_protected_zone`
+                // regex so the bot will auto-escape the nearest zone and retry.
+                log(bot, `All ${totalFound} nearby ${blockType} are inside protected zones (near spawn, protected structure, or village). Move further away and try again.`);
+            } else if (collected === 0) {
                 log(bot, `No ${blockType} nearby to collect.`);
-            else
+            } else {
                 log(bot, `No more ${blockType} nearby to collect.`);
+            }
             break;
         }
         const block = blocks[0];
