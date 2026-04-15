@@ -19,7 +19,7 @@ _Last updated: 2026-04-15 (Bug B fully resolved via #10 survival hardening — b
 
 ## In-progress
 
-_Nothing active — last cycle resolved Bug B via #10 survival hardening. Pick next item from the to-do queue._
+- **#4 Wrong tool for the block.** Adding `_equipBestTool` helper called before every `bot.dig`, plus `_equipBestWeapon` before every `bot.attack`. Single commit on `develop`.
 
 ---
 
