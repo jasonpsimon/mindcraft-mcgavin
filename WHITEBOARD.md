@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (bugs A + C fixed; bug B (escape plateau) now the active item)_
+_Last updated: 2026-04-15 (Bug B mystery solved via instrumentation: was death+respawn from falls. New item #10 survival hardening; first 2 pieces shipped.)_
 
 ---
 
@@ -410,6 +410,35 @@ The small LLM (gemma-4-e4b-it, ~4B params) struggles with routine decisions, con
 Not a single fix — a design principle that should be applied incrementally. Every time we catch the LLM being asked to make a routine/mechanical decision, convert it to code. Track wins here as we make them.
 
 Starting points: items #1 (tool selection), #3 (torch placement) are already in this spirit. Continue from there.
+
+---
+
+## 10. Bot survival hardening (don't die avoidably)
+
+**Status:** 🟡 partially shipped 2026-04-15 (fall prevention + auto-eat threshold) • **Priority:** high (escape and gameplay are repeatedly blocked by avoidable deaths)
+
+The bot keeps dying to easily-preventable causes — fall damage from pathfinder choosing risky drops, hunger-related health decay, mob ambushes — which respawns it at world spawn and resets its progress (this was the "mysterious teleport-back" we tracked in Bug B). Need a pattern of programmatic safety habits rather than relying on the LLM to remember.
+
+**Shipped 2026-04-15:**
+
+1. ✅ **Fall prevention.** `pf.Movements.maxDropDown` set to **3** (vanilla Minecraft no-damage limit, was default 4) on both non-destructive and destructive movements in `goToGoal`. Pathfinder will no longer choose paths with >3-block drops.
+2. ✅ **Proactive eating for health regen.** `bot.autoEat.options.startAt` bumped from **14 → 19**. Bot now eats whenever hunger < 19 (i.e., almost always), keeping hunger at 18+ so health regenerates continuously between hits. Was firing too late (after the bot was already injured AND hungry — too late to prevent fall-damage death).
+
+**Still pending (future work):**
+
+- **Lava avoidance.** Add `lava` and `magma_block` (already added) to a strict avoid list with high cost penalty. Detect `bot.entity.isInLava` and immediately swim/jump up.
+- **Mob retreat.** When bot health < 6 (3 hearts) AND a hostile mob is nearby, override current goal with `moveAway` from the mob until health regenerates.
+- **Pre-fight equip.** When `self_defense` mode fires, ensure best weapon is equipped before attacking (ties into #4 wrong tool).
+- **Suffocation escape.** Already handled by `self_preservation` mode (head-in-water jump). Could extend to detect head-in-block (sand/gravel collapse) and dig up.
+- **Dimension safety.** If bot accidentally enters Nether or End (via portal), retreat immediately — current code has no dimension awareness.
+
+**Signals to watch after shipped pieces:**
+- Death rate from fall damage drops to ~0.
+- Bot's `food` value stays at 18+ during normal play.
+- `[autoEat]` events visible in log when bot eats.
+- Escape attempts no longer get reset by fall-respawn cycles.
+
+**Why this matters:** as confirmed via Bug B instrumentation 2026-04-15, the bot's "escape plateau" was actually death-and-respawn-back-to-spawn caused by fall damage during escape walks. Survival hardening removes the death cause, which removes the respawn-loop, which lets the escape complete.
 
 ---
 

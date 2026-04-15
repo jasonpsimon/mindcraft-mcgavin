@@ -430,10 +430,13 @@ export class Agent {
             respondFunc(username, message);
         });
 
-        // Set up auto-eat
+        // Set up auto-eat. startAt bumped from 14 -> 19 (2026-04-15) so the
+        // bot keeps hunger near full, which keeps health regenerating between
+        // hits. Prior threshold of 14 meant auto-eat only fired AFTER the bot
+        // was already injured + hungry — too late to prevent fall-damage death.
         this.bot.autoEat.options = {
             priority: 'foodPoints',
-            startAt: 14,
+            startAt: 19,
             bannedFood: ["rotten_flesh", "spider_eye", "poisonous_potato", "pufferfish", "chicken"]
         };
 
