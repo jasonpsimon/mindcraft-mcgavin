@@ -291,6 +291,12 @@ The small LLM (gemma-4-e4b-it, ~4B params) struggles with routine decisions, con
 - **Food/sleep loop.** Auto-eat when hunger < threshold, auto-sleep when night and safe. No LLM involvement.
 - **Combat reflexes.** `self_defense` mode exists but relies on LLM for weapon choice. Program it: equip highest-DPS weapon, strafe, block with shield if available.
 - **Crafting plans.** Already have `getCraftingPlan`. Extend: auto-execute the plan when prerequisites are met, without LLM re-confirmation.
+- **Auto-craft basic-need items when supplies run low.** Specifically:
+  - **Torches:** when `bot.inventory` has `coal` (or `charcoal`) + `stick` and zero/low torches, auto-craft a stack. Unblocks items #5/#6 (torch placement in darkness / on digDown) which currently silent-skip whenever the bot hasn't naturally gathered torches yet.
+  - **Sticks:** when bot has `oak_planks` + low stick count.
+  - **Tools:** pickaxe/axe/shovel/sword of the best tier the bot's inventory can support (ties into #4 wrong-tool selection).
+  - Trigger on a cadence (every N seconds if idle) and gate on inventory-space availability. No LLM involvement — these are pure mechanical decisions.
+  - _(Surfaced 2026-04-14: bot had no torches to place despite #5/#6 trigger conditions firing correctly; root cause was bot hadn't crafted any. Auto-craft would have closed the loop.)_
 - **Pattern-matched chat responses.** Common greetings, acknowledgments, status queries → canned responses. Only escalate to LLM for unusual input.
 
 **Fix sketch:**
