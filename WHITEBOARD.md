@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (Cannot-smelt handler extended: FUEL + FINAL_PRODUCT branches for meta-confusion cases)_
+_Last updated: 2026-04-15 (self_preservation mutex-wait entry audited and removed; Known issues now empty)_
 
 ---
 
@@ -197,7 +197,7 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 
 ## Known issues (deferred — out of scope for current to-do)
 
-- **`self_preservation` mode now waits on the bot mutex in routine paths.** `interrupts: ['all']` modes already bypass mutex (commit `97c03fd`); the trade-off is preserved. Edge cases (drowning during a long SafeToss) could still be delayed by a few seconds. Acceptable for now.
+_Empty. All prior entries either shipped as fixes or migrated into more accurate to-do items. Add new entries here only when a current concern can't yet be addressed._
 
 ---
 
@@ -216,6 +216,18 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — `self_preservation` mutex-wait Known Issue audited and closed ✅
+
+Revisited the Known Issues entry stating self_preservation reflexes could be delayed by the bot mutex. Code audit + log review found it stale:
+
+- **Drowning** now uses synchronous `bot.setControlState('jump', true)` in the update tick — no `execute()`, no mutex. Fixed in an earlier drowning-bug correction.
+- **Sand/gravel head-cover, lava/fire, low-health flee** all go through `execute()` where `interrupts: ['all']` bypasses the mutex at `src/agent/modes.js:328`.
+- **Inner skills** invoked by self_preservation (`moveAway`, `placeBlock`, `goToPosition`) don't acquire the mutex themselves. Only 5 skills do (`safeToss`, `autoBreakStuckPlant`, `escapeSpawnZone`, `digDown`, `placeTorchAt`), none reachable from self_preservation paths.
+
+Log review of ~168 history files across the last ~10 hours: zero deaths attributable to mutex-delayed self_preservation. Deaths observed were combat (melee + ranged — tracked under #10 Layer 2) and suffocation (also #10 Layer 2, not yet coded). No drowning, lava, or fall deaths.
+
+Outcome: removed from Known Issues (not "acceptable" — obsolete). Known Issues section now empty.
 
 ### 2026-04-15 — AutoRecovery `Cannot smelt <target>` handler ✅
 
