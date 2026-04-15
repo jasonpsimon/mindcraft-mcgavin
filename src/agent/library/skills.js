@@ -1284,6 +1284,236 @@ export function loadPlayerStructures(bot) {
     return loaded;
 }
 
+// ====================================================================
+// #7 Village auto-detection (2026-04-15)
+//
+// Detects active and abandoned villages near the bot and auto-registers
+// them as protected zones with type: 'village'. Three independent signals;
+// any of them triggers registration. Union keeps the detector robust to
+// raided/abandoned villages (no villagers left), lost bells, or unusual
+// village layouts.
+//
+// Signal 1 — villager entities: ≥3 villagers clustered within
+//   VILLAGE_CLUSTER_RADIUS of each other. Catches active villages.
+// Signal 2 — profession workstation blocks: ≥3 of the workstation list
+//   clustered within VILLAGE_CLUSTER_RADIUS. Catches abandoned villages
+//   where villagers died/were converted.
+// Signal 3 — bell blocks: any bell within VILLAGE_SCAN_RADIUS is treated
+//   as a village anchor. Bells are village-exclusive in vanilla.
+//
+// Zone registered as:
+//   { name: 'village_<x>_<z>', type: 'village', x, z,
+//     radius: VILLAGE_PROTECT_RADIUS,
+//     yMin: centerY - VILLAGE_Y_BELOW,
+//     yMax: centerY + VILLAGE_Y_ABOVE }
+// yMin/yMax computed from the signal center's Y, so deep-mining below
+// and high-building above the village aren't blocked.
+//
+// Dedup: before appending a new zone, check existing bot.protectedZones;
+// if any zone's XZ center is within VILLAGE_DEDUP_RADIUS of the proposed
+// center, skip the add (same village, or covered by a larger manual zone).
+// ====================================================================
+
+// Scan parameters (tuned per JP 2026-04-15)
+const VILLAGE_SCAN_RADIUS = 128;       // how far to look for entities/blocks
+const VILLAGE_CLUSTER_RADIUS = 32;     // how close signals must be to count as one village
+const VILLAGE_PROTECT_RADIUS = 100;    // protected XZ radius (200x200 box)
+const VILLAGE_Y_BELOW = 20;            // yMin = centerY - this
+const VILLAGE_Y_ABOVE = 30;            // yMax = centerY + this
+const VILLAGE_MIN_SIGNALS = 3;         // villagers or workstations needed (bell alone also triggers)
+const VILLAGE_DEDUP_RADIUS = 50;       // skip registration if existing zone is within this XZ
+
+// Profession workstation blocks that strongly indicate a village.
+// Excluded: brewing_stand (too common in player bases), smithing_table (players
+// use it for netherite), cauldron (also a player-base item). The included list
+// covers workstations that rarely cluster outside villages.
+const VILLAGE_WORKSTATIONS = [
+    'bell', 'composter', 'smoker', 'loom', 'cartography_table',
+    'blast_furnace', 'grindstone', 'fletching_table',
+    'lectern', 'stonecutter',
+];
+
+/**
+ * Cluster a list of {x, y, z} positions by proximity. Returns an array of
+ * clusters; each cluster has {positions, centerX, centerY, centerZ, count}.
+ * Two positions belong to the same cluster if their XZ distance ≤ radius.
+ * Greedy single-pass — good enough for our small N (tens, not thousands).
+ */
+function _clusterPositions(positions, radius) {
+    const clusters = [];
+    for (const p of positions) {
+        let joined = false;
+        for (const c of clusters) {
+            const dx = p.x - c.centerX;
+            const dz = p.z - c.centerZ;
+            if (dx * dx + dz * dz <= radius * radius) {
+                c.positions.push(p);
+                // Running average of center
+                c.centerX = (c.centerX * c.count + p.x) / (c.count + 1);
+                c.centerY = (c.centerY * c.count + p.y) / (c.count + 1);
+                c.centerZ = (c.centerZ * c.count + p.z) / (c.count + 1);
+                c.count++;
+                joined = true;
+                break;
+            }
+        }
+        if (!joined) {
+            clusters.push({
+                positions: [p],
+                centerX: p.x, centerY: p.y, centerZ: p.z,
+                count: 1,
+            });
+        }
+    }
+    return clusters;
+}
+
+/**
+ * True if the bot already has a zone covering (x, z) within VILLAGE_DEDUP_RADIUS.
+ * Prevents duplicate registrations across periodic scans and across signal types.
+ */
+function _villageAlreadyRegistered(bot, x, z) {
+    if (!Array.isArray(bot.protectedZones)) return false;
+    for (const zone of bot.protectedZones) {
+        const dx = x - zone.x;
+        const dz = z - zone.z;
+        if (dx * dx + dz * dz <= VILLAGE_DEDUP_RADIUS * VILLAGE_DEDUP_RADIUS) return true;
+    }
+    return false;
+}
+
+/**
+ * Build a zone object from a detected village center and a source label.
+ * Extracted so all three detection signals produce identical zone shapes.
+ */
+function _villageZoneFromCenter(x, y, z, source) {
+    const xi = Math.round(x);
+    const yi = Math.round(y);
+    const zi = Math.round(z);
+    return {
+        name: `village_${xi}_${zi}`,
+        type: 'village',
+        source, // 'villagers' | 'workstations' | 'bell' — diagnostic, not required downstream
+        x: xi,
+        z: zi,
+        radius: VILLAGE_PROTECT_RADIUS,
+        yMin: yi - VILLAGE_Y_BELOW,
+        yMax: yi + VILLAGE_Y_ABOVE,
+    };
+}
+
+/**
+ * Detect nearby villages via three independent signals and register them to
+ * bot.protectedZones. Called at startup and periodically from agent.js.
+ *
+ * Safe to call repeatedly — dedup prevents duplicates. Returns the number of
+ * zones newly added on this invocation (0 if no new villages detected).
+ *
+ * Read-only with respect to the world — only reads entities and blocks,
+ * never places or mines anything.
+ */
+function detectNearbyVillages(bot) {
+    if (!Array.isArray(bot.protectedZones)) bot.protectedZones = [];
+    let added = 0;
+
+    // Signal 1 — villager entities
+    try {
+        const villagerPositions = [];
+        for (const e of Object.values(bot.entities || {})) {
+            if (!e || !e.position) continue;
+            if (e.name === 'villager' || e.type === 'villager') {
+                const p = e.position;
+                if (bot.entity?.position?.distanceTo?.(p) > VILLAGE_SCAN_RADIUS) continue;
+                villagerPositions.push({ x: p.x, y: p.y, z: p.z });
+            }
+        }
+        const villagerClusters = _clusterPositions(villagerPositions, VILLAGE_CLUSTER_RADIUS);
+        for (const c of villagerClusters) {
+            if (c.count < VILLAGE_MIN_SIGNALS) continue;
+            if (_villageAlreadyRegistered(bot, c.centerX, c.centerZ)) continue;
+            const zone = _villageZoneFromCenter(c.centerX, c.centerY, c.centerZ, 'villagers');
+            bot.protectedZones.push(zone);
+            console.log(`[VillageDetect] Registered ${zone.name} via ${c.count} villagers; Y[${zone.yMin}..${zone.yMax}]`);
+            added++;
+        }
+    } catch (err) {
+        console.warn('[VillageDetect] Villager scan failed:', err.message);
+    }
+
+    // Signals 2 & 3 — workstation blocks (including bell)
+    try {
+        const workstationIds = VILLAGE_WORKSTATIONS
+            .map(n => mc.getBlockId(n))
+            .filter(id => typeof id === 'number');
+        if (workstationIds.length === 0) return added; // mcdata not ready; bail gracefully
+
+        const positions = bot.findBlocks({
+            matching: workstationIds,
+            maxDistance: VILLAGE_SCAN_RADIUS,
+            count: 100,
+        });
+        if (!positions || positions.length === 0) return added;
+
+        // Separate bells from other workstations — bell alone is enough
+        const bellId = mc.getBlockId('bell');
+        const bellPositions = [];
+        const otherPositions = [];
+        for (const p of positions) {
+            const block = bot.blockAt(p);
+            if (!block) continue;
+            const item = { x: p.x, y: p.y, z: p.z };
+            if (block.type === bellId || block.name === 'bell') bellPositions.push(item);
+            else otherPositions.push(item);
+        }
+
+        // Signal 3 — every bell is its own village anchor
+        for (const b of bellPositions) {
+            if (_villageAlreadyRegistered(bot, b.x, b.z)) continue;
+            const zone = _villageZoneFromCenter(b.x, b.y, b.z, 'bell');
+            bot.protectedZones.push(zone);
+            console.log(`[VillageDetect] Registered ${zone.name} via bell; Y[${zone.yMin}..${zone.yMax}]`);
+            added++;
+        }
+
+        // Signal 2 — ≥3 non-bell workstations clustered
+        const workstationClusters = _clusterPositions(otherPositions, VILLAGE_CLUSTER_RADIUS);
+        for (const c of workstationClusters) {
+            if (c.count < VILLAGE_MIN_SIGNALS) continue;
+            if (_villageAlreadyRegistered(bot, c.centerX, c.centerZ)) continue;
+            const zone = _villageZoneFromCenter(c.centerX, c.centerY, c.centerZ, 'workstations');
+            bot.protectedZones.push(zone);
+            console.log(`[VillageDetect] Registered ${zone.name} via ${c.count} workstations; Y[${zone.yMin}..${zone.yMax}]`);
+            added++;
+        }
+    } catch (err) {
+        console.warn('[VillageDetect] Block scan failed:', err.message);
+    }
+
+    return added;
+}
+
+/**
+ * Start periodic village scanning. Fires once immediately, then every
+ * VILLAGE_SCAN_INTERVAL_MS. Returns the interval handle so the caller can
+ * clear it on shutdown (not strictly required — the bot tends to restart
+ * rather than shut down cleanly).
+ */
+const VILLAGE_SCAN_INTERVAL_MS = 30_000; // 30s cadence
+function startVillageScanner(bot) {
+    // Fire once immediately after first chunk load has populated entities
+    setTimeout(() => {
+        try { detectNearbyVillages(bot); } catch (err) { console.warn('[VillageDetect] Initial scan failed:', err.message); }
+    }, 5000);
+
+    // Periodic thereafter
+    return setInterval(() => {
+        try { detectNearbyVillages(bot); } catch (err) { console.warn('[VillageDetect] Periodic scan failed:', err.message); }
+    }, VILLAGE_SCAN_INTERVAL_MS);
+}
+
+// Exports for agent.js startup wiring
+export { detectNearbyVillages, startVillageScanner };
+
 /**
  * Configure a pf.Movements instance for safer terrain traversal across biomes,
  * especially swamps, dripstone caves, nether, and other damage-prone terrain.

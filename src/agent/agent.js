@@ -150,6 +150,16 @@ export class Agent {
                     console.warn('[ProtectedZone] loadPlayerStructures threw:', loadErr.message);
                 }
 
+                // Kick off the village auto-detector. First scan fires ~5s after
+                // startup (lets chunks/entities load); subsequent scans every 30s.
+                // Adds zones to bot.protectedZones with type='village' and dedups
+                // against existing entries, so re-scans are idempotent.
+                try {
+                    this._villageScanInterval = skills.startVillageScanner(this.bot);
+                } catch (scanErr) {
+                    console.warn('[VillageDetect] startVillageScanner threw:', scanErr.message);
+                }
+
                 // Vacate the spawn protection zone before anything else happens.
                 // If the bot spawns inside the zone, no destructive action can succeed;
                 // the LLM can't reliably reason its way out of a 250-block exclusion zone,
