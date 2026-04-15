@@ -1,0 +1,12 @@
+{
+  "_comment": "Manual protected zones for mindcraft-mcgavin. Entries in `structures` become bot.protectedZones at agent startup via loadPlayerStructures(). Each entry requires: name (string), x (number, XZ center), z (number), radius (number). Optional: yMin, yMax (number; omit for full-column protection). Delete this file or leave `structures` empty to protect nothing manually; auto-detected villages are registered separately.",
+  "_schema_example": {
+    "name": "my_base",
+    "x": 150,
+    "z": -200,
+    "radius": 40,
+    "yMin": 60,
+    "yMax": 100
+  },
+  "structures": []
+}

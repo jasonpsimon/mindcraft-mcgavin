@@ -64,8 +64,14 @@ const FAILURE_PATTERNS = [
         priority: 6,
     },
     {
-        name: 'inside_spawn_zone',
-        test: /near spawn|inside .* spawn zone|spawn protection/i,
+        name: 'inside_protected_zone',
+        // Matches error messages from skills.js breakBlockAt/placeBlock when the
+        // bot tries to modify a block inside ANY protected zone — spawn zone
+        // (original) or a registered player structure / auto-detected village
+        // (added 2026-04-15 with #7). All route to the same escape recovery
+        // since escapeSpawnZone walks the bot to the nearest non-protected
+        // position, which also gets it out of any structure/village zone.
+        test: /near spawn|inside .* spawn zone|spawn protection|near protected structure|protected structure ['"]/i,
         recovery: 'ESCAPE_SPAWN_ZONE',
         priority: 7,
     },

@@ -140,6 +140,16 @@ export class Agent {
                 console.log(`${this.name} spawned.`);
                 this.clearBotLogs();
 
+                // Load manual protected zones from player_structures.json before
+                // any destructive action can be attempted. Missing file / malformed
+                // JSON / invalid entries are all logged but non-fatal — bot starts
+                // with only spawn-zone protection in those cases.
+                try {
+                    skills.loadPlayerStructures(this.bot);
+                } catch (loadErr) {
+                    console.warn('[ProtectedZone] loadPlayerStructures threw:', loadErr.message);
+                }
+
                 // Vacate the spawn protection zone before anything else happens.
                 // If the bot spawns inside the zone, no destructive action can succeed;
                 // the LLM can't reliably reason its way out of a 250-block exclusion zone,

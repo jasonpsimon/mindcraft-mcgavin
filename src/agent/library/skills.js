@@ -1,3 +1,4 @@
+import { readFileSync, existsSync } from 'fs';
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
@@ -686,9 +687,11 @@ export async function breakBlockAt(bot, x, y, z) {
      * await skills.breakBlockAt(bot, position.x, position.y - 1, position.x);
      **/
     if (x == null || y == null || z == null) throw new Error('Invalid position to break block at.');
-    if (_isInSpawnZone(bot, x, z)) {
-        console.log(`[SpawnProtect] Blocked break at (${x}, ${y}, ${z}) — inside ${SPAWN_PROTECTION_RADIUS}-block spawn zone`);
-        log(bot, `Cannot break blocks near spawn (within ${SPAWN_PROTECTION_RADIUS} blocks). Move further away first.`);
+    const breakZone = _isInAnyProtectedZone(bot, x, y, z);
+    if (breakZone) {
+        const label = breakZone.type === 'spawn' ? 'spawn' : `protected structure '${breakZone.name}'`;
+        console.log(`[ProtectedZone] Blocked break at (${x}, ${y}, ${z}) — inside ${breakZone.radius}-block ${label}`);
+        log(bot, `Cannot break blocks near ${label} (within ${breakZone.radius} blocks). Move further away first.`);
         return false;
     }
     let block = bot.blockAt(new Vec3(x, y, z));
@@ -756,9 +759,11 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
      * await skills.placeBlock(bot, "oak_log", p.x + 2, p.y, p.x);
      * await skills.placeBlock(bot, "torch", p.x + 1, p.y, p.x, 'side');
      **/
-    if (_isInSpawnZone(bot, x, z)) {
-        console.log(`[SpawnProtect] Blocked place at (${x}, ${y}, ${z}) — inside ${SPAWN_PROTECTION_RADIUS}-block spawn zone`);
-        log(bot, `Cannot place blocks near spawn (within ${SPAWN_PROTECTION_RADIUS} blocks). Move further away first.`);
+    const placeZone = _isInAnyProtectedZone(bot, x, y, z);
+    if (placeZone) {
+        const label = placeZone.type === 'spawn' ? 'spawn' : `protected structure '${placeZone.name}'`;
+        console.log(`[ProtectedZone] Blocked place at (${x}, ${y}, ${z}) — inside ${placeZone.radius}-block ${label}`);
+        log(bot, `Cannot place blocks near ${label} (within ${placeZone.radius} blocks). Move further away first.`);
         return false;
     }
     const target_dest = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
@@ -999,9 +1004,12 @@ export async function safeToss(bot, itemType, metadata, count) {
     return await withBotLock('safeToss', async () => {
         const pos = bot.entity.position.floored();
 
-        // In spawn zone — no digging allowed, just toss normally
-        if (_isInSpawnZone(bot, pos.x, pos.z)) {
-            console.log('[SafeToss] In spawn protection zone — tossing without digging');
+        // In spawn zone or near a protected player structure — no digging
+        // allowed, just toss normally
+        const tossZone = _isInAnyProtectedZone(bot, pos.x, pos.y, pos.z);
+        if (tossZone) {
+            const label = tossZone.type === 'spawn' ? 'spawn protection zone' : `protected structure '${tossZone.name}'`;
+            console.log(`[SafeToss] Inside ${label} — tossing without digging`);
             await bot.toss(itemType, metadata, count);
             return;
         }
@@ -1157,6 +1165,126 @@ function _isInSpawnZone(bot, x, z) {
 }
 
 /**
+ * #7 Player-built structure protection (2026-04-15).
+ *
+ * bot.protectedZones is an array of zone objects. Each zone has the shape:
+ *   {
+ *     name: string,            // human-readable label used in logs and error messages
+ *     type: string,            // 'structure' (manual) or 'village' (auto-detected)
+ *     x: number, z: number,    // XZ center of the protected area
+ *     radius: number,          // XZ radius (distance check, not a square box)
+ *     yMin?: number,           // optional lower Y bound (inclusive); omit for unbounded
+ *     yMax?: number,           // optional upper Y bound (inclusive); omit for unbounded
+ *   }
+ *
+ * Y-bounds let the bot mine freely below or above a surface structure without
+ * losing horizontal protection. A plains village centered at Y=64 with
+ * yMin=44, yMax=94 protects the visible structure but leaves deep-mining
+ * at Y<44 unrestricted even when the bot is horizontally inside the zone.
+ * If yMin or yMax is undefined, that side is unbounded — omit both for a
+ * full-column protect (the safe default for manual entries).
+ *
+ * Sources of zones:
+ *   1. SPAWN zone — always present, handled by _isInSpawnZone/SPAWN_PROTECTION_RADIUS,
+ *      Y-agnostic by design (spawn is player-meta, not a specific structure).
+ *   2. Manual entries — loaded from `player_structures.json` at the repo root by
+ *      _loadPlayerStructures() at agent startup. User-managed.
+ *   3. Village auto-detection — future extension; populates entries with type='village'.
+ *
+ * All destructive primitives (breakBlockAt, placeBlock, safeToss underground
+ * dig branch, autoBreakStuckPlant) call _isInAnyProtectedZone instead of the
+ * narrower _isInSpawnZone, so a single check covers every source uniformly.
+ */
+function _isNearProtectedZone(bot, x, y, z) {
+    if (!Array.isArray(bot.protectedZones) || bot.protectedZones.length === 0) return null;
+    for (const zone of bot.protectedZones) {
+        // XZ radius check first — cheaper than Y comparison for most misses
+        const dx = x - zone.x;
+        const dz = z - zone.z;
+        if ((dx * dx + dz * dz) > zone.radius * zone.radius) continue;
+        // Y bounds (optional): if either bound is defined, honor it
+        if (zone.yMin !== undefined && y < zone.yMin) continue;
+        if (zone.yMax !== undefined && y > zone.yMax) continue;
+        return zone;  // return the matching zone for log context
+    }
+    return null;
+}
+
+function _isInAnyProtectedZone(bot, x, y, z) {
+    // Spawn zone is Y-agnostic by design — it gates the new-player wilderness
+    // regardless of depth. No y check here.
+    if (_isInSpawnZone(bot, x, z)) return { type: 'spawn', radius: SPAWN_PROTECTION_RADIUS };
+    const structure = _isNearProtectedZone(bot, x, y, z);
+    if (structure) return { type: structure.type || 'structure', name: structure.name, radius: structure.radius };
+    return null;
+}
+
+/**
+ * Load manual player-defined protected zones from `player_structures.json` at
+ * the repo root. Called once at agent startup from agent.js.
+ *
+ * File shape (JSON):
+ *   { "structures": [ { "name": "...", "x": 0, "z": 0, "radius": 32, "yMin": 40, "yMax": 90 }, ... ] }
+ *
+ * Graceful degradation — any failure mode leaves bot.protectedZones unchanged
+ * (empty if not populated elsewhere yet) and logs clearly:
+ *   - File missing → start with no manual zones (no log noise for first-time users)
+ *   - JSON parse error → log and skip all
+ *   - Entry missing required fields (name, x, z, radius) → log warning and skip that entry
+ *   - Entry has invalid types → log warning and skip that entry
+ *
+ * Called from agent.js startup. Returns count of loaded zones for log context.
+ */
+export function loadPlayerStructures(bot) {
+    if (!Array.isArray(bot.protectedZones)) bot.protectedZones = [];
+    const filepath = 'player_structures.json';
+
+    if (!existsSync(filepath)) {
+        console.log('[ProtectedZone] No player_structures.json at repo root — no manual zones loaded (this is normal for fresh installs).');
+        return 0;
+    }
+
+    let parsed;
+    try {
+        parsed = JSON.parse(readFileSync(filepath, 'utf8'));
+    } catch (err) {
+        console.warn(`[ProtectedZone] Failed to parse player_structures.json: ${err.message}. No manual zones loaded.`);
+        return 0;
+    }
+
+    const entries = Array.isArray(parsed?.structures) ? parsed.structures : [];
+    let loaded = 0, skipped = 0;
+    for (const entry of entries) {
+        // Validate required fields
+        if (typeof entry?.name !== 'string' ||
+            typeof entry?.x !== 'number' ||
+            typeof entry?.z !== 'number' ||
+            typeof entry?.radius !== 'number' || entry.radius <= 0) {
+            console.warn(`[ProtectedZone] Skipping invalid entry: ${JSON.stringify(entry)} — missing name/x/z/radius or bad types.`);
+            skipped++;
+            continue;
+        }
+        // Optional Y bounds
+        const yMin = typeof entry.yMin === 'number' ? entry.yMin : undefined;
+        const yMax = typeof entry.yMax === 'number' ? entry.yMax : undefined;
+        bot.protectedZones.push({
+            name: entry.name,
+            type: 'structure',
+            x: entry.x,
+            z: entry.z,
+            radius: entry.radius,
+            ...(yMin !== undefined ? { yMin } : {}),
+            ...(yMax !== undefined ? { yMax } : {}),
+        });
+        loaded++;
+    }
+
+    const suffix = skipped > 0 ? ` (${skipped} skipped due to validation errors)` : '';
+    console.log(`[ProtectedZone] Loaded ${loaded} manual zone(s) from player_structures.json${suffix}.`);
+    return loaded;
+}
+
+/**
  * Configure a pf.Movements instance for safer terrain traversal across biomes,
  * especially swamps, dripstone caves, nether, and other damage-prone terrain.
  * Non-destructive: mutates the Movements object in place.
@@ -1280,13 +1408,16 @@ export async function autoBreakStuckPlant(bot) {
             if (!isPlant && !isTreePart) continue;
             if (_isDangerous(block.name)) continue;
 
-            // Spawn-zone check: allow breaking plants, skip tree parts
-            if (_isInSpawnZone(bot, p.x, p.z)) {
+            // Protected-zone check: allow breaking plants, skip tree parts
+            // (spawn zone OR any registered player-structure zone)
+            const breakZone = _isInAnyProtectedZone(bot, p.x, p.y, p.z);
+            if (breakZone) {
+                const label = breakZone.type === 'spawn' ? 'spawn zone' : `protected structure '${breakZone.name}'`;
                 if (isTreePart) {
-                    console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is a tree part inside spawn zone — skipping`);
+                    console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is a tree part inside ${label} — skipping`);
                     continue;
                 }
-                // isPlant true, tree false — allowed inside spawn
+                // isPlant true, tree false — allowed inside protected zones
                 console.log(`[AutoBreakPlant] Breaking plant ${block.name} inside spawn zone (plants allowed) at (${p.x}, ${p.y}, ${p.z})`);
             } else {
                 // Outside spawn — break either plant or tree part
