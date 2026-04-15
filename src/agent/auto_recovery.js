@@ -69,6 +69,12 @@ const FAILURE_PATTERNS = [
         recovery: 'ESCAPE_SPAWN_ZONE',
         priority: 7,
     },
+    {
+        name: 'cannot_smelt',
+        test: /Cannot smelt ([\w_]+)\. Hint: make sure you are smelting the 'raw' item/i,
+        recovery: 'CORRECT_SMELT_TARGET',
+        priority: 8,
+    },
 ];
 
 // ============================================================
@@ -89,6 +95,47 @@ const AXE_TIERS = [
     { name: 'stone_axe', tier: 2, material: 'cobblestone', materialCount: 3 },
     { name: 'wooden_axe', tier: 1, material: 'oak_planks', materialCount: 3 },
 ];
+
+// ============================================================
+// ORE → SMELT LOOKUP
+// Used by recoverWrongSmeltTarget when the LLM calls !smelt() on an ore
+// block. The upstream isSmeltable() heuristic (src/utils/mcdata.js) rejects
+// anything not matching "raw*", "*log*", or a small whitelist — so every
+// ore-block smelt attempt fires "Cannot smelt X. Hint: ... 'raw' item".
+//
+//   Group A: mining drops the final item directly → no smelting needed.
+//            Tell the LLM and let it pick next action (Option i).
+//   Group B: mining drops raw_Y → if raw_Y is in inventory, auto-correct
+//            to !smelt("raw_Y"); else tell LLM to mine first.
+//   Group C: item IS smeltable in vanilla but the upstream heuristic
+//            misses it (ancient_debris). Surface the gap.
+// ============================================================
+const ORE_SMELT_LOOKUP = {
+    // Group A — mining drops the final item directly
+    'coal_ore':                  { group: 'A', drop: 'coal' },
+    'deepslate_coal_ore':        { group: 'A', drop: 'coal' },
+    'redstone_ore':              { group: 'A', drop: 'redstone' },
+    'deepslate_redstone_ore':    { group: 'A', drop: 'redstone' },
+    'lapis_ore':                 { group: 'A', drop: 'lapis_lazuli' },
+    'deepslate_lapis_ore':       { group: 'A', drop: 'lapis_lazuli' },
+    'diamond_ore':               { group: 'A', drop: 'diamond' },
+    'deepslate_diamond_ore':     { group: 'A', drop: 'diamond' },
+    'emerald_ore':               { group: 'A', drop: 'emerald' },
+    'deepslate_emerald_ore':     { group: 'A', drop: 'emerald' },
+    'nether_quartz_ore':         { group: 'A', drop: 'quartz' },
+
+    // Group B — mining drops raw_Y; smelt raw_Y to get the ingot
+    'iron_ore':                  { group: 'B', raw: 'raw_iron',   smeltsTo: 'iron_ingot' },
+    'deepslate_iron_ore':        { group: 'B', raw: 'raw_iron',   smeltsTo: 'iron_ingot' },
+    'gold_ore':                  { group: 'B', raw: 'raw_gold',   smeltsTo: 'gold_ingot' },
+    'deepslate_gold_ore':        { group: 'B', raw: 'raw_gold',   smeltsTo: 'gold_ingot' },
+    'nether_gold_ore':           { group: 'B', raw: 'raw_gold',   smeltsTo: 'gold_ingot' },
+    'copper_ore':                { group: 'B', raw: 'raw_copper', smeltsTo: 'copper_ingot' },
+    'deepslate_copper_ore':      { group: 'B', raw: 'raw_copper', smeltsTo: 'copper_ingot' },
+
+    // Group C — smeltable in vanilla but mcdata.js isSmeltable heuristic misses it
+    'ancient_debris':            { group: 'C', smeltsTo: 'netherite_scrap' },
+};
 
 // Minimum pickaxe tier required for certain blocks (by minecraft-data harvestTools)
 // We'll also query minecraft-data dynamically, but these are fast-path overrides
@@ -309,6 +356,8 @@ export class AutoRecoveryEngine {
                 return { recovered: false, result: failResult + '\n[AUTO-RECOVERY] Block not found nearby. Try searching a different area.' };
             case 'ESCAPE_SPAWN_ZONE':
                 return await this.recoverInsideSpawnZone(originalCommand);
+            case 'CORRECT_SMELT_TARGET':
+                return await this.recoverWrongSmeltTarget(failResult, originalCommand);
             default:
                 return { recovered: false, result: failResult };
         }
@@ -334,6 +383,88 @@ export class AutoRecoveryEngine {
             console.log(`[AutoRecovery] Retrying after spawn-zone escape: ${originalCommand}`);
         }
         return this._successResult('Walked out of the spawn protection zone.', originalCommand);
+    }
+
+    /**
+     * CORRECT_SMELT_TARGET: LLM called !smelt("X") where X is an ore block
+     * that upstream `isSmeltable()` rejects. Classify X via ORE_SMELT_LOOKUP:
+     *
+     *   Group A — mining X drops the final item directly. Tell the LLM to
+     *     stop smelting and check/mine the drop instead. No auto-action.
+     *   Group B — mining X drops raw_Y. If raw_Y is in inventory, silently
+     *     auto-correct to !smelt("raw_Y"). Else tell LLM to mine first.
+     *   Group C — vanilla supports smelting X (upstream heuristic gap).
+     *     Surface the gap honestly so the LLM can route around it.
+     *
+     * Unknown items pass through unchanged.
+     */
+    async recoverWrongSmeltTarget(failResult, originalCommand) {
+        const match = failResult.match(/Cannot smelt ([\w_]+)\. Hint: make sure you are smelting the 'raw' item/i);
+        if (!match) {
+            // Shouldn't happen — pattern matched once to route us here, but be defensive
+            return { recovered: false, result: failResult };
+        }
+        const attempted = match[1];
+        const entry = ORE_SMELT_LOOKUP[attempted];
+
+        if (!entry) {
+            // Unknown item (could be a legitimately unsmeltable item like 'cobblestone_slab').
+            // Leave the original error for the LLM.
+            console.log(`[AutoRecovery] cannot_smelt: "${attempted}" not in ORE_SMELT_LOOKUP, passing through`);
+            return { recovered: false, result: failResult };
+        }
+
+        if (entry.group === 'A') {
+            const dropCount = this.countItem(entry.drop);
+            const inventoryNote = dropCount > 0
+                ? `You already have ${dropCount} ${entry.drop} in inventory — use it directly.`
+                : `Mine ${attempted} first (no smelting needed) — mining drops ${entry.drop} directly.`;
+            console.log(`[AutoRecovery] cannot_smelt Group A: "${attempted}" drops ${entry.drop} directly (have ${dropCount})`);
+            return {
+                recovered: false,
+                result: `[AUTO-RECOVERY] ${attempted} cannot be smelted — mining drops ${entry.drop} directly. ${inventoryNote}`
+            };
+        }
+
+        if (entry.group === 'B') {
+            const rawCount = this.countItem(entry.raw);
+            if (rawCount > 0) {
+                // Parse the requested count from originalCommand if present, clamp to what we have
+                let numToSmelt = rawCount;
+                if (originalCommand) {
+                    const numMatch = originalCommand.match(/!smelt\s*\(\s*"[^"]+"\s*,\s*(\d+)\s*\)/);
+                    if (numMatch) numToSmelt = Math.min(parseInt(numMatch[1], 10), rawCount);
+                }
+                console.log(`[AutoRecovery] cannot_smelt Group B: auto-correcting !smelt("${attempted}") → !smelt("${entry.raw}", ${numToSmelt})`);
+                const ok = await skills.smeltItem(this.agent.bot, entry.raw, numToSmelt);
+                this._invalidateSnapshot();
+                if (ok) {
+                    return this._successResult(
+                        `Smelted ${numToSmelt} ${entry.raw} → ${entry.smeltsTo} (auto-corrected from ${attempted}).`,
+                        null  // no retry — we executed the corrected action ourselves
+                    );
+                }
+                return {
+                    recovered: false,
+                    result: `[AUTO-RECOVERY] Tried smelting ${entry.raw} instead of ${attempted}, but the furnace step failed. Check fuel and furnace proximity.`
+                };
+            }
+            console.log(`[AutoRecovery] cannot_smelt Group B: no ${entry.raw} in inventory, telling LLM to mine ${attempted} first`);
+            return {
+                recovered: false,
+                result: `[AUTO-RECOVERY] ${attempted} cannot be smelted directly. Mine ${attempted} first (drops ${entry.raw}), then !smelt("${entry.raw}") to get ${entry.smeltsTo}.`
+            };
+        }
+
+        if (entry.group === 'C') {
+            console.log(`[AutoRecovery] cannot_smelt Group C: "${attempted}" is smeltable in vanilla but upstream isSmeltable() misses it`);
+            return {
+                recovered: false,
+                result: `[AUTO-RECOVERY] ${attempted} should smelt to ${entry.smeltsTo}, but the current recipe heuristic rejects it. Acquire ${entry.smeltsTo} via other means (trade, loot) or patch src/utils/mcdata.js isSmeltable() to recognize it.`
+            };
+        }
+
+        return { recovered: false, result: failResult };
     }
 
     // ============================================================
