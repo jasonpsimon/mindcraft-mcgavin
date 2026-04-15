@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (#7 shipped — ProtectedZone with Y-bounds + JSON loader + village auto-detection; 7c/7d/7e queued as detection-enhancement follow-ups)_
+_Last updated: 2026-04-15 (#7 shipped + post-hoc collectBlock leak patched — grass_block/dirt in spawn regression fixed)_
 
 ---
 
@@ -205,6 +205,16 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-15 — #7 post-hoc fix: plug collectBlock ProtectedZone leak ✅
+
+Commit `cde1329`. Immediately after #7 landed, JP observed the bot breaking `grass_block` (dirt-with-grass-texture) inside the spawn zone. Root cause: `collectBlock` in `skills.js` calls `bot.dig(block)` and `bot.collectBlock.collect(block)` directly at lines 563/568 — **neither goes through `breakBlockAt`**, so `_isInAnyProtectedZone` was never consulted. `!collectBlocks("...")` bypassed every protected zone.
+
+**Fix:** after `world.getNearestBlocksWhere` returns candidates, filter out any whose position is inside a protected zone. Bumped candidate count from 1 to 8 so valid alternatives remain after filtering. Counts logged per-iteration. When all candidates are protected, emit the actionable message "All N nearby X are inside protected zones..." — wording tuned to match the AutoRecovery `inside_protected_zone` regex so the bot auto-escapes via `ESCAPE_SPAWN_ZONE` and retries from a clean position.
+
+**Audit of other `bot.dig` / `bot.collectBlock.collect` sites:** `breakBlockAt` (line 690) protected, `safeToss` dig branch (line 1009) protected, `autoBreakStuckPlant` (line 1655ish) protected with the longstanding plant-vs-structural carve-out. `collectBlock` was the only leak.
+
+**Post-deploy verification**: bot restarted, tried `!collectBlocks("oak_log", 10)` inside spawn, log showed `collectBlock filtered 8 candidate oak_log block(s) inside protected zones` followed by the escape message and `Collected 0`. Zero digs into the protected zone.
 
 ### 2026-04-15 — #7 ProtectedZone completion + village auto-detection ✅
 
