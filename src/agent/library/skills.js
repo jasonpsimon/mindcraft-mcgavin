@@ -2920,7 +2920,7 @@ export async function digDown(bot, distance = 10) {
         currentPos = new Vec3(nextX, nextY, nextZ);
         descended++;
 
-        // Every 8 descended blocks, drop a torch behind the bot as a breadcrumb.
+        // Every 4 descended blocks, drop a torch behind the bot as a breadcrumb.
         // Target: corridor-air at head level of the step we JUST came from.
         // Support: previous step's floor block (solid). face='bottom' means
         // torch stands on top of that floor. goToSurface follows these torches
@@ -2928,7 +2928,9 @@ export async function digDown(bot, distance = 10) {
         // Whiteboard #6 asked for strict "left wall" placement; this behind-bot
         // variant is simpler and visible from both directions. Can refine later
         // if JP wants strict left-wall convention.
-        if (descended > 0 && descended % 8 === 0) {
+        // Threshold was 8 originally; lowered to 4 after observed typical
+        // digDown(5) never triggered a placement.
+        if (descended > 0 && descended % 4 === 0) {
             const torchX = currentPos.x - dx;
             const torchY = currentPos.y + 1;
             const torchZ = currentPos.z - dz;
@@ -3156,7 +3158,13 @@ export async function digUp(bot, distance = 10) {
 export async function placeTorchAt(bot, x, y, z, face = 'bottom') {
     return await withBotLock('placeTorchAt', async () => {
         const torch = bot.inventory.findInventoryItem('torch');
-        if (!torch) return false;
+        if (!torch) {
+            // Log once per call so we can see WHY placement isn't happening.
+            // Common reason: bot hasn't progressed to crafting torches yet
+            // (needs coal/charcoal + stick). Auto-craft would be a #9 follow-up.
+            console.log(`[Torch] Skipped placement at (${Math.floor(x)}, ${Math.floor(y)}, ${Math.floor(z)}): no torch in inventory`);
+            return false;
+        }
         const success = await placeBlock(bot, 'torch', x, y, z, face, true);
         if (success) {
             if (!Array.isArray(bot.placedTorches)) bot.placedTorches = [];
@@ -3170,6 +3178,9 @@ export async function placeTorchAt(bot, x, y, z, face = 'bottom') {
             if (bot.placedTorches.length > 200) {
                 bot.placedTorches = bot.placedTorches.slice(-200);
             }
+            console.log(`[Torch] Placed at (${Math.floor(x)}, ${Math.floor(y)}, ${Math.floor(z)}) — ${bot.placedTorches.length} recorded`);
+        } else {
+            console.log(`[Torch] Placement at (${Math.floor(x)}, ${Math.floor(y)}, ${Math.floor(z)}) failed (placeBlock returned false)`);
         }
         return success;
     });
