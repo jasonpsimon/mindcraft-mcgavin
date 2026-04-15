@@ -1437,8 +1437,34 @@ function _installSpawnEscapeInstrumentation(bot) {
         return `(${p.x?.toFixed(1)}, ${p.y?.toFixed(1)}, ${p.z?.toFixed(1)})`;
     };
 
+    // Throttle forcedMove logging — server can spam corrections for stuck/lag
+    // states (observed 952/min for same coord). Log first event, then count
+    // bursts and emit a summary every 5s.
+    let _fmLastLogged = 0;
+    let _fmBurstCount = 0;
+    let _fmLastPos = null;
     bot.on('forcedMove', () => {
-        console.log(`[SpawnEscape][EVENT] forcedMove — bot teleported by server to ${posStr()}`);
+        const p = bot.entity?.position;
+        const now = Date.now();
+        const posKey = p ? `${p.x?.toFixed(1)},${p.y?.toFixed(1)},${p.z?.toFixed(1)}` : 'unknown';
+        if (posKey !== _fmLastPos) {
+            // Position changed — flush any pending burst summary then log new
+            if (_fmBurstCount > 0 && _fmLastPos) {
+                console.log(`[SpawnEscape][EVENT] forcedMove burst: ${_fmBurstCount} more corrections at ${_fmLastPos}`);
+            }
+            console.log(`[SpawnEscape][EVENT] forcedMove — bot teleported by server to ${posStr()}`);
+            _fmLastPos = posKey;
+            _fmLastLogged = now;
+            _fmBurstCount = 0;
+        } else {
+            // Same position — increment burst, emit summary every 5s
+            _fmBurstCount++;
+            if (now - _fmLastLogged > 5000) {
+                console.log(`[SpawnEscape][EVENT] forcedMove burst: ${_fmBurstCount} corrections in last 5s at ${posKey}`);
+                _fmLastLogged = now;
+                _fmBurstCount = 0;
+            }
+        }
     });
 
     bot.on('respawn', () => {
