@@ -1184,9 +1184,14 @@ function _configureTerrainSafeMovements(bot, movements) {
  *
  * Returns true if a block was broken (caller should retry their pathfind).
  */
-const PLANT_LIKE_PATTERN = /bush|fern|grass|vine|flower|sprout|lichen|moss|fungus|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom/i;
-// Tree-associated blocks — do NOT break inside spawn zone
-const TREE_PART_PATTERN = /(^|_)(log|wood|leaves|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
+// Plant-like blocks that are safe to break inside the spawn zone.
+// Leaves are included here (per JP 2026-04-14) — they decay naturally in
+// Minecraft anyway, so breaking one to clear a path is benign.
+const PLANT_LIKE_PATTERN = /bush|fern|grass|vine|flower|sprout|lichen|moss|fungus|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom|leaves/i;
+// Tree-associated structural blocks — do NOT break inside spawn zone
+// (logs, wood, saplings, tree roots, nether tree stems, bamboo/azalea blocks).
+// Leaves intentionally NOT in this list per JP: leaves behave like plants.
+const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
 
 export async function autoBreakStuckPlant(bot) {
     return await withBotLock('autoBreakStuckPlant', async () => {
