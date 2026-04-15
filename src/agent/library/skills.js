@@ -29,10 +29,36 @@ async function equipHighestAttack(bot) {
         weapons = bot.inventory.items().filter(item => item.name.includes('pickaxe') || item.name.includes('shovel'));
     if (weapons.length === 0)
         return;
-    weapons.sort((a, b) => a.attackDamage < b.attackDamage);
+    // Bug fix 2026-04-15: previous comparator returned a boolean (a < b), which
+    // is treated as 0 by sort and produced random ordering. Use proper b-a for
+    // descending sort by attackDamage. Also handle missing attackDamage values.
+    weapons.sort((a, b) => (b.attackDamage || 0) - (a.attackDamage || 0));
     let weapon = weapons[0];
-    if (weapon)
+    if (weapon && bot.heldItem?.type !== weapon.type)
         await bot.equip(weapon, 'hand');
+}
+
+/**
+ * #4 Wrong tool for the block (2026-04-15).
+ * Equip the best tool in inventory for breaking the given block, before
+ * calling bot.dig(). Uses mineflayer-pathfinder's bestHarvestTool helper
+ * which considers material compatibility and tier ranking.
+ *
+ * Skip if no tool is recommended (block doesn't need a tool, e.g. dirt) or
+ * if the bot is already holding the best tool. Errors are logged and
+ * swallowed — caller proceeds with whatever is currently equipped.
+ */
+async function _equipBestToolFor(bot, block) {
+    if (!block) return;
+    try {
+        const tool = bot.pathfinder?.bestHarvestTool?.(block);
+        if (!tool) return;  // hand is best (block needs no tool, or no matching tool in inventory)
+        if (bot.heldItem?.type === tool.type) return;  // already equipped
+        await bot.equip(tool, 'hand');
+    } catch (err) {
+        // Equip can fail if inventory is full / off-hand-locked; not fatal
+        console.warn(`[EquipTool] Failed to equip ${block?.name ? 'tool for ' + block.name : 'tool'}: ${err.message}`);
+    }
 }
 
 export async function craftRecipe(bot, itemName, num=1) {
@@ -532,6 +558,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             else if (mc.mustCollectManually(blockType)) {
                 await goToPosition(bot, block.position.x, block.position.y, block.position.z, 2);
+                await _equipBestToolFor(bot, block);
                 await bot.dig(block);
                 await pickupNearbyItems(bot);
                 success = true;
@@ -701,6 +728,7 @@ export async function breakBlockAt(bot, x, y, z) {
             }
         }
         console.log(`[Skills] breakBlockAt: digging ${block.name} at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
+        await _equipBestToolFor(bot, block);
         await bot.dig(block, true);
         log(bot, `Broke ${block.name} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
@@ -1042,9 +1070,11 @@ export async function safeToss(bot, itemType, metadata, count) {
 
                             // Dig head first (prevent gravity-block fall-in), then feet
                             if (headBlock && headBlock.name !== 'air' && headBlock.name !== 'cave_air') {
+                                await _equipBestToolFor(bot, headBlock);
                                 await bot.dig(headBlock);
                             }
                             if (feetBlock && feetBlock.name !== 'air' && feetBlock.name !== 'cave_air') {
+                                await _equipBestToolFor(bot, feetBlock);
                                 await bot.dig(feetBlock);
                             }
 
@@ -1057,6 +1087,7 @@ export async function safeToss(bot, itemType, metadata, count) {
                         const holePos = endPos.offset(0, -1, 0);
                         const holeBlock = bot.blockAt(holePos);
                         if (holeBlock && holeBlock.name !== 'air' && holeBlock.name !== 'cave_air') {
+                            await _equipBestToolFor(bot, holeBlock);
                             await bot.dig(holeBlock);
                         }
 
@@ -1085,6 +1116,7 @@ export async function safeToss(bot, itemType, metadata, count) {
                     const originalName = floorBlock.name;
                     console.log(`[SafeToss] Surface hole — ${originalName} at ${holePos}`);
                     try {
+                        await _equipBestToolFor(bot, floorBlock);
                         await bot.dig(floorBlock);
                         await bot.lookAt(holePos.offset(0.5, 0.5, 0.5));
                         await bot.toss(itemType, metadata, count);
@@ -1262,6 +1294,7 @@ export async function autoBreakStuckPlant(bot) {
             }
 
             try {
+                await _equipBestToolFor(bot, block);
                 await bot.dig(block);
                 return true;
             } catch (err) {
