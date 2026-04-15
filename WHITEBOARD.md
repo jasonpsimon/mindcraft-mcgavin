@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (#11 TIERED_ITEMS shipped — tools/weapons/armor now protected by tier hierarchy, not flat KEEP_ALWAYS)_
+_Last updated: 2026-04-15 (#7 shipped — ProtectedZone with Y-bounds + JSON loader + village auto-detection; 7c/7d/7e queued as detection-enhancement follow-ups)_
 
 ---
 
@@ -31,19 +31,27 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-### 7. Respect player-built structures (50-block no-disturb radius)
+### 7c. Heuristic auto-detection of player-built structures
 
-**Status:** ⏳ not started • **Priority:** medium (protective feature, no active blocker)
+**Status:** ⏳ not started • **Priority:** medium (complements the #7 village detector; catches player bases)
 
-The bot must not disturb player-built structures. No breaking, placing, digging, tossing items, or otherwise modifying blocks within 50 blocks of any player-built structure.
+Current state (post-#7): the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages via villager/workstation/bell signals. It does NOT auto-detect player-built bases.
 
-**Fix sketch:**
-1. New config file or in-world registry `player_structures.json` — list of `{name, x, y, z, radius}` entries.
-2. New helper `_isNearPlayerStructure(bot, x, y, z)` in `skills.js` (similar shape to `_isInSpawnZone`).
-3. Add check inline in `breakBlockAt`, `placeBlock`, and SafeToss underground dig branch. On violation, return false with `"near player structure"` error (matchable by AutoRecovery).
-4. **Reuses spawn-zone infrastructure:** factor out a `ProtectedZone` abstraction; one `_isInAnyProtectedZone(x, y, z)` gate handles spawn + all player structures.
+**Approach**: scan chunks for clusters of "strongly player-characteristic" blocks — stone_bricks + polished stones, doors, glass panes, wool, concrete, redstone components, banners, item frames, beds (outside villages), crafted stairs/slabs. ≥5 clustered within ~10 blocks → propose a protected zone with type='player_base'. False-positive mitigation: list curated to exclude ambiguous blocks (torches, crafting_tables, chests, furnaces — these cluster in villages too and the village detector already handles those).
 
-**Auto-detection (later):** watch for `placeBlock` events from the player, cluster by proximity + time, promote to a protected structure automatically after N placements.
+**Deferred decisions:** exact threshold (5? 8?), cluster radius (10? 16?), block list tuning. Start conservative, tune from observed false-positives.
+
+### 7d. Block-update watcher for runtime-placed structures
+
+**Status:** ⏳ not started • **Priority:** low (complements 7c — catches live placements as they happen)
+
+Listen to mineflayer's `blockUpdate` events, filter to player-placed (not world-generation), record `{player, block, x, y, z, timestamp}`. Cluster by proximity + time. Promote to protected zone after N placements within X blocks/Y minutes. Pairs well with 7c (startup heuristic) + live tracking.
+
+### 7e. Seed-based chunk-diff detection (research-only)
+
+**Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
+
+Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
 
 ### 7b. Self-cleanup of incidental block placements
 
@@ -197,6 +205,45 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-15 — #7 ProtectedZone completion + village auto-detection ✅
+
+Commits `5fbfc83` (forcedMove log throttling, standalone cleanup), `a73e53b` (Y-bounds + JSON loader + AutoRecovery), `10d45d1` (village auto-detection). Finishes the #7 scaffolding that was sitting uncommitted on the gaming working tree since an earlier session. Bot now protects three zone sources with a unified check:
+
+**Spawn zone** (existing, Y-agnostic). Unchanged.
+
+**Manual zones via `player_structures.json`** at repo root. Loaded once at spawn by `loadPlayerStructures(bot)`. Each entry `{name, x, z, radius, yMin?, yMax?}`; Y bounds optional for full-column protection. Graceful degradation — missing file, malformed JSON, and invalid entries all log informatively and continue with partial or zero zones. Stub file shipped with schema comment.
+
+**Auto-detected villages** via three independent signals in `detectNearbyVillages(bot)`:
+- **Villager cluster** — ≥3 villagers within 32 blocks of each other (active villages).
+- **Profession-workstation cluster** — ≥3 of `composter`, `smoker`, `loom`, `cartography_table`, `blast_furnace`, `grindstone`, `fletching_table`, `lectern`, `stonecutter` clustered within 32 blocks (abandoned/raided villages).
+- **Bell blocks** — every bell within 128 blocks anchors a village zone (bells are village-exclusive in vanilla).
+
+Periodic scanner re-runs every 30s, dedups against existing zones (50-block XZ match → skip). Scan starts 5s after spawn so chunks/entities load first.
+
+**ProtectedZone shape** (unified across sources):
+```js
+{ name, type: 'spawn'|'structure'|'village', x, z, radius, yMin?, yMax? }
+```
+
+Y-bounds are optional per entry. `_isNearProtectedZone(bot, x, y, z)` and `_isInAnyProtectedZone(bot, x, y, z)` honor yMin/yMax if defined, otherwise treat the zone as full-column. All four callers (`breakBlockAt`, `placeBlock`, `safeToss`, `autoBreakStuckPlant`) thread `y` through. Spawn zone stays Y-agnostic by design — player-meta territory, not a specific structure.
+
+**Village parameters** (tuned per JP 2026-04-15):
+- `VILLAGE_PROTECT_RADIUS = 100` (200×200 XZ, covers large plains villages)
+- `VILLAGE_Y_BELOW = 20` (yMin = centerY - 20, lets bot deep-mine under villages)
+- `VILLAGE_Y_ABOVE = 30` (yMax = centerY + 30, covers watchtowers)
+- `VILLAGE_MIN_SIGNALS = 3` (threshold for villager and workstation clusters)
+- `VILLAGE_CLUSTER_RADIUS = 32` (how close signals must be to group)
+- `VILLAGE_DEDUP_RADIUS = 50` (don't re-register if existing zone covers center)
+- `VILLAGE_SCAN_INTERVAL_MS = 30000` (30s cadence)
+
+**AutoRecovery** now routes `"near spawn"`, `"near protected structure"`, and `"protected structure 'X'"` all through the same `ESCAPE_SPAWN_ZONE` recovery — `escapeSpawnZone` walks the bot out of any zone regardless of source. Pattern renamed `inside_protected_zone` from `inside_spawn_zone`.
+
+**Verification**: two local harnesses (22 tests for loader + Y-bounds, 29 tests for detector + clustering + dedup); all 51 passed. Post-deploy: bot auto-detected `village_106_83 via bell; Y[45..95]` within 5s of spawn — pipeline working end-to-end.
+
+**Philosophy/rules adherence**: #1 (all detection is code, no LLM), #4 (villages re-detected deterministically from world state each startup; manual JSON persists), #5 (finishes the scaffolding migration from the earlier session), #8 (every registration logged with coords + source). Rules 1-5 (lookup tables, elegant helpers, 30-line doc block, root cause = "no data structure for player-owned areas", 51-test harness, zero callers touched beyond the new exports).
+
+**Open follow-ups** (new to-do entries): `7c` (heuristic block-cluster detection for player bases), `7d` (blockUpdate event watcher for runtime placements), `7e` (seed-based chunk diff — research-only, likely infeasible in JS for MC 1.21).
 
 ### 2026-04-15 — #11 TIERED_ITEMS: best-tier tool/armor classification ✅
 
