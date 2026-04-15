@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (inventory classification expanded — all wood types, more stone/soil variants, KEEP_ALWAYS ordering fix)_
+_Last updated: 2026-04-15 (SINGLETON_KEEPS — extras of crafting_table and furnace now drained as junk)_
 
 ---
 
@@ -150,6 +150,16 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — SINGLETON_KEEPS: drain extras of crafting_table / furnace ✅
+
+Observation: `crafting_table` and `furnace` are in KEEP_ALWAYS (tier 5, never discarded), but the bot only ever needs 1 of each at a time. A bot that accidentally crafts or picks up multiples would hold them forever, wasting inventory slots.
+
+**Fix:** new `SINGLETON_KEEPS = { crafting_table, furnace }` set. All three aggregation callers (`getDiscardSuggestions`, `getJunkStackCount`, `autoDiscardAllJunk`) now route through a shared `snapshotInventory(bot, goalProtected)` helper that applies the rule: for any SINGLETON_KEEPS item, keep 1, classify the rest as tier 1 junk with `discardable = total - 1`.
+
+Defense-in-depth: `autoDiscardAllJunk` adds a `floor = 1` safety check against `found.count` for SINGLETON_KEEPS items — so even if snapshot logic were to misreport, we can never drop below 1 of a keeper item.
+
+Extras appear in logs as `"N extra crafting_table"` to distinguish from regular junk. Easy to extend to other singleton-style items (shield, flint_and_steel, bed) later by adding them to the set.
 
 ### 2026-04-15 — Inventory classification overhaul (wood coverage, junk coverage, ordering) ✅
 

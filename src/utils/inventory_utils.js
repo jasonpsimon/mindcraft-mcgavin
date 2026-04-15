@@ -37,6 +37,14 @@ const ALL_SAPLINGS = [
     'mangrove_propagule',
 ];
 
+// Items where the bot only needs ONE. Extras are treated as tier 1 junk.
+// (crafting_table and furnace are utility blocks the bot places and reuses —
+//  holding multiple wastes an inventory slot without any gameplay benefit.)
+const SINGLETON_KEEPS = new Set([
+    'crafting_table',
+    'furnace',
+]);
+
 // Items the bot should NEVER discard (high value)
 const KEEP_ALWAYS = new Set([
     // Tools & weapons
@@ -202,6 +210,39 @@ function getItemValue(itemName, goalProtected = new Set()) {
 }
 
 /**
+ * Walk the bot's inventory and return { name -> { total, discardable, value } }.
+ *   - `total`: total count across all stacks.
+ *   - `discardable`: count the bot can safely dispose. For SINGLETON_KEEPS this
+ *     is `total - 1` (keep 1); otherwise it equals `total`. Entries with
+ *     `discardable === 0` are omitted.
+ *   - `value`: effective tier for discard decisions. Singleton extras are
+ *     forced to tier 1 (junk); everything else comes from getItemValue.
+ *
+ * This helper is the single source of truth for inventory classification —
+ * use it in place of ad-hoc aggregation loops.
+ */
+function snapshotInventory(bot, goalProtected) {
+    const totals = {};
+    for (const slot of bot.inventory.slots) {
+        if (slot == null || !slot.name) continue;
+        if (!totals[slot.name]) totals[slot.name] = 0;
+        totals[slot.name] += slot.count;
+    }
+
+    const snapshot = {};
+    for (const [name, total] of Object.entries(totals)) {
+        if (SINGLETON_KEEPS.has(name)) {
+            const extras = total - 1;
+            if (extras <= 0) continue; // keep the single one; nothing to discard
+            snapshot[name] = { total, discardable: extras, value: 1 };
+        } else {
+            snapshot[name] = { total, discardable: total, value: getItemValue(name, goalProtected) };
+        }
+    }
+    return snapshot;
+}
+
+/**
  * Analyze inventory and return ranked discard suggestions.
  * @param {object} bot - The mineflayer bot
  * @param {number} slotsNeeded - How many slots we need to free up (default 5)
@@ -210,18 +251,11 @@ function getItemValue(itemName, goalProtected = new Set()) {
  */
 export function getDiscardSuggestions(bot, slotsNeeded = 5, goal = null) {
     const goalProtected = getGoalProtectedItems(goal);
-
-    const inventory = {};
-    for (const slot of bot.inventory.slots) {
-        if (slot != null && slot.name) {
-            if (!inventory[slot.name]) inventory[slot.name] = 0;
-            inventory[slot.name] += slot.count;
-        }
-    }
+    const snapshot = snapshotInventory(bot, goalProtected);
 
     // Score and sort: lowest value first, then highest count
-    const scored = Object.entries(inventory)
-        .map(([name, count]) => ({ name, count, value: getItemValue(name, goalProtected) }))
+    const scored = Object.entries(snapshot)
+        .map(([name, info]) => ({ name, count: info.discardable, value: info.value }))
         .filter(item => item.value < 5) // never suggest protected items
         .sort((a, b) => a.value - b.value || b.count - a.count);
 
@@ -244,7 +278,7 @@ export function getDiscardSuggestions(bot, slotsNeeded = 5, goal = null) {
     if (suggestions.length > 0) {
         message = `To free inventory space, discard junk items: ${cmds}`;
         if (goalProtected.size > 0) {
-            const kept = [...goalProtected].filter(i => inventory[i]).slice(0, 3).join(', ');
+            const kept = [...goalProtected].filter(i => bot.inventory.findInventoryItem(i) != null).slice(0, 3).join(', ');
             if (kept) message += ` (keeping ${kept} — needed for your goal)`;
         }
     } else {
@@ -291,26 +325,29 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
 }
 
 /**
- * Count how many inventory slots are occupied by "junk" (value <= 1, goal-aware).
+ * Count how many distinct item types are flagged as junk (value <= 1, goal-aware).
  * Tier 0 = trash (rotten_flesh, spider_eye, poisonous_potato).
  * Tier 1 = bulk junk (cobblestone, dirt, gravel, sand, netherrack, etc.).
  * Items bumped to tier 4 by the current goal are excluded.
+ * Extras of SINGLETON_KEEPS (crafting_table, furnace) count as one junk type
+ * each when their total exceeds 1 — since snapshotInventory forces them to tier 1.
  * @param {object} bot - The mineflayer bot
  * @param {string|null} goal - The bot's current goal (to protect relevant items)
- * @returns {number} Number of inventory slots containing junk items.
+ * @returns {number} Number of distinct junk item types in inventory.
  */
 export function getJunkStackCount(bot, goal = null) {
     const goalProtected = getGoalProtectedItems(goal);
+    const snapshot = snapshotInventory(bot, goalProtected);
     let stacks = 0;
-    for (const slot of bot.inventory.slots) {
-        if (slot == null || !slot.name) continue;
-        if (getItemValue(slot.name, goalProtected) <= 1) stacks++;
+    for (const info of Object.values(snapshot)) {
+        if (info.value <= 1) stacks++;
     }
     return stacks;
 }
 
 /**
- * Discard ALL junk items in one pass (goal-aware). Drains every tier 0 and tier 1 stack.
+ * Discard ALL junk items in one pass (goal-aware). Drains every tier 0 and tier 1 stack,
+ * plus extras of SINGLETON_KEEPS (crafting_table, furnace) — keeps exactly 1 of each.
  * Use this when you want to fully clear the bot's junk backlog — not just free a few slots.
  * Collapses what would otherwise be N future SafeToss cycles into a single disposal run.
  * @param {object} bot - The mineflayer bot
@@ -319,17 +356,12 @@ export function getJunkStackCount(bot, goal = null) {
  */
 export async function autoDiscardAllJunk(bot, goal = null) {
     const goalProtected = getGoalProtectedItems(goal);
+    const snapshot = snapshotInventory(bot, goalProtected);
 
-    // Aggregate every junk stack (tier 0 + tier 1, goal-aware)
-    const inventory = {};
-    for (const slot of bot.inventory.slots) {
-        if (slot == null || !slot.name) continue;
-        if (getItemValue(slot.name, goalProtected) > 1) continue;
-        if (!inventory[slot.name]) inventory[slot.name] = 0;
-        inventory[slot.name] += slot.count;
-    }
+    const items = Object.entries(snapshot)
+        .filter(([, info]) => info.value <= 1)
+        .map(([name, info]) => ({ name, count: info.discardable }));
 
-    const items = Object.entries(inventory).map(([name, count]) => ({ name, count }));
     if (items.length === 0) return 'No junk items found to auto-discard.';
 
     const discarded = [];
@@ -339,11 +371,18 @@ export async function autoDiscardAllJunk(bot, goal = null) {
             while (remaining > 0) {
                 const found = bot.inventory.findInventoryItem(item.name);
                 if (!found) break;
-                const toDrop = Math.min(remaining, found.count);
+                // Respect SINGLETON_KEEPS: never drop below 1 of a keeper item.
+                const floor = SINGLETON_KEEPS.has(item.name) ? 1 : 0;
+                const available = Math.max(0, found.count - floor);
+                if (available === 0) break;
+                const toDrop = Math.min(remaining, available);
                 await safeToss(bot, found.type, null, toDrop);
                 remaining -= toDrop;
             }
-            discarded.push(`${item.count} ${item.name}`);
+            const label = SINGLETON_KEEPS.has(item.name)
+                ? `${item.count} extra ${item.name}`
+                : `${item.count} ${item.name}`;
+            discarded.push(label);
             markDiscarded();
         } catch (e) {
             // Skip items that fail to discard; keep draining the rest
