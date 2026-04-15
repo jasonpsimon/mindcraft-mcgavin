@@ -197,7 +197,6 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 
 ## Known issues (deferred — out of scope for current to-do)
 
-- **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
 - **`self_preservation` mode now waits on the bot mutex in routine paths.** `interrupts: ['all']` modes already bypass mutex (commit `97c03fd`); the trade-off is preserved. Edge cases (drowning during a long SafeToss) could still be delayed by a few seconds. Acceptable for now.
 - **`Cannot smelt coal_ore` LLM confusion.** LLM tried to smelt the ore block instead of the dropped coal item. Could auto-correct via AutoRecovery pattern.
 
