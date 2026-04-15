@@ -137,6 +137,23 @@ const ORE_SMELT_LOOKUP = {
     'ancient_debris':            { group: 'C', smeltsTo: 'netherite_scrap' },
 };
 
+// Items that are FUELS for the furnace — they go into the fuel slot, never the
+// smelt-input slot. LLM sometimes confuses "I need coal" with "I should smelt
+// coal". Recovery tells the LLM the correct role and reports what it already has.
+const FURNACE_FUELS = new Set([
+    'coal', 'charcoal', 'coal_block', 'blaze_rod', 'blaze_powder',
+]);
+
+// Items that are already the FINAL smelted product. Re-smelting them is
+// meaningless (they're the output, not an input). LLM occasionally tries to
+// "re-smelt" to get them, misinterpreting the production chain.
+const SMELT_FINAL_PRODUCTS = new Set([
+    'iron_ingot', 'gold_ingot', 'copper_ingot',
+    'netherite_ingot', 'netherite_scrap',
+    'diamond', 'emerald',
+    'redstone', 'lapis_lazuli', 'quartz',
+]);
+
 // Minimum pickaxe tier required for certain blocks (by minecraft-data harvestTools)
 // We'll also query minecraft-data dynamically, but these are fast-path overrides
 const BLOCK_MIN_TIER = {
@@ -408,9 +425,31 @@ export class AutoRecoveryEngine {
         const entry = ORE_SMELT_LOOKUP[attempted];
 
         if (!entry) {
+            // Not an ore — check meta-confusion classes before passing through.
+            if (FURNACE_FUELS.has(attempted)) {
+                const have = this.countItem(attempted);
+                const haveNote = have > 0
+                    ? `You have ${have} ${attempted} available — use it to fuel other smelts (e.g., raw_iron → iron_ingot).`
+                    : `Acquire ${attempted} via mining/crafting first, then use it to fuel smelts.`;
+                console.log(`[AutoRecovery] cannot_smelt: "${attempted}" is a FUEL (have ${have})`);
+                return {
+                    recovered: false,
+                    result: `[AUTO-RECOVERY] ${attempted} is a FUEL — it goes INTO the furnace as energy to smelt other items, not as the smelt input itself. ${haveNote}`
+                };
+            }
+
+            if (SMELT_FINAL_PRODUCTS.has(attempted)) {
+                const have = this.countItem(attempted);
+                console.log(`[AutoRecovery] cannot_smelt: "${attempted}" is a final smelted product (have ${have})`);
+                return {
+                    recovered: false,
+                    result: `[AUTO-RECOVERY] ${attempted} is already a final smelted product. Use it for crafting, not as smelting input. You currently have ${have} ${attempted}.`
+                };
+            }
+
             // Unknown item (could be a legitimately unsmeltable item like 'cobblestone_slab').
             // Leave the original error for the LLM.
-            console.log(`[AutoRecovery] cannot_smelt: "${attempted}" not in ORE_SMELT_LOOKUP, passing through`);
+            console.log(`[AutoRecovery] cannot_smelt: "${attempted}" not in ORE_SMELT_LOOKUP / FUELS / FINAL_PRODUCTS, passing through`);
             return { recovered: false, result: failResult };
         }
 
