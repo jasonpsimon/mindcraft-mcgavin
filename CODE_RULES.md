@@ -177,6 +177,40 @@ Never ship a change in silent violation of the philosophy. That's how codebases 
 
 ---
 
+## Rule 7: Complete the perimeter
+
+When your change establishes an **invariant that must hold across the codebase** — e.g., "no block modification inside a protected zone," "no LLM call without the bot mutex," "no file I/O without graceful fallback" — you must audit every code path that could violate the invariant. An invariant enforced at one gate only holds if every caller routes through that gate.
+
+### Why
+
+Protection mechanisms fail at the edges: one forgotten callsite, one internal path that skips the guard, one sibling function that replicated logic instead of delegating. The gate works for the paths you tested. The paths you didn't think about keep doing what they always did.
+
+Rule 5 catches breakage of **existing** code. Rule 7 catches **incomplete coverage of new** code. They're different failure modes. A protection with 95% coverage is more dangerous than no protection — it gives false confidence.
+
+### Pre-ship checklist when introducing an invariant
+
+1. **Name the invariant explicitly** in the plan and commit message. Example: "Every block-mutation call must consult `_isInAnyProtectedZone` before proceeding."
+2. **Enumerate every path that could violate it.** Grep the codebase for the operations the invariant constrains — `bot.dig`, `bot.placeBlock`, `bot.toss`, etc. Don't trust your mental model; use the text.
+3. **Verify each path.** For each callsite, confirm it either (a) routes through the central guard, or (b) has its own inline guard with equivalent effect.
+4. **Document the audit** in the commit message. List the callsites you found and how each is covered. A future maintainer should be able to re-run the audit in 30 seconds.
+
+### Good example
+
+_To be filled once we've applied this rule successfully. Today's work is all bad examples — the rule exists because we didn't follow it._
+
+### Bad example
+
+The #7 ProtectedZone shipment (commit `a73e53b`) wired `_isInAnyProtectedZone` into `breakBlockAt`, `placeBlock`, `safeToss`, and `autoBreakStuckPlant`. The Rule 5 audit stopped there. `collectBlock` called `bot.dig` and `bot.collectBlock.collect` **directly** without going through `breakBlockAt`, so `!collectBlocks("grass_block", 10)` inside spawn ran without any protection check. JP observed the bot breaking `grass_block` in the spawn zone post-deploy. A single `grep 'bot\.dig\|bot\.collectBlock\.collect' src/` before shipping would have surfaced the gap. Fixed post-hoc in commit `cde1329`.
+
+### Patch pattern when an incomplete perimeter is discovered
+
+1. Fix the specific leak that was reported.
+2. **Run the same grep across the whole codebase** — not just the one site. Often a second or third leak is waiting in adjacent code.
+3. Log the audit in the fix commit so the perimeter is now known to be complete.
+4. If the invariant is likely to be violated again by future additions, consider adding a test or lint rule that makes the invariant enforceable mechanically.
+
+---
+
 ## Workflow hygiene (supports the rules above)
 
 These aren't rules about the code itself — they're rules about how we introduce code changes, so that the rules above stay enforceable.
