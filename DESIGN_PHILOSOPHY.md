@@ -105,7 +105,7 @@ Every non-trivial change is tracked on `WHITEBOARD.md` — before, during, and a
 - What's deferred (**Known issues**)
 - What's been done (**Recently completed**)
 
-No silent work. If it's not on the whiteboard, we haven't decided it's worth doing. If it's on the whiteboard and abandoned, we say so and move it off, rather than letting it linger.
+No silent work. If it's not on the whiteboard, don't know about it. If it's on the whiteboard and is decided it should be abandoned, we say so and mark it as abandoned, rather than letting it linger.
 
 ### 8. Fail loudly, fail informatively
 
