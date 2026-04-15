@@ -284,6 +284,72 @@ The bot must not disturb player-built structures. No breaking, placing, digging,
 
 ---
 
+## 7a. Replant tree saplings after chopping
+
+**Status:** not started • **Priority:** medium (world-stewardship behavior)
+
+When the bot chops down a tree, it should plant a matching sapling at the base block to keep the world ecosystem renewable. Right now the bot just takes wood and moves on, leaving bare dirt where forests used to be.
+
+**Expected behavior:**
+- After successfully breaking the lowest log of a tree (the "stump" position), check inventory for a matching sapling.
+- If a sapling is available, plant it on top of the dirt/grass block where the stump was.
+- If no matching sapling, opportunistically replant whichever sapling type the bot currently has the most of.
+- Skip in spawn zone (existing protection rules apply) and inside player-structure radius (#7).
+
+**Fix sketch:**
+1. In `skills.js collectBlock` (or wherever `bot.dig` of a `*_log` block happens), detect when the broken block is a tree log AND it's the lowest log in its column (block below = dirt/grass/podzol).
+2. Map the log type → sapling type:
+   ```
+   oak_log → oak_sapling, birch_log → birch_sapling, etc.
+   mangrove_log → mangrove_propagule (special case)
+   bamboo_block → bamboo (special case)
+   ```
+3. After break completes, briefly defer (200ms) so the log drops settle, then check inventory for the matching sapling. If present, call `placeBlock(bot, sapling_name, x, y, z, 'top')` on the now-bare ground.
+4. Wrap in try/catch — sapling placement failures are non-fatal, just log.
+
+**Signals after fix:**
+- Trees the bot chops have saplings at their stump positions within seconds.
+- `[Replant] Planted oak_sapling at (...)` log entries.
+- Forests don't degrade as the bot harvests them.
+
+---
+
+## 7b. Self-cleanup of incidental block placements
+
+**Status:** not started • **Priority:** medium (world-stewardship behavior)
+
+JP observed the bot placing vertical/horizontal columns of resource blocks (cobblestone, dirt, etc.) for unclear reasons — possibly pathfinder scaffolding / tower-up moves, possibly LLM confusion. These leave clutter. Bot should track its own placements and clean them up when the original purpose is gone.
+
+**Expected behavior:**
+- Track every block the bot places via `bot.placedBlocks = [{x, y, z, type, placedAt, purpose}]` (similar to existing `bot.placedTorches`).
+- Categorize by purpose:
+  - `'pathfinder-scaffold'` (pillar to climb up) — remove after bot has moved >5 blocks past
+  - `'spawn-block'` (interim shelter / cover) — remove after the danger passes
+  - `'unknown-llm'` (LLM placed without obvious intent) — remove after a configurable cooldown (e.g., 5 min idle)
+- **Exclusions** (never auto-remove):
+  - Torches (placed deliberately, navigation aid)
+  - Crafting table, furnace, chest (functional placements)
+  - Anything the LLM explicitly placed via `!placeBlock` with intent (track via context)
+  - Anything inside spawn zone (protection rules)
+  - Anything inside player-structure radius (#7)
+
+**Fix sketch:**
+1. Hook into `placeBlock` in `skills.js` — after a successful placement, push to `bot.placedBlocks` with inferred purpose:
+   - Called from pathfinder internals (mineflayer-pathfinder's place-and-climb): `'pathfinder-scaffold'`
+   - Called from `safeToss._sealHole` / surface-hole sealing: `'spawn-block'`
+   - Called from explicit LLM `!placeBlock` command: `'intentional'` (skip cleanup)
+2. New mode `cleanup_blocks` in `modes.js` (low priority, fires when idle):
+   - Walk through `bot.placedBlocks`; for each `'pathfinder-scaffold'` or `'spawn-block'` entry where the bot is now >5 blocks away AND the block still exists at the recorded position, attempt to break it.
+   - Remove from list after break (success or block-already-gone).
+3. Cap list size (e.g., 200 entries, FIFO).
+4. Clear list on bot death/respawn (positions become stale).
+
+**Signals after fix:**
+- `[Cleanup] Removed pathfinder-scaffold cobblestone at (...)` log entries.
+- Bot's wake doesn't accumulate unexplained pillars.
+
+---
+
 ## 8. Humanized action delays
 
 **Status:** not started • **Priority:** low-medium
