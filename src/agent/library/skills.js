@@ -1187,14 +1187,39 @@ function _configureTerrainSafeMovements(bot, movements) {
 // Plant-like blocks that are safe to break inside the spawn zone.
 // Leaves are included here (per JP 2026-04-14) — they decay naturally in
 // Minecraft anyway, so breaking one to clear a path is benign.
-const PLANT_LIKE_PATTERN = /bush|fern|grass|vine|flower|sprout|lichen|moss|fungus|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom|leaves/i;
+//
+// Bug A fix (2026-04-15): patterns now use word-boundary anchors where the
+// token would otherwise match solid-terrain block names. E.g. bare "grass"
+// would match both "short_grass" (plant) and "grass_block" (solid dirt cube).
+// "(^|_)grass$" matches the former, skips the latter.
+const PLANT_LIKE_PATTERN = /bush|fern|(^|_)grass$|vine|flower|sprout|lichen|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom|leaves/i;
 // Tree-associated structural blocks — do NOT break inside spawn zone
 // (logs, wood, saplings, tree roots, nether tree stems, bamboo/azalea blocks).
 // Leaves intentionally NOT in this list per JP: leaves behave like plants.
 const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
 
+// Hard exclusion list — solid-terrain blocks that would otherwise be
+// misclassified as plants. Never break these even if they match the
+// plant pattern. Belt-and-suspenders with the tightened regex above.
+const SOLID_GROUND_BLOCKS = new Set([
+    'grass_block', 'moss_block', 'mycelium', 'podzol',
+    'rooted_dirt', 'dirt_path', 'farmland',
+]);
+
 export async function autoBreakStuckPlant(bot) {
     return await withBotLock('autoBreakStuckPlant', async () => {
+        // Per-block failure blacklist (Bug C fix 2026-04-15). When a dig
+        // throws (e.g. mode preemption / pathfinder race), don't immediately
+        // retry the same block on the next invocation — try a different
+        // neighbor instead. 30s cooldown gives modes time to finish and
+        // the bot may have moved anyway.
+        if (!bot._autoBreakBlacklist) bot._autoBreakBlacklist = new Map();
+        const now = Date.now();
+        // Prune expired entries
+        for (const [key, until] of bot._autoBreakBlacklist) {
+            if (until <= now) bot._autoBreakBlacklist.delete(key);
+        }
+
         const pos = bot.entity.position.floored();
         // Cardinal + diagonal neighbors at feet and head level (8 around feet, 8 around head)
         const offsets = [
@@ -1207,6 +1232,14 @@ export async function autoBreakStuckPlant(bot) {
             const p = pos.offset(dx, dy, dz);
             const block = bot.blockAt(p);
             if (!block) continue;
+
+            // Hard skip for solid-terrain blocks (Bug A fix)
+            if (SOLID_GROUND_BLOCKS.has(block.name)) continue;
+
+            // Check per-block cooldown from prior failures (Bug C fix)
+            const blacklistKey = `${p.x},${p.y},${p.z}`;
+            const cooldownUntil = bot._autoBreakBlacklist.get(blacklistKey);
+            if (cooldownUntil && cooldownUntil > now) continue;
 
             const isPlant = PLANT_LIKE_PATTERN.test(block.name);
             const isTreePart = TREE_PART_PATTERN.test(block.name);
@@ -1232,7 +1265,8 @@ export async function autoBreakStuckPlant(bot) {
                 await bot.dig(block);
                 return true;
             } catch (err) {
-                console.warn(`[AutoBreakPlant] Failed to break ${block.name}: ${err.message}`);
+                console.warn(`[AutoBreakPlant] Failed to break ${block.name} at (${p.x}, ${p.y}, ${p.z}): ${err.message} — blacklisting for 30s`);
+                bot._autoBreakBlacklist.set(blacklistKey, now + 30000);
             }
         }
         return false;
