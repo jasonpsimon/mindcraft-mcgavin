@@ -2,24 +2,24 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (Bug B mystery solved via instrumentation: was death+respawn from falls. New item #10 survival hardening; first 2 pieces shipped.)_
+_Last updated: 2026-04-15 (Bug B fully resolved via #10 survival hardening — bot escapes spawn zone in 1 hop, 0 deaths)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `61db5d2`. All fixes merged.
+- Branch: `develop` — HEAD `4def1fa`. All fixes merged + pushed to GitHub.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Stability (audit 2026-04-15, 7h 47m uptime): **0 disconnects**, 10 PartialReadError events survived (~1.3/hr, was ~4/hr), 1 death (zombie), 29/27 mutex acquires/releases (balanced). ViaBackwards + mutex + swim fixes confirmed holding.
-- Gameplay: bot collected 14 coal_ore, crafted 3 furnaces, executed 18 commands over the session. Currently inside spawn zone at roughly (40, -136) — 127 blocks from spawn, oscillating across directions.
-- Next priorities: fix bugs found in overnight audit (see "Newly found bugs" section below), then tackle #4 tool selection.
+- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19).
+- Bug B resolved 2026-04-15: bot escaped spawn zone in 1 hop (226 → 265 blocks) with 0 deaths after combined fix landed.
+- Next priority: **#4 Wrong tool for the block** — biggest remaining performance gain. Bot mines stone with bare hands which is ~7× slower than with a pickaxe and drops nothing in many cases.
 
 ---
 
 ## In-progress
 
-- **Bug B — escape loop plateau at ~130 blocks from spawn.** Bot oscillates across 4 directions without making meaningful forward progress after a death-respawn lands it back inside the zone. See "Newly found bugs" below for details + fix options.
+_Nothing active — last cycle resolved Bug B via #10 survival hardening. Pick next item from the to-do queue._
 
 ---
 
@@ -37,16 +37,20 @@ _Last updated: 2026-04-15 (Bug B mystery solved via instrumentation: was death+r
 
 **Verified:** post-deploy, bot now only breaks `vine` and `short_grass` inside spawn. No `grass_block` events.
 
-### Bug B: Escape loop plateau at ~130 blocks from spawn
+### Bug B: Escape loop plateau at ~130 blocks from spawn — ✅ resolved 2026-04-15 (`ad3874d` + `4def1fa`)
 
 **Severity:** medium — bot gameplay stalls when respawn lands it back inside the zone after first escape.
 
-Over 7h 47m: **39 escape attempts, 0 successful.** Bot oscillates at positions (40-52, -135 to -139), moving 1-2 blocks per 2-minute attempt, cycling through 4 directions. In earlier sessions the bot reached 253 and 300 blocks from spawn — then a death + respawn put it back inside the zone, and it couldn't escape again from the new position.
+Over 7h 47m initial observation: **39 escape attempts, 0 successful.** Bot oscillated at positions (40-52, -135 to -139). Instrumentation 2026-04-15 (`a4981b0`) revealed the root cause: bot was reaching the boundary, **dying to fall damage**, respawning at world spawn, and starting over — not actually plateauing in the escape logic itself.
 
-**Fix sketches (options, not shipped yet):**
-- Detect "no meaningful progress across 3 consecutive attempts" → bail cleanly so the self-prompter can try LLM-driven alternatives (e.g., !goToPosition to a manually-picked distant point).
-- Remember successful escape exit points per spawn coordinate; next time around, head toward that known-good exit.
-- Shorter per-direction timeout (60s not 120s) so the bot cycles directions faster and exhausts the loop sooner.
+**Fix shipped (combined):**
+
+1. **Escape rewrite** (`ad3874d`): commit-to-direction with 8 cardinals + diagonals, 40-block hops, sidestep maneuver (back 3 + alternate left/right). Plus persistent `bot.escapeMemory` — successful exits cached per spawn coord, tried first on next escape.
+2. **Survival hardening** (`4def1fa`, see #10): `pf.Movements.maxDropDown = 3` (vanilla no-damage limit) + `autoEat.startAt: 19` (continuous health regen). Pathfinder no longer chooses lethal cliff drops.
+3. **Bug A fix** (`ec75860`): `grass_block` no longer destroyed by autoBreakStuckPlant.
+4. **Bug C fix** (`ec75860`): per-block 30s blacklist after dig failures.
+
+**Verified 2026-04-15:** post-deploy, bot escaped spawn zone in **1 hop**: 226.6 → 265.2 blocks from spawn via +X-Z direction. 0 deaths, 0 fall damage events. The escape exit was recorded to `bot.escapeMemory` for future use.
 
 ### Bug C: `autoBreakStuckPlant` retries same block that threw `Digging aborted` — ✅ fixed 2026-04-15 (`ec75860`)
 
@@ -415,7 +419,7 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 
 ## 10. Bot survival hardening (don't die avoidably)
 
-**Status:** 🟡 partially shipped 2026-04-15 (fall prevention + auto-eat threshold) • **Priority:** high (escape and gameplay are repeatedly blocked by avoidable deaths)
+**Status:** 🟡 partially shipped 2026-04-15 (fall prevention + auto-eat threshold). First two pieces validated: bot escaped spawn zone in 1 hop with 0 fall deaths post-deploy. Lava/mob/dimension safety still pending. • **Priority:** high (every avoidable death is a respawn-loop)
 
 The bot keeps dying to easily-preventable causes — fall damage from pathfinder choosing risky drops, hunger-related health decay, mob ambushes — which respawns it at world spawn and resets its progress (this was the "mysterious teleport-back" we tracked in Bug B). Need a pattern of programmatic safety habits rather than relying on the LLM to remember.
 
