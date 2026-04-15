@@ -2,24 +2,67 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14 22:36 (session wrap: #1 resolved, #0 escape validated end-to-end, #3 partially shipped, drowning death points at #2 as next priority)_
+_Last updated: 2026-04-15 (overnight audit: 7h 47m stable uptime confirms ViaBackwards + mutex + swim fixes; 3 new bugs surfaced — see "Newly found" section)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `fix/spawn-zone-escape` — HEAD `d051ab1`. Today's work sits here; pending merge to `develop`.
+- Branch: `develop` — HEAD `61db5d2`. All fixes merged.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Stability: **ViaBackwards fix holding** — previously ~4 reconnects/hr due to `PartialReadError`, now observed 1 spawn event per session with 0 reconnects over extended windows.
-- Escape: **validated end-to-end** twice this session (bot reached 253 and 300 blocks from spawn, crossing the 250-block boundary). Terrain-aware movement + `autoBreakStuckPlant` helper are both live.
-- Next priority: **#2 Swim.** Bot is now dying to drowning because it successfully escapes spawn and then walks into water it can't surface from.
+- Stability (audit 2026-04-15, 7h 47m uptime): **0 disconnects**, 10 PartialReadError events survived (~1.3/hr, was ~4/hr), 1 death (zombie), 29/27 mutex acquires/releases (balanced). ViaBackwards + mutex + swim fixes confirmed holding.
+- Gameplay: bot collected 14 coal_ore, crafted 3 furnaces, executed 18 commands over the session. Currently inside spawn zone at roughly (40, -136) — 127 blocks from spawn, oscillating across directions.
+- Next priorities: fix bugs found in overnight audit (see "Newly found bugs" section below), then tackle #4 tool selection.
 
 ---
 
 ## In-progress
 
-_Nothing active. `fix/spawn-zone-escape` branch ready for merge review._
+- **Bug A — `AutoBreakPlant` destroying terrain (`grass_block`) inside spawn zone.** Critical — actively harmful. See "Newly found bugs" below.
+- **Bug C — repeat-fail on same block (`Failed to break large_fern: Digging aborted` x3).** Wastes escape attempts. See "Newly found bugs" below.
+
+---
+
+## Newly found bugs (overnight audit 2026-04-15)
+
+### Bug A: `AutoBreakPlant` breaks `grass_block` terrain
+
+**Severity:** critical — actively destroying player's spawn-area terrain.
+
+`PLANT_LIKE_PATTERN` regex matches "grass" which also matches `grass_block` (the solid dirt-with-grass-top cube, NOT the plant `short_grass`). Bot destroyed at least 3 grass_block tiles inside the spawn zone during escape attempts. Would also match `moss_block`, `rooted_dirt` in the wild.
+
+**Log evidence:**
+```
+[AutoBreakPlant] Breaking plant grass_block inside spawn zone (plants allowed) at (-80, …)
+```
+
+**Fix sketch (trivial):** add a hard exclusion list to `autoBreakStuckPlant` covering solid-ground blocks (`grass_block`, `moss_block`, `rooted_dirt`, `mycelium`, `podzol`, `dirt_path`). Tighten the regex to avoid matching `_block` suffix on solid terrain. Keep `short_grass`, `tall_grass`, `fern`, `large_fern` etc. still breakable.
+
+### Bug B: Escape loop plateau at ~130 blocks from spawn
+
+**Severity:** medium — bot gameplay stalls when respawn lands it back inside the zone after first escape.
+
+Over 7h 47m: **39 escape attempts, 0 successful.** Bot oscillates at positions (40-52, -135 to -139), moving 1-2 blocks per 2-minute attempt, cycling through 4 directions. In earlier sessions the bot reached 253 and 300 blocks from spawn — then a death + respawn put it back inside the zone, and it couldn't escape again from the new position.
+
+**Fix sketches (options, not shipped yet):**
+- Detect "no meaningful progress across 3 consecutive attempts" → bail cleanly so the self-prompter can try LLM-driven alternatives (e.g., !goToPosition to a manually-picked distant point).
+- Remember successful escape exit points per spawn coordinate; next time around, head toward that known-good exit.
+- Shorter per-direction timeout (60s not 120s) so the bot cycles directions faster and exhausts the loop sooner.
+
+### Bug C: `autoBreakStuckPlant` retries same block that threw `Digging aborted`
+
+**Severity:** medium — wastes escape attempts, clutters log, slight concurrency-race signature.
+
+Three consecutive log entries: `Failed to break large_fern: Digging aborted` — all on the same block. `Digging aborted` is the classic pathfinder/dig interrupt-race signature, which can still happen when an `interrupts:['all']` mode (self_defense / cowardice / hurt) fires during the break and preempts the mutex.
+
+**Fix sketch (small):**
+- Track attempted positions within `autoBreakStuckPlant` per-call (short in-memory blacklist). If a block fails, skip it on immediate retry — try a different adjacent plant instead.
+- Optionally: retry after a 500ms cooldown (let the mode finish), or only retry once per specific block per escape-attempt cycle.
+
+---
+
+
 
 ---
 
