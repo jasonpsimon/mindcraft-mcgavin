@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (D1 shipped; F+G queued; spawn-escape path persistence added to F as first concrete migration target)_
+_Last updated: 2026-04-15 (Cannot-smelt AutoRecovery pattern shipped; Known issues now down to 2)_
 
 ---
 
@@ -198,7 +198,6 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ## Known issues (deferred — out of scope for current to-do)
 
 - **`self_preservation` mode now waits on the bot mutex in routine paths.** `interrupts: ['all']` modes already bypass mutex (commit `97c03fd`); the trade-off is preserved. Edge cases (drowning during a long SafeToss) could still be delayed by a few seconds. Acceptable for now.
-- **`Cannot smelt coal_ore` LLM confusion.** LLM tried to smelt the ore block instead of the dropped coal item. Could auto-correct via AutoRecovery pattern.
 
 ---
 
@@ -217,6 +216,22 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — AutoRecovery `Cannot smelt <ore>` handler ✅
+
+Commit `efec3e4`. LLM was calling `!smelt("coal_ore")` (and variants) and hitting the upstream mineflayer error "Cannot smelt X. Hint: make sure you are smelting the 'raw' item." The `isSmeltable()` heuristic in `src/utils/mcdata.js` only accepts `raw*`, `*log*`, and a small whitelist — so every ore-block smelt attempt short-circuits.
+
+**New AutoRecovery pattern + handler** in `src/agent/auto_recovery.js`:
+- `FAILURE_PATTERNS` entry `cannot_smelt` matching the error regex, routed to new `CORRECT_SMELT_TARGET` recovery action.
+- `ORE_SMELT_LOOKUP` table classifies 19 ores into three groups:
+  - **Group A** (11 entries: coal_ore, redstone_ore, lapis_ore, diamond_ore, emerald_ore, nether_quartz_ore + deepslate variants): mining drops the final item directly. Recovery tells the LLM no smelting is needed and notes whether the final drop is already in inventory — **no auto-action** (Option i per JP's call).
+  - **Group B** (7 entries: iron_ore, gold_ore, copper_ore + deepslate + nether_gold_ore): mining drops `raw_Y`. If `raw_Y` is in inventory, recovery silently auto-corrects `!smelt("X_ore")` → `!smelt("raw_Y")` with the count from the original command clamped to available supply. Else tells LLM to mine first.
+  - **Group C** (1 entry: `ancient_debris`): smeltable in vanilla but the upstream heuristic rejects it. Recovery surfaces the gap honestly so the LLM can route around it.
+- Unknown items pass through the original error unchanged.
+
+**Verification:** regex unit-tested against five positive cases (coal_ore, iron_ore, deepslate_diamond_ore, ancient_debris, stone_brick) and one negative — all correctly classified. Bot restarted on new code, running cleanly in a deepslate biome with matching ores in range — next time gemma-4 decides to smelt one, AutoRecovery fires.
+
+Aligns with #9: converts a recurring LLM confusion into a deterministic code response. No prompt-rewriting required.
 
 ### 2026-04-15 — D1 Legacy `history.memory` deprecation ✅
 
