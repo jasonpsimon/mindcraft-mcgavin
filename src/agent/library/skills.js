@@ -1276,22 +1276,135 @@ export async function autoBreakStuckPlant(bot) {
 /**
  * Walk the bot out of the spawn protection zone if it's inside it.
  *
- * Target: SPAWN_ESCAPE_DISTANCE (350) blocks from spawn in the direction the
- * bot is already drifting (or +X if bot is exactly at spawn). Leaves a buffer
- * past the protection boundary so small movements don't push the bot back in.
+ * Strategy (Bug B fix 2026-04-15):
+ *
+ *   1. CACHED EXIT — if bot.escapeMemory has a recorded successful exit
+ *      from this spawn coordinate, try it first with a direct path.
+ *
+ *   2. COMMIT-TO-DIRECTION — pick ONE of 8 directions (4 cardinals +
+ *      4 diagonals) based on drift-from-spawn. Commit to that direction.
+ *      Walk in 40-block hops with 45s timeouts. If a hop makes >=10 blocks
+ *      of progress, continue forward. If stuck (<10 progress), run a
+ *      "stuck maneuver" (back 2-3 blocks + side 15 blocks alternating
+ *      left/right), then retry the primary direction from the new position.
+ *
+ *   3. DIRECTION SWITCH — if 5 consecutive stuck attempts exhaust a
+ *      direction, switch to the next-best one (sorted by drift proximity).
+ *      No bail on individual direction failures; try all 8 before giving up.
+ *
+ *   4. EXIT RECORDING — on successful escape (crossing the 250-block
+ *      boundary), record {spawnX, spawnZ, exitX, exitY, exitZ, timestamp}
+ *      to bot.escapeMemory for next time.
  *
  * Called on every spawn (before the self-prompter starts) and as an
  * AutoRecovery handler if a destructive action hits spawn protection.
  *
- * Returns true if escape completed (or wasn't needed), false on path failure.
- *
- * Hardening: each direction attempt is wrapped in a timeout. If goToGoal
- * hangs on terrain the pathfinder can't navigate (e.g., swamp water without
- * swim — see whiteboard item #2), the attempt aborts and the next cardinal
- * direction is tried. If all 4 directions fail, the function returns false
- * cleanly so the self-prompter can still start.
+ * Returns true on escape success or if bot was already outside. Returns
+ * false only after all 8 directions are fully exhausted (rare — usually
+ * indicates bedrock / water / truly impassable terrain surrounding spawn).
  */
-const SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS = 120000;  // 2 min per direction
+const ESCAPE_HOP_DISTANCE = 40;               // each waypoint 40 blocks further in chosen direction
+const ESCAPE_HOP_TIMEOUT_MS = 45000;           // 45s per hop
+const ESCAPE_STUCK_MANEUVER_TIMEOUT_MS = 20000; // 20s for back-up / sidestep
+const ESCAPE_CACHED_EXIT_TIMEOUT_MS = 90000;   // 90s for cached-exit attempt
+const ESCAPE_MAX_STUCKS_PER_DIRECTION = 5;     // give up on a direction after 5 stucks
+const ESCAPE_PROGRESS_THRESHOLD = 10;           // blocks-of-progress that counts as "made progress"
+const ESCAPE_MEMORY_MAX = 50;                   // most-recent entries to keep
+const ESCAPE_MEMORY_SPAWN_MATCH_RADIUS = 20;   // consider memory entries within this many blocks
+const ESCAPE_MEMORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const ESCAPE_BACK_BLOCKS = 3;                   // back up N blocks when stuck (before sidestep)
+const ESCAPE_SIDE_BLOCKS = 15;                  // sidestep perpendicular distance
+
+// Snap an unnormalized (dx, dz) vector to the nearest of 8 unit directions,
+// and return all 8 sorted by angular proximity to the input (closest first).
+// If input vector is near-zero, fall back to +X as primary.
+function _rank8DirectionsByDrift(dx, dz) {
+    const EIGHT = [
+        { dx: 1, dz: 0, label: '+X' },
+        { dx: 1, dz: 1, label: '+X+Z' },
+        { dx: 0, dz: 1, label: '+Z' },
+        { dx: -1, dz: 1, label: '-X+Z' },
+        { dx: -1, dz: 0, label: '-X' },
+        { dx: -1, dz: -1, label: '-X-Z' },
+        { dx: 0, dz: -1, label: '-Z' },
+        { dx: 1, dz: -1, label: '+X-Z' },
+    ];
+    const mag = Math.sqrt(dx * dx + dz * dz);
+    if (mag < 0.001) {
+        // At spawn — no drift. Return directions in fixed order.
+        return EIGHT.map(d => ({ ...d, _unit: _unitize(d.dx, d.dz) }));
+    }
+    const ux = dx / mag, uz = dz / mag;
+    return EIGHT
+        .map(d => {
+            const u = _unitize(d.dx, d.dz);
+            // cosine similarity as sort key — higher is closer to drift
+            const cos = ux * u.dx + uz * u.dz;
+            return { ...d, _unit: u, _cos: cos };
+        })
+        .sort((a, b) => b._cos - a._cos);
+}
+
+function _unitize(dx, dz) {
+    const mag = Math.sqrt(dx * dx + dz * dz);
+    return mag < 0.001 ? { dx: 0, dz: 0 } : { dx: dx / mag, dz: dz / mag };
+}
+
+// Find the closest matching memory entry for the given spawn coordinates.
+// Returns the entry or null. Prunes stale entries in place.
+function _findCachedExit(bot, spawn) {
+    if (!Array.isArray(bot.escapeMemory) || bot.escapeMemory.length === 0) return null;
+    const now = Date.now();
+    bot.escapeMemory = bot.escapeMemory.filter(e => now - (e.timestamp || 0) < ESCAPE_MEMORY_MAX_AGE_MS);
+    let best = null;
+    let bestDistSq = Infinity;
+    for (const e of bot.escapeMemory) {
+        const dx = e.spawnX - spawn.x;
+        const dz = e.spawnZ - spawn.z;
+        const ds = dx * dx + dz * dz;
+        if (ds <= ESCAPE_MEMORY_SPAWN_MATCH_RADIUS * ESCAPE_MEMORY_SPAWN_MATCH_RADIUS && ds < bestDistSq) {
+            best = e;
+            bestDistSq = ds;
+        }
+    }
+    return best;
+}
+
+// Record a successful exit for future escapes from the same spawn area.
+function _recordEscapeExit(bot, spawn, exitPos) {
+    if (!Array.isArray(bot.escapeMemory)) bot.escapeMemory = [];
+    bot.escapeMemory.push({
+        spawnX: Math.floor(spawn.x),
+        spawnZ: Math.floor(spawn.z),
+        exitX: Math.floor(exitPos.x),
+        exitY: Math.floor(exitPos.y),
+        exitZ: Math.floor(exitPos.z),
+        timestamp: Date.now(),
+    });
+    if (bot.escapeMemory.length > ESCAPE_MEMORY_MAX) {
+        bot.escapeMemory = bot.escapeMemory.slice(-ESCAPE_MEMORY_MAX);
+    }
+}
+
+// Race goToGoal against a hard timeout. Returns when either completes.
+// Exceptions are caught and logged; callers should re-check position.
+async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
+    let timeoutHandle;
+    const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
+    const timeout = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+            () => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`)),
+            timeoutMs
+        );
+    });
+    try {
+        await Promise.race([attempt, timeout]);
+    } catch (err) {
+        console.warn(`[SpawnEscape] ${label}: ${err.message}`);
+    } finally {
+        clearTimeout(timeoutHandle);
+    }
+}
 
 export async function escapeSpawnZone(bot) {
     return await withBotLock('escapeSpawnZone', async () => {
@@ -1301,145 +1414,74 @@ export async function escapeSpawnZone(bot) {
             return false;
         }
 
-        const startPos = bot.entity.position;
-        const startDx = startPos.x - spawn.x;
-        const startDz = startPos.z - spawn.z;
-        const startDistSq = startDx * startDx + startDz * startDz;
-
-        // Already outside the protection zone — nothing to do
-        if (startDistSq > SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS) {
-            return true;
-        }
-
-        // Candidate directions, preferred order: drift direction first, then cardinals.
-        // Each entry is a unit vector (dx, dz).
-        const directions = [];
-        if (startDistSq >= 1) {
-            const d = Math.sqrt(startDistSq);
-            directions.push({ dx: startDx / d, dz: startDz / d, label: 'drift' });
-        }
-        directions.push(
-            { dx: 1, dz: 0, label: '+X' },
-            { dx: 0, dz: 1, label: '+Z' },
-            { dx: -1, dz: 0, label: '-X' },
-            { dx: 0, dz: -1, label: '-Z' },
-        );
-
-        // Helper: read current bot position and distance from spawn, guarding against NaN
-        // (bot.entity.position can transiently return NaN during chunk/tick boundaries).
+        // Helper: read current bot position with NaN guard
         const readPos = () => {
             const p = bot.entity?.position;
             if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return null;
-            const dxp = p.x - spawn.x;
-            const dzp = p.z - spawn.z;
-            return {
-                x: p.x,
-                y: p.y,
-                z: p.z,
-                dist: Math.sqrt(dxp * dxp + dzp * dzp),
-            };
+            const dx = p.x - spawn.x;
+            const dz = p.z - spawn.z;
+            return { x: p.x, y: p.y, z: p.z, dist: Math.sqrt(dx * dx + dz * dz) };
         };
-
-        // Helper: are we out of the zone yet?
         const isOutside = () => {
             const p = readPos();
             return p !== null && p.dist > SPAWN_PROTECTION_RADIUS;
         };
 
+        // Already outside — nothing to do
+        if (isOutside()) return true;
+
         const prevMovements = bot.pathfinder.movements;
         try {
-            for (const dir of directions) {
-                // Check escape status before each attempt. A prior attempt may have
-                // moved us outside the zone even if it threw (e.g. goto exception
-                // after significant movement).
+            // ---------- Step 1: try cached exit from memory ----------
+            const cached = _findCachedExit(bot, spawn);
+            if (cached) {
+                console.log(`[SpawnEscape] Found cached exit at (${cached.exitX}, ${cached.exitY}, ${cached.exitZ}) for spawn (~${Math.floor(spawn.x)}, ~${Math.floor(spawn.z)}) — trying direct path first`);
+                log(bot, `Remembered a good exit at (${cached.exitX}, ${cached.exitZ}) — heading there.`);
+                await _escapeTryPath(bot, cached.exitX, cached.exitY, cached.exitZ, ESCAPE_CACHED_EXIT_TIMEOUT_MS, 'cached-exit');
                 if (isOutside()) {
-                    const endP = readPos();
-                    console.log(`[SpawnEscape] Cleared zone at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
-                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                    const p = readPos();
+                    console.log(`[SpawnEscape] Cached exit worked — at (${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}), ${p.dist.toFixed(1)} blocks from spawn`);
+                    _recordEscapeExit(bot, spawn, p);
                     return true;
                 }
-
-                let pos = readPos();
-                if (pos === null) {
-                    // Bot position not available yet (transient NaN). Wait a tick and skip.
-                    console.warn(`[SpawnEscape] Attempt ${dir.label}: position unavailable (likely chunk sync). Waiting 1s.`);
-                    await new Promise(r => setTimeout(r, 1000));
-                    pos = readPos();
-                    if (pos === null) {
-                        console.warn(`[SpawnEscape] Attempt ${dir.label}: still no position — skipping direction.`);
-                        continue;
-                    }
-                }
-
-                const tx = Math.floor(spawn.x + dir.dx * SPAWN_ESCAPE_DISTANCE);
-                const tz = Math.floor(spawn.z + dir.dz * SPAWN_ESCAPE_DISTANCE);
-                const ty = Math.floor(pos.y);
-
-                console.log(`[SpawnEscape] Attempt ${dir.label}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) — ${pos.dist.toFixed(1)} blocks from spawn. Walking to (${tx}, ${ty}, ${tz}).`);
-                log(bot, `Trying to leave spawn zone heading ${dir.label} toward (${tx}, ${tz}).`);
-
-                // Race goToGoal against a hard timeout — never hang the bot.
-                let timeoutHandle;
-                const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
-                const timeout = new Promise((_, reject) => {
-                    timeoutHandle = setTimeout(
-                        () => reject(new Error(`escape ${dir.label} timed out after ${SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS / 1000}s`)),
-                        SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS
-                    );
-                });
-
-                const attemptStartDist = pos.dist;
-
-                try {
-                    await Promise.race([attempt, timeout]);
-                } catch (err) {
-                    console.warn(`[SpawnEscape] Attempt ${dir.label} raised: ${err.message}`);
-                } finally {
-                    clearTimeout(timeoutHandle);
-                }
-
-                // Always check position after an attempt, regardless of outcome.
-                // Pathfinder can throw after walking us a long way; we count that as progress.
-                if (isOutside()) {
-                    const endP = readPos();
-                    console.log(`[SpawnEscape] Arrived at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
-                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
-                    return true;
-                }
-
-                const endP = readPos();
-                if (endP) {
-                    const progress = endP.dist - attemptStartDist;
-                    console.warn(`[SpawnEscape] Attempt ${dir.label} finished with bot at ${endP.dist.toFixed(1)} blocks from spawn — still inside (progress: ${progress.toFixed(1)}).`);
-
-                    // If progress was minimal (<5 blocks), try to break a
-                    // blocking plant before the next direction. autoBreakStuckPlant
-                    // only breaks blocks OUTSIDE the spawn zone — useful at the
-                    // boundary where a plant just across the line is blocking us.
-                    if (progress < 5) {
-                        try {
-                            const broke = await autoBreakStuckPlant(bot);
-                            if (broke) {
-                                console.log(`[SpawnEscape] Broke a blocking plant — next direction will retry fresh terrain.`);
-                                log(bot, `Cleared a plant obstacle near the boundary. Continuing escape.`);
-                            }
-                        } catch (breakErr) {
-                            console.warn(`[SpawnEscape] autoBreakStuckPlant failed: ${breakErr.message}`);
-                        }
-                    }
-                }
+                console.log(`[SpawnEscape] Cached exit didn't work — falling through to directional commit`);
             }
 
-            // One final check in case the last attempt moved us out after its exception.
-            if (isOutside()) {
-                const endP = readPos();
-                console.log(`[SpawnEscape] Cleared on final check: (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
-                log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+            // ---------- Step 2: pick 8 directions sorted by drift ----------
+            const startPos = readPos();
+            if (!startPos) {
+                console.warn('[SpawnEscape] No bot position — aborting escape');
+                return false;
+            }
+            const driftDx = startPos.x - spawn.x;
+            const driftDz = startPos.z - spawn.z;
+            const directions = _rank8DirectionsByDrift(driftDx, driftDz);
+            console.log(`[SpawnEscape] Direction order by drift proximity: ${directions.map(d => d.label).join(', ')}`);
+
+            // ---------- Step 3: commit to each direction in order ----------
+            for (const dir of directions) {
+                if (isOutside()) break;  // a prior attempt got us out unexpectedly
+
+                const committed = await _commitToDirection(bot, spawn, dir, readPos, isOutside);
+                if (committed === 'escaped') {
+                    const p = readPos();
+                    console.log(`[SpawnEscape] Arrived at (${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}) — ${p.dist.toFixed(1)} blocks from spawn via ${dir.label}`);
+                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(p.dist)} blocks from spawn.`);
+                    _recordEscapeExit(bot, spawn, p);
+                    return true;
+                }
+                // committed === 'stuck' — try next direction
+            }
+
+            // All 8 directions exhausted
+            const endP = readPos();
+            if (endP && endP.dist > SPAWN_PROTECTION_RADIUS) {
+                // Raced across the boundary at the very end
+                _recordEscapeExit(bot, spawn, endP);
                 return true;
             }
-
-            console.warn('[SpawnEscape] All attempts finished inside zone. Giving up — self-prompter will start inside zone.');
-            log(bot, `I couldn't find a clear path out of the spawn zone in any direction. I'll keep trying as I explore.`);
+            console.warn(`[SpawnEscape] All 8 directions exhausted. Final distance: ${endP ? endP.dist.toFixed(1) : '?'} blocks from spawn.`);
+            log(bot, `I tried all 8 directions but couldn't escape the spawn zone. Continuing from inside.`);
             return false;
         } finally {
             if (prevMovements) {
@@ -1447,6 +1489,127 @@ export async function escapeSpawnZone(bot) {
             }
         }
     });
+}
+
+/**
+ * Commit to one direction: walk in 40-block hops, do stuck maneuvers on
+ * low-progress hops, give up on this direction after MAX_STUCKS stucks.
+ * Returns 'escaped' if the bot crosses the protection boundary, 'stuck'
+ * if the direction is exhausted.
+ */
+async function _commitToDirection(bot, spawn, dir, readPos, isOutside) {
+    const u = dir._unit;  // normalized unit vector for the direction
+    let stuckCount = 0;
+    let sidestepSide = 'left';  // alternates
+    let hopNum = 0;
+
+    while (stuckCount < ESCAPE_MAX_STUCKS_PER_DIRECTION) {
+        if (isOutside()) return 'escaped';
+
+        const pos = readPos();
+        if (!pos) {
+            console.warn(`[SpawnEscape] ${dir.label}: position unavailable, waiting 1s`);
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+        }
+
+        hopNum++;
+        // Next waypoint: 40 blocks further in primary direction
+        const tx = Math.floor(pos.x + u.dx * ESCAPE_HOP_DISTANCE);
+        const tz = Math.floor(pos.z + u.dz * ESCAPE_HOP_DISTANCE);
+        const ty = Math.floor(pos.y);
+        const startDist = pos.dist;
+
+        console.log(`[SpawnEscape] ${dir.label} hop ${hopNum}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) [${startDist.toFixed(1)} from spawn] → (${tx}, ${tz})`);
+        await _escapeTryPath(bot, tx, ty, tz, ESCAPE_HOP_TIMEOUT_MS, `${dir.label} hop ${hopNum}`);
+
+        if (isOutside()) return 'escaped';
+
+        const newPos = readPos();
+        const progress = newPos ? (newPos.dist - startDist) : 0;
+        console.log(`[SpawnEscape] ${dir.label} hop ${hopNum} progress: ${progress.toFixed(1)} blocks`);
+
+        if (progress >= ESCAPE_PROGRESS_THRESHOLD) {
+            // Good — reset stuck counter and loop (next hop from new position)
+            stuckCount = 0;
+            continue;
+        }
+
+        // Stuck — execute stuck maneuver (back + sidestep)
+        stuckCount++;
+        console.log(`[SpawnEscape] ${dir.label} stuck ${stuckCount}/${ESCAPE_MAX_STUCKS_PER_DIRECTION} — running stuck maneuver (back + ${sidestepSide})`);
+        await _executeStuckManeuver(bot, spawn, u, sidestepSide, readPos);
+        sidestepSide = sidestepSide === 'left' ? 'right' : 'left';
+
+        // Also try auto-breaking a nearby plant while we're at it
+        try {
+            await autoBreakStuckPlant(bot);
+        } catch (_) { /* best effort */ }
+    }
+
+    console.warn(`[SpawnEscape] ${dir.label} exhausted (${ESCAPE_MAX_STUCKS_PER_DIRECTION} stucks). Trying next direction.`);
+    return 'stuck';
+}
+
+/**
+ * Execute the stuck maneuver: back up ESCAPE_BACK_BLOCKS, then sidestep
+ * ESCAPE_SIDE_BLOCKS perpendicular (left or right per sidestepSide).
+ *
+ * Rules (per JP 2026-04-15):
+ *   - Back step is unconditional (small regression OK to unstick).
+ *   - Sidestep direction must not decrease distance-from-spawn further
+ *     than the back step already did. If the preferred side would violate
+ *     this, try the opposite side. If both violate, skip the sidestep.
+ */
+async function _executeStuckManeuver(bot, spawn, unit, preferredSide, readPos) {
+    const pos = readPos();
+    if (!pos) return;
+
+    // Back step: reverse of committed direction
+    const backX = Math.floor(pos.x - unit.dx * ESCAPE_BACK_BLOCKS);
+    const backZ = Math.floor(pos.z - unit.dz * ESCAPE_BACK_BLOCKS);
+    const backY = Math.floor(pos.y);
+    console.log(`[SpawnEscape] Stuck maneuver: back ${ESCAPE_BACK_BLOCKS} blocks to (${backX}, ${backZ})`);
+    await _escapeTryPath(bot, backX, backY, backZ, ESCAPE_STUCK_MANEUVER_TIMEOUT_MS, 'stuck-back');
+
+    // Sidestep: 15 blocks perpendicular to primary direction
+    // Left perpendicular (when facing primary): (unit.dz, -unit.dx)
+    // Right perpendicular: (-unit.dz, unit.dx)
+    const leftPerp = { dx: unit.dz, dz: -unit.dx };
+    const rightPerp = { dx: -unit.dz, dz: unit.dx };
+    const primary = preferredSide === 'left' ? leftPerp : rightPerp;
+    const fallback = preferredSide === 'left' ? rightPerp : leftPerp;
+
+    const afterBack = readPos();
+    if (!afterBack) return;
+
+    // Test preferred side: would the landing position be further from spawn
+    // than the current (post-back) position? If yes, OK to sidestep.
+    const testSide = (perp) => {
+        const nx = afterBack.x + perp.dx * ESCAPE_SIDE_BLOCKS;
+        const nz = afterBack.z + perp.dz * ESCAPE_SIDE_BLOCKS;
+        const ndx = nx - spawn.x;
+        const ndz = nz - spawn.z;
+        const newDist = Math.sqrt(ndx * ndx + ndz * ndz);
+        return { ok: newDist >= afterBack.dist, x: nx, z: nz };
+    };
+
+    let chosen = testSide(primary);
+    let chosenLabel = preferredSide;
+    if (!chosen.ok) {
+        const alt = testSide(fallback);
+        if (alt.ok) {
+            chosen = alt;
+            chosenLabel = preferredSide === 'left' ? 'right' : 'left';
+            console.log(`[SpawnEscape] Stuck maneuver: preferred side ${preferredSide} would decrease distance — switching to ${chosenLabel}`);
+        } else {
+            console.log(`[SpawnEscape] Stuck maneuver: both sides would decrease distance — skipping sidestep`);
+            return;
+        }
+    }
+
+    console.log(`[SpawnEscape] Stuck maneuver: sidestep ${chosenLabel} ${ESCAPE_SIDE_BLOCKS} blocks to (${Math.floor(chosen.x)}, ${Math.floor(chosen.z)})`);
+    await _escapeTryPath(bot, Math.floor(chosen.x), Math.floor(afterBack.y), Math.floor(chosen.z), ESCAPE_STUCK_MANEUVER_TIMEOUT_MS, `stuck-side-${chosenLabel}`);
 }
 
 /**
