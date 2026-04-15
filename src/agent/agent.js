@@ -150,6 +150,17 @@ export class Agent {
                     console.warn('[ProtectedZone] loadPlayerStructures threw:', loadErr.message);
                 }
 
+                // Configure mineflayer-collectblock's Movements with our safer
+                // defaults (maxDropDown=3, digCost=10, canSwim, terrain-safe).
+                // Otherwise the plugin's default Movements lets pathfinder choose
+                // vertical shafts as the cheapest path to buried ore. Stage 1 of
+                // the whiteboard #12 Movements safety audit.
+                try {
+                    skills.installSafePathfinderDefaults(this.bot);
+                } catch (safeErr) {
+                    console.warn('[SafeMovements] installSafePathfinderDefaults threw:', safeErr.message);
+                }
+
                 // Kick off the village auto-detector. First scan fires ~5s after
                 // startup (lets chunks/entities load); subsequent scans every 30s.
                 // Adds zones to bot.protectedZones with type='village' and dedups

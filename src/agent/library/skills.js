@@ -1305,6 +1305,47 @@ export function loadPlayerStructures(bot) {
     return loaded;
 }
 
+/**
+ * Mutate the mineflayer-collectblock plugin's internal Movements instance
+ * to use mindcraft-mcgavin's safer defaults instead of the plugin's
+ * unconfigured defaults.
+ *
+ * WHY: when `!collectBlocks("X_ore", N)` targets a block below ground,
+ * the plugin calls `bot.collectBlock.collect(block)` which uses its own
+ * `Movements` object (created once at plugin init with pathfinder defaults:
+ * maxDropDown=4, digCost=1, canDig=true, no terrain-safety config). With
+ * cheap dig cost and permissive drops, pathfinder computes the shortest
+ * path — a straight-down vertical shaft — as the cheapest route to the
+ * ore. Visible result: the bot mines straight down, risking lava/caves
+ * and disobeying the fork's "no straight-down digging" safety norm.
+ *
+ * FIX: mutate bot.collectBlock.movements in place so every future
+ * collect() call uses our safer settings. The plugin resets
+ * dontMineUnderFallingBlock and dontCreateFlow to false on each collect
+ * (plugin source line ~192), but maxDropDown / digCost / canSwim /
+ * terrain-safe config survive because the plugin doesn't touch them.
+ *
+ * Called once at agent startup from agent.js after loadPlayerStructures.
+ *
+ * Rule 7 note: this is Stage 1 of the broader Movements safety audit
+ * tracked as whiteboard #12. Every other `new pf.Movements(bot)` in
+ * skills.js still uses raw pathfinder defaults and should eventually
+ * route through a shared createSafeMovements() helper.
+ */
+export function installSafePathfinderDefaults(bot) {
+    if (!bot.collectBlock || !bot.collectBlock.movements) {
+        console.warn('[SafeMovements] bot.collectBlock.movements not available — skipping');
+        return false;
+    }
+    const m = bot.collectBlock.movements;
+    m.maxDropDown = 3;   // vanilla no-damage limit (default 4 can cause fall damage)
+    m.digCost = 10;      // discourage mining-through paths; prefer walking/staircase
+    m.canSwim = true;    // allow swimming in water instead of drowning
+    _configureTerrainSafeMovements(bot, m);
+    console.log('[SafeMovements] bot.collectBlock.movements configured: maxDropDown=3, digCost=10, canSwim=true, terrain-safe');
+    return true;
+}
+
 // ====================================================================
 // #7 Village auto-detection (2026-04-15)
 //
