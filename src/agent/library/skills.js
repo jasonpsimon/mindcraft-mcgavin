@@ -2919,6 +2919,25 @@ export async function digDown(bot, distance = 10) {
 
         currentPos = new Vec3(nextX, nextY, nextZ);
         descended++;
+
+        // Every 8 descended blocks, drop a torch behind the bot as a breadcrumb.
+        // Target: corridor-air at head level of the step we JUST came from.
+        // Support: previous step's floor block (solid). face='bottom' means
+        // torch stands on top of that floor. goToSurface follows these torches
+        // back up in reverse order.
+        // Whiteboard #6 asked for strict "left wall" placement; this behind-bot
+        // variant is simpler and visible from both directions. Can refine later
+        // if JP wants strict left-wall convention.
+        if (descended > 0 && descended % 8 === 0) {
+            const torchX = currentPos.x - dx;
+            const torchY = currentPos.y + 1;
+            const torchZ = currentPos.z - dz;
+            try {
+                await placeTorchAt(bot, torchX, torchY, torchZ, 'bottom');
+            } catch (torchErr) {
+                console.warn(`[digDown] Torch placement at (${torchX}, ${torchY}, ${torchZ}) failed: ${torchErr.message}`);
+            }
+        }
     }
 
     log(bot, `Dug a staircase down ${descended} blocks.`);
@@ -3121,12 +3140,84 @@ export async function digUp(bot, distance = 10) {
     log(bot, `Dug a staircase up ${ascended} blocks.`);
     return true;
 }
+/**
+ * Place a torch at (x, y, z) against the given face. Respects spawn zone
+ * (placeBlock already blocks there). Records the position in the bot's
+ * placed-torch memory (bot.placedTorches) so goToSurface can follow
+ * breadcrumbs back up from a mining dive.
+ *
+ * @param {MinecraftBot} bot
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {string} face - 'top', 'bottom', 'north', 'south', 'east', 'west'
+ * @returns {Promise<boolean>} true if torch placed successfully
+ */
+export async function placeTorchAt(bot, x, y, z, face = 'bottom') {
+    return await withBotLock('placeTorchAt', async () => {
+        const torch = bot.inventory.findInventoryItem('torch');
+        if (!torch) return false;
+        const success = await placeBlock(bot, 'torch', x, y, z, face, true);
+        if (success) {
+            if (!Array.isArray(bot.placedTorches)) bot.placedTorches = [];
+            bot.placedTorches.push({
+                x: Math.floor(x),
+                y: Math.floor(y),
+                z: Math.floor(z),
+                placedAt: Date.now(),
+            });
+            // Cap at 200 most-recent torches to avoid unbounded memory
+            if (bot.placedTorches.length > 200) {
+                bot.placedTorches = bot.placedTorches.slice(-200);
+            }
+        }
+        return success;
+    });
+}
+
 export async function goToSurface(bot) {
     /**
-     * Navigate to the surface (highest non-air block at current x,z).
+     * Navigate to the surface. If the bot has placed torches during a
+     * mining dive (bot.placedTorches from placeTorchAt), follow them back
+     * up in reverse order — breadcrumb navigation through the mine shaft.
+     * Otherwise, fall back to the naive "probe highest non-air block at
+     * current (x,z)" approach.
+     *
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @returns {Promise<boolean>} true if the surface was reached, false otherwise.
      **/
+    // Torch breadcrumb path — only if we have torches within reasonable range
+    if (Array.isArray(bot.placedTorches) && bot.placedTorches.length > 0) {
+        const botPos = bot.entity.position;
+        // Keep torches within 200 blocks XZ from the bot (same mine)
+        const localTorches = bot.placedTorches.filter(t => {
+            const dx = t.x - botPos.x;
+            const dz = t.z - botPos.z;
+            return Math.sqrt(dx * dx + dz * dz) < 200;
+        });
+        if (localTorches.length > 0) {
+            // Ascend torches in order of increasing y (we placed them as we descended;
+            // reverse order = travel up). Only use torches whose y is ABOVE current.
+            const ascending = localTorches
+                .filter(t => t.y >= Math.floor(botPos.y) - 1)
+                .sort((a, b) => a.y - b.y);
+            if (ascending.length > 0) {
+                log(bot, `Following ${ascending.length} placed torches back to the surface.`);
+                for (const t of ascending) {
+                    try {
+                        await goToPosition(bot, t.x, t.y, t.z, 1);
+                    } catch (err) {
+                        console.warn(`[goToSurface] Couldn't reach torch at (${t.x}, ${t.y}, ${t.z}): ${err.message}`);
+                        // Keep going — next torch or fall through to naive probe
+                    }
+                }
+                // Reached the last torch — now finish the climb to open sky
+                log(bot, `Reached the last placed torch. Finishing ascent to open sky.`);
+                // fall through to naive probe below
+            }
+        }
+    }
+
     const pos = bot.entity.position;
     for (let y = 360; y > -64; y--) { // probably not the best way to find the surface but it works
         let block = bot.blockAt(new Vec3(pos.x, y, pos.z));
@@ -3138,7 +3229,7 @@ export async function goToSurface(bot) {
             continue;
         }
         await goToPosition(bot, block.position.x, block.position.y + 1, block.position.z, 0); // this will probably work most of the time but a custom mining and towering up implementation could be added if needed
-        log(bot, `Going to the surface at y=${y+1}.`);``
+        log(bot, `Going to the surface at y=${y+1}.`);
         return true;
     }
     return false;

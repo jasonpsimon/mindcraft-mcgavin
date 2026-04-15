@@ -406,16 +406,29 @@ export async function isClearPath(bot, target) {
 export function shouldPlaceTorch(bot) {
     if (!bot.modes.isOn('torch_placing') || bot.interrupt_code) return false;
     const pos = getPosition(bot);
-    // TODO: check light level instead of nearby torches, block.light is broken
-    let nearest_torch = getNearestBlock(bot, 'torch', 6);
-    if (!nearest_torch)
-        nearest_torch = getNearestBlock(bot, 'wall_torch', 6);
-    if (!nearest_torch) {
-        const block = bot.blockAt(pos);
-        let has_torch = bot.inventory.findInventoryItem('torch');
-        return has_torch && block?.name === 'air';
-    }
-    return false;
+    const block = bot.blockAt(pos);
+    if (!block || block.name !== 'air') return false;
+
+    const hasTorch = bot.inventory.findInventoryItem('torch');
+    if (!hasTorch) return false;
+
+    // Only place when it's actually dark:
+    //   - Night (dusk 13000 through dawn 23000 in ticks)
+    //   - Underground (y < 50, no sky access in most cases)
+    //   - Low sky light at current block (canopy, cave, overhang)
+    // (block.light has historically been unreliable in mineflayer,
+    //  but skyLight and blockLight tend to work. Use skyLight as primary.)
+    const isNight = bot.time && bot.time.timeOfDay > 13000 && bot.time.timeOfDay < 23000;
+    const underground = pos.y < 50;
+    const lowSkyLight = typeof block.skyLight === 'number' && block.skyLight < 8;
+    if (!(isNight || underground || lowSkyLight)) return false;
+
+    // No torch already lighting this area
+    let nearbyTorch = getNearestBlock(bot, 'torch', 8);
+    if (!nearbyTorch) nearbyTorch = getNearestBlock(bot, 'wall_torch', 8);
+    if (nearbyTorch) return false;
+
+    return true;
 }
 
 export function getBiomeName(bot) {

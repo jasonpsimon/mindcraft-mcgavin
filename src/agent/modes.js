@@ -227,7 +227,7 @@ const modes_list = [
     },
     {
         name: 'torch_placing',
-        description: 'Place torches when idle and there are no torches nearby.',
+        description: 'Place torches when it is dark (night / underground / low sky-light) and no torch is nearby.',
         interrupts: ['action:followPlayer'],
         on: true,
         active: false,
@@ -238,7 +238,9 @@ const modes_list = [
                 if (Date.now() - this.last_place < this.cooldown * 1000) return;
                 execute(this, agent, async () => {
                     const pos = agent.bot.entity.position;
-                    await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
+                    // placeTorchAt records the torch in bot.placedTorches for
+                    // breadcrumb navigation via goToSurface.
+                    await skills.placeTorchAt(agent.bot, pos.x, pos.y, pos.z, 'bottom');
                 });
                 this.last_place = Date.now();
             }
