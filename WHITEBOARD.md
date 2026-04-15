@@ -156,6 +156,15 @@ Currently all tools, weapons, and armor are in KEEP_ALWAYS (tier 5, unlimited). 
 
 ---
 
+## Known issues (deferred — out of scope for current to-do)
+
+- **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
+- **`self_preservation` mode now waits on the bot mutex in routine paths.** `interrupts: ['all']` modes already bypass mutex (commit `97c03fd`); the trade-off is preserved. Edge cases (drowning during a long SafeToss) could still be delayed by a few seconds. Acceptable for now.
+- **Mob combat against ranged attackers.** Bot died to a Pillager 2026-04-14 — `self_defense` works for melee but doesn't position well against crossbow / arrow attacks. Tracked partially under #10.
+- **`Cannot smelt coal_ore` LLM confusion.** LLM tried to smelt the ore block instead of the dropped coal item. Could auto-correct via AutoRecovery pattern.
+
+---
+
 ## Notes
 
 - **Item 0 fully resolved 2026-04-15** — bot escapes spawn zone in 1 hop with 0 deaths after combined fix landed (escape rewrite + survival hardening + Bug A/C fixes).
@@ -257,12 +266,3 @@ Commits `3c11948` + `d9a5f66`, merged as `6fdcff2`. Reentrant FIFO mutex gating 
 ### 2026-04-14 — Spawn-zone protection design + initial escape work
 
 Implemented `_isInSpawnZone` (`SPAWN_PROTECTION_RADIUS = 250`) blocking destructive actions inside zone. Initial `escapeSpawnZone` skill auto-walks bot to 350 blocks from spawn on every spawn event. Refined later through Bugs A/B/C and the rewrite above.
-
----
-
-## Known issues (deferred — out of scope for current to-do)
-
-- **Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template.
-- **`self_preservation` mode now waits on the bot mutex in routine paths.** `interrupts: ['all']` modes already bypass mutex (commit `97c03fd`); the trade-off is preserved. Edge cases (drowning during a long SafeToss) could still be delayed by a few seconds. Acceptable for now.
-- **Mob combat against ranged attackers.** Bot died to a Pillager 2026-04-14 — `self_defense` works for melee but doesn't position well against crossbow / arrow attacks. Tracked partially under #10.
-- **`Cannot smelt coal_ore` LLM confusion.** LLM tried to smelt the ore block instead of the dropped coal item. Could auto-correct via AutoRecovery pattern.
