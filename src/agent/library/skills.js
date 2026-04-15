@@ -1164,13 +1164,29 @@ function _configureTerrainSafeMovements(bot, movements) {
  * at feet and head height for names matching plant-like patterns, breaks
  * the first matching block found.
  *
- * Respects spawn protection: will NOT break inside the spawn protection
- * zone, regardless of block type. Player-structure protection (whiteboard
- * item #7) should be added here once implemented.
+ * Spawn protection nuance (per JP 2026-04-14):
+ * - Inside the spawn protection zone: allowed to break PLANTS (grass,
+ *   ferns, bushes, vines, flowers, moss, lichen, sugar_cane, lily_pad,
+ *   kelp, dripleaf, etc.) — environmental clutter that doesn't meaningfully
+ *   alter the spawn area.
+ * - Inside the spawn protection zone: will NOT break TREES (anything with
+ *   _log, _wood, _leaves, _sapling, propagule, _roots, _hyphae, _stem
+ *   nether variants, bamboo_block, azalea variants) — landscape features
+ *   that are intentional or player-placed.
+ * - Outside the spawn zone: breaks any plant-pattern match (including
+ *   mangrove roots for swamp traversal).
+ *
+ * General-purpose primitives breakBlockAt / placeBlock remain strict inside
+ * spawn — this plant-specific exception is scoped to autoBreakStuckPlant.
+ *
+ * Player-structure protection (whiteboard item #7) should add an additional
+ * guard here once implemented.
  *
  * Returns true if a block was broken (caller should retry their pathfind).
  */
-const PLANT_BLOCK_PATTERN = /bush|fern|grass|roots|propagule|vine|leaves|sapling|seedling|flower|sprout|stem|lichen|moss|fungus|bamboo|sugar_cane|dead_bush|nether_sprouts/i;
+const PLANT_LIKE_PATTERN = /bush|fern|grass|vine|flower|sprout|lichen|moss|fungus|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom/i;
+// Tree-associated blocks — do NOT break inside spawn zone
+const TREE_PART_PATTERN = /(^|_)(log|wood|leaves|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
 
 export async function autoBreakStuckPlant(bot) {
     return await withBotLock('autoBreakStuckPlant', async () => {
@@ -1186,16 +1202,27 @@ export async function autoBreakStuckPlant(bot) {
             const p = pos.offset(dx, dy, dz);
             const block = bot.blockAt(p);
             if (!block) continue;
-            if (!PLANT_BLOCK_PATTERN.test(block.name)) continue;
+
+            const isPlant = PLANT_LIKE_PATTERN.test(block.name);
+            const isTreePart = TREE_PART_PATTERN.test(block.name);
+
+            // Only consider plant-like or tree-part blocks as unstick candidates
+            if (!isPlant && !isTreePart) continue;
             if (_isDangerous(block.name)) continue;
 
-            // Spawn protection — never break inside spawn zone
+            // Spawn-zone check: allow breaking plants, skip tree parts
             if (_isInSpawnZone(bot, p.x, p.z)) {
-                console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is in spawn zone — skipping`);
-                continue;
+                if (isTreePart) {
+                    console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is a tree part inside spawn zone — skipping`);
+                    continue;
+                }
+                // isPlant true, tree false — allowed inside spawn
+                console.log(`[AutoBreakPlant] Breaking plant ${block.name} inside spawn zone (plants allowed) at (${p.x}, ${p.y}, ${p.z})`);
+            } else {
+                // Outside spawn — break either plant or tree part
+                console.log(`[AutoBreakPlant] Breaking ${block.name} at (${p.x}, ${p.y}, ${p.z}) to free movement`);
             }
 
-            console.log(`[AutoBreakPlant] Breaking ${block.name} at (${p.x}, ${p.y}, ${p.z}) to free movement`);
             try {
                 await bot.dig(block);
                 return true;
