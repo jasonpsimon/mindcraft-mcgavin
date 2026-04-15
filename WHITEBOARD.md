@@ -2,28 +2,30 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-14 (late evening: #1 resolved via ViaBackwards on server; bot now stays connected cleanly)_
+_Last updated: 2026-04-14 22:36 (session wrap: #1 resolved, #0 escape validated end-to-end, #3 partially shipped, drowning death points at #2 as next priority)_
 
 ---
 
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `fix/spawn-zone-escape` — HEAD `fc303ba`. Escape hardening (timeout, multi-direction, NaN guard, terrain-safe movements) deployed. Code is safe to fall through; won't hang the bot.
-- **Not merging to `develop` yet.** Full escape still defeated by swamp+water terrain — needs #2 (swim) at minimum. `fix/spawn-zone-escape` branch holds the work-in-progress; a v4 segmented-escape design is queued for after #1 stabilizes the bot.
-- Switching focus to **#1 PartialReadError** next. Hypothesis: bumping mineflayer to a version that supports MC 1.21 base will eliminate the disconnect churn and let us validate everything else on a stable session.
+- Branch: `fix/spawn-zone-escape` — HEAD `d051ab1`. Today's work sits here; pending merge to `develop`.
+- Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
+- Stability: **ViaBackwards fix holding** — previously ~4 reconnects/hr due to `PartialReadError`, now observed 1 spawn event per session with 0 reconnects over extended windows.
+- Escape: **validated end-to-end** twice this session (bot reached 253 and 300 blocks from spawn, crossing the 250-block boundary). Terrain-aware movement + `autoBreakStuckPlant` helper are both live.
+- Next priority: **#2 Swim.** Bot is now dying to drowning because it successfully escapes spawn and then walks into water it can't surface from.
 
 ---
 
 ## In-progress
 
-- **#1 PartialReadError / mineflayer version bump** — parking #0 at commit `fc303ba` on `fix/spawn-zone-escape`. Escape logic is hardened but defeated by swamp+water until swim (#2) lands. Tonight: investigate mineflayer version, bump to one that supports MC 1.21 base, restart and watch for `PartialReadError` counts to drop to 0.
+_Nothing active. `fix/spawn-zone-escape` branch ready for merge review._
 
 ---
 
 ## 0. Spawn-zone auto-escape (bot self-rescue)
 
-**Status:** parked — escape hardened on `fix/spawn-zone-escape` (HEAD `fc303ba`); full escape still defeated by swamp+water terrain. Resume after #1 (stable session) and at least #2 (swim). • **Priority:** blocker (unparks when #1/#2 land)
+**Status:** ✅ **first successful end-to-end escapes observed 2026-04-14.** Bot reached 253 and 300 blocks from spawn across separate runs, crossing the 250-block boundary. Code on `fix/spawn-zone-escape` (HEAD `d051ab1`). Further tuning may still help (e.g., shorter per-direction timeout) but core functionality works. • **Priority:** mostly resolved; remaining quality polish deferred.
 
 **Observed 2026-04-14:** Bot is at `(-26, 85, -44)` — ~51 blocks from spawn, deep inside its own spawn protection zone. Every `!digDown` is blocked by `_isInSpawnZone` and returns `Cannot break blocks near spawn`. The LLM responds to the failure by chat-updating its own memory ("Must move out from spawn limit") — but it's not mechanically smart enough to actually path out. It just issues `!digDown(20)` again. Result: infinite loop of blocked-dig + `mode:unstuck` shuffling the bot 3-5 blocks laterally. **The bot cannot progress until it is rescued or rescues itself.**
 
@@ -122,7 +124,7 @@ Configure `pf.Movements` to include `water` as traversable (it likely already do
 
 ## 3. Swamp biome traversal
 
-**Status:** not started • **Priority:** high (actively blocking bot travel — observed 2026-04-14)
+**Status:** 🟡 **partially shipped 2026-04-14** — extended hazard routing + `autoBreakStuckPlant` helper with plant-vs-tree split and leaves allowance. Remaining: water-traversal (blocked by #2), lily_pad-as-walkable-surface, in-swamp biome detection for smart movement configs. • **Priority:** high (partially done)
 
 **Observed:** during spawn-zone escape, bot got stuck trying to walk through a swamp bush. Swamp biomes combine terrain hazards that the default pathfinder handles poorly: shallow water pockets, lily pads, mangrove roots, tall grass, bushes, vines. Pathfinder treats bushes as solid (stops), water as unswimmable without #2, lily pads as walkable floor (then bot falls through).
 
@@ -134,18 +136,22 @@ Programmatic adjustments to pathfinder movement rules when the bot is in a swamp
 - Treat deep water as swimmable (depends on #2).
 - Treat `mangrove_roots` and `mangrove_propagule` as breakable-for-passage.
 
-**Fix sketch:**
-1. New helper `_configureSwampMovements(movements)` in `skills.js` that mutates a `pf.Movements` instance to add the above exceptions:
-   - `movements.blocksCantBreak.delete(id)` for bushes/grass/vines.
-   - `movements.blocksToAvoid.delete(water_id)` (allow water steps in shallow areas).
-   - Add lily pad to walkable-surface list (may require custom block collision override).
-2. In `goToGoal`, detect swamp biome (`bot.world.getBiome(bot.entity.position)` returns biome ID — check against swamp IDs `swamp`, `mangrove_swamp`) and call `_configureSwampMovements` before pathfinding.
-3. Consider an auto-break helper: when pathfinder says "path not found" and bot is in swamp, break the obstructing plant-block in front and retry.
+**Shipped 2026-04-14 (commits `bbf4ea1`, `ee0168e`, `f001d80`, `d051ab1`):**
+1. ✅ `_configureTerrainSafeMovements` now adds `pointed_dripstone`, `cactus`, `wither_rose`, `magma_block`, `soul_fire`, `powder_snow` to `blocksToAvoid` (on top of existing `sweet_berry_bush`). Applied to both non-destructive and destructive `Movements` in `goToGoal`.
+2. ✅ `autoBreakStuckPlant(bot)` helper: scans 16 adjacent positions (cardinal + diagonal, feet + head) for plant-matching block names, breaks the first match.
+3. ✅ Wired into `goToGoal` as a one-shot retry when pathfinder throws a stuck error.
+4. ✅ Wired into `escapeSpawnZone` as a fallback when a direction attempt makes <5 blocks progress.
+5. ✅ Plant-vs-tree split for spawn-zone nuance: `PLANT_LIKE_PATTERN` (breakable in spawn) vs `TREE_PART_PATTERN` (protected in spawn). Leaves classified as plant per JP 2026-04-14.
 
-This item and #2 share terrain-awareness logic — consider a single "terrain profiles" abstraction where different biomes activate different pathfinder configurations.
+**Still pending:**
+- Water-traversal in shallow swamp pockets (depends on #2).
+- `lily_pad` treated as walkable surface (mineflayer-pathfinder doesn't natively support "stand on this partial collision block" — may need custom handling).
+- In-swamp biome detection to activate more aggressive movement configs dynamically. Current implementation is biome-agnostic (applies everywhere), which is fine but less targeted.
 
-**Signals to watch after fix:**
-- Bot escape from spawn zone completes even when path crosses swamp.
+This item and #2 share terrain-awareness logic — consider a single "terrain profiles" abstraction once #2 lands.
+
+**Signals to watch after full fix:**
+- ✅ Bot escape from spawn zone completes even when path crosses swamp. (Validated 2026-04-14: bot reached 253 and 300 blocks from spawn.)
 - No "stuck" mode firing on dead_bush, lily_pad, or tall_grass.
 - `SpawnEscape Arrived` log line appears consistently within ~2 minutes of spawn.
 
@@ -296,18 +302,31 @@ Starting points: items #1 (tool selection), #3 (torch placement) are already in 
 
 ## Notes
 
-- **Item 0 is deployed** but its first real validation run got interrupted by items 2/3 (swim + swamp). The code works; the bot just can't traverse the terrain it needs to cross to leave the zone.
-- **Item 1 is a validation blocker** — without fixing PartialReadError reconnects, we can't empirically confirm any other fix holds over a realistic session length.
-- **Items 2 and 3 are linked** — both are terrain/navigation issues. Probably share a common "movement profile" abstraction. Fix together.
+- **Item 0 validated end-to-end 2026-04-14** (bot reached 253 and 300 blocks from spawn across separate sessions). Remaining polish deferred.
+- **Item 1 resolved 2026-04-14** via ViaBackwards 5.0.4 on server. Bot now stays connected cleanly.
+- **Item 2 is now the acute blocker** — observed 2026-04-14: bot successfully escapes spawn, then drowns in the first body of water. Can't play without swim.
+- **Item 3 partially shipped 2026-04-14** — `autoBreakStuckPlant` + terrain-safe movements + plant/tree spawn-zone split deployed. Remaining pieces depend on #2.
 - Items 5 and 6 will interact — the torch inventory check in #5 + placement convention in #6 should share a common helper.
-- Items 0 and 7 share infrastructure — both are "protected zone" rules. Factor out a `ProtectedZone` abstraction when #0 is fully stable.
-- Item 4 is the biggest latent performance bug after #0–#3. The current tool races and dig timeouts may silently resolve once the bot is actually using pickaxes on stone.
-- Item 8 should be last — don't add delays on top of a broken bot. Fix behavior first, then slow it down.
+- Items 0 and 7 share infrastructure — both are "protected zone" rules. Factor out a `ProtectedZone` abstraction once #7 is implemented.
+- Item 4 is the biggest latent performance bug after #0–#3 land fully.
+- Item 8 should be last — don't add delays on top of a bot that can't swim/dig-with-the-right-tool.
 - Item 9 is a philosophy that shapes how we approach 0–8 and everything beyond. Items #0, #2, #3, #7 are all direct applications of #9: the LLM shouldn't be reasoning about spawn-zone escape, swimming, swamp bush traversal, or structure boundaries — the code should.
 
 ---
 
 ## Recently completed
+
+### Evening session 2026-04-14 — #1 resolved, #0 validated, #3 partially shipped
+
+Across one long evening session, big wins landed on `fix/spawn-zone-escape` branch:
+
+1. **#1 PartialReadError resolved.** ViaBackwards 5.0.4 installed in server's `mods/` folder + bot pinned to `minecraft_version: "1.21.4"`. ViaBackwards translates 1.21.4 protocol (769) → 1.21.0 server protocol (767). Before: ~4 reconnects/hr; after: 1 spawn per session, 0 reconnects over 10+ min windows. Commits: `70d1446` (bot settings), `5ed3a46` (whiteboard).
+2. **#0 Spawn-zone escape validated end-to-end.** Bot successfully escaped the 250-block spawn protection zone twice across separate sessions (reaching 253 and 300 blocks from spawn). Hardening included: 2-min per-direction timeout, multi-direction retry, NaN-position guard, terrain-safe movements, position-check after every attempt regardless of outcome, `autoBreakStuckPlant` integration.
+3. **digDown cavern short-circuit fixed.** Was letting pathfinder dig straight-down vertical shafts to reach caverns; now only takes the short-circuit if a non-destructive walk-in path exists. Commit `a0793dd`.
+4. **Safety-mode mutex bypass.** Modes with `interrupts: ['all']` (self_preservation, hurt, cowardice, self_defense) now skip the bot mutex so they fire immediately even when a long skill is running. Commit `97c03fd`.
+5. **#3 Swamp traversal partially shipped.** Extended `_configureTerrainSafeMovements` with additional damage-on-contact blocks (dripstone, cactus, magma, soul fire, powder snow). New `autoBreakStuckPlant` helper with plant-vs-tree split for spawn-zone, leaves allowed in spawn. Wired into both `goToGoal` and `escapeSpawnZone`. Commits `bbf4ea1`, `ee0168e`, `f001d80`, `d051ab1`.
+
+**Death signal pointing at #2:** bot escaped spawn successfully, then drowned walking through water. Self-preservation fires (we confirmed the mutex bypass), but can't swim out. Next priority is #2.
 
 ### Post-merge stability check — bot mutex validated, two root causes surfaced (2026-04-14)
 
