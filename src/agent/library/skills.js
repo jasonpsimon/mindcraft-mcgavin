@@ -1322,6 +1322,8 @@ export async function escapeSpawnZone(bot) {
                     );
                 });
 
+                const attemptStartDist = pos.dist;
+
                 try {
                     await Promise.race([attempt, timeout]);
                 } catch (err) {
@@ -1341,7 +1343,24 @@ export async function escapeSpawnZone(bot) {
 
                 const endP = readPos();
                 if (endP) {
-                    console.warn(`[SpawnEscape] Attempt ${dir.label} finished with bot at ${endP.dist.toFixed(1)} blocks from spawn — still inside. Trying next direction.`);
+                    const progress = endP.dist - attemptStartDist;
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} finished with bot at ${endP.dist.toFixed(1)} blocks from spawn — still inside (progress: ${progress.toFixed(1)}).`);
+
+                    // If progress was minimal (<5 blocks), try to break a
+                    // blocking plant before the next direction. autoBreakStuckPlant
+                    // only breaks blocks OUTSIDE the spawn zone — useful at the
+                    // boundary where a plant just across the line is blocking us.
+                    if (progress < 5) {
+                        try {
+                            const broke = await autoBreakStuckPlant(bot);
+                            if (broke) {
+                                console.log(`[SpawnEscape] Broke a blocking plant — next direction will retry fresh terrain.`);
+                                log(bot, `Cleared a plant obstacle near the boundary. Continuing escape.`);
+                            }
+                        } catch (breakErr) {
+                            console.warn(`[SpawnEscape] autoBreakStuckPlant failed: ${breakErr.message}`);
+                        }
+                    }
                 }
             }
 
