@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (SINGLETON_KEEPS — extras of crafting_table and furnace now drained as junk)_
+_Last updated: 2026-04-15 (inventory limits overhaul — SINGLETON_KEEPS + STACK_CAPS + BED_GROUP + shulkers + ore-blocks-as-junk)_
 
 ---
 
@@ -150,6 +150,31 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### 2026-04-15 — Inventory limits overhaul (SINGLETON_KEEPS expanded, STACK_CAPS + BED_GROUP added, shulkers, ore blocks → junk) ✅
+
+Full pass through `src/utils/inventory_utils.js` to bring the keep/drop rules in line with how the bot actually plays.
+
+**SINGLETON_KEEPS expanded** (keep exactly 1 — extras tier 1 junk):
+`crafting_table, furnace, bow, shield, flint_and_steel, bucket, water_bucket`.
+Deliberately NOT singletons: `crossbow`, `fishing_rod`, `lava_bucket` (see below).
+
+**STACK_CAPS new** (keep up to 1 stack — extras tier 1 junk). `ender_pearl` caps at 16 (vanilla stack limit), everything else at 64:
+- Utility / mob-drop: `blaze_rod`, `blaze_powder`, `torch`, `bone`, `string`, `gunpowder`, `arrow`, `feather`, `leather`, `slime_ball`, `magma_cream`, `ghast_tear`, `glowstone_dust`, `amethyst_shard`
+- Food: `wheat`, `bread`
+- Ingots / raw / crystals: `iron_ingot`, `raw_iron`, `gold_ingot`, `raw_gold`, `copper_ingot`, `raw_copper`, `netherite_ingot`, `netherite_scrap`, `diamond`, `emerald`, `redstone`, `lapis_lazuli`, `coal`, `charcoal`, `quartz`
+
+**BED_GROUP new** (keep 1 of any color across the whole group, all other colors junk): plain `bed` + 16 dyed variants.
+
+**KEEP_ALWAYS (unlimited) changes:**
+- **Added:** `ancient_debris` (extraordinarily rare nether ore, protected until smelted), and all 17 `shulker_box` variants (portable storage, nest-friendly — JP: "shulker boxes are a keep as they can be nested").
+- **Removed:** `lava_bucket`, `chest` — both are now tier 1 junk. Rationale: bot hoards neither fuel nor storage chests; shulker_boxes cover mobile storage.
+
+**Ore blocks → tier 1 junk.** Previously unclassified (defaulted to value=2, never drained). Bot should smelt to the resource and drop the ore. Added: `iron_ore`, `deepslate_iron_ore`, `gold_ore`, `deepslate_gold_ore`, `nether_gold_ore`, `copper_ore`, `deepslate_copper_ore`, `diamond_ore`, `deepslate_diamond_ore`, `emerald_ore`, `deepslate_emerald_ore`, `redstone_ore`, `deepslate_redstone_ore`, `lapis_ore`, `deepslate_lapis_ore`, `coal_ore`, `deepslate_coal_ore`, `nether_quartz_ore`.
+
+**Implementation:** `snapshotInventory` now runs a four-step priority check per inventory item — SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue. Entries with `discardable <= 0` are omitted from snapshot (protected). `autoDiscardAllJunk` dropped its `floor=1` defense-in-depth check — it was buggy for multi-stack edge cases and redundant because the `remaining = discardable` cap correctly bounds drops regardless of how stacks are split.
+
+Extras of limited items are logged as `"N extra <item_name>"` for clarity; regular junk logs as `"N <item_name>"`.
 
 ### 2026-04-15 — SINGLETON_KEEPS: drain extras of crafting_table / furnace ✅
 

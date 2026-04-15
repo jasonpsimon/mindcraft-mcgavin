@@ -38,14 +38,78 @@ const ALL_SAPLINGS = [
 ];
 
 // Items where the bot only needs ONE. Extras are treated as tier 1 junk.
-// (crafting_table and furnace are utility blocks the bot places and reuses —
-//  holding multiple wastes an inventory slot without any gameplay benefit.)
+// Applied BEFORE KEEP_ALWAYS in snapshotInventory, so items in both sets
+// respect the 1-each limit.
 const SINGLETON_KEEPS = new Set([
     'crafting_table',
     'furnace',
+    'bow',
+    'shield',
+    'flint_and_steel',
+    'bucket',
+    'water_bucket',
 ]);
 
+// Items where up to 1 full stack is kept; extras (total > cap) become tier 1 junk.
+// Cap defaults to 64 (one stack) unless overridden (e.g., ender_pearls stack to 16).
+const STACK_CAPS = new Map([
+    // Stack-limited vanilla exception
+    ['ender_pearl', 16],
+
+    // Utility / mob-drop bulk
+    ['blaze_rod', 64],
+    ['blaze_powder', 64],
+    ['torch', 64],
+    ['bone', 64],
+    ['string', 64],
+    ['gunpowder', 64],
+    ['arrow', 64],
+    ['feather', 64],
+    ['leather', 64],
+    ['slime_ball', 64],
+    ['magma_cream', 64],
+    ['ghast_tear', 64],
+    ['glowstone_dust', 64],
+    ['amethyst_shard', 64],
+
+    // Food
+    ['wheat', 64],
+    ['bread', 64],
+
+    // Ingots / raw / crystals (resources only — ore BLOCKS are junk, see tier 1)
+    ['iron_ingot', 64], ['raw_iron', 64],
+    ['gold_ingot', 64], ['raw_gold', 64],
+    ['copper_ingot', 64], ['raw_copper', 64],
+    ['netherite_ingot', 64], ['netherite_scrap', 64],
+    ['diamond', 64], ['emerald', 64],
+    ['redstone', 64], ['lapis_lazuli', 64],
+    ['coal', 64], ['charcoal', 64],
+    ['quartz', 64],
+]);
+
+// Beds are interchangeable across color variants — keep 1 of any, rest are junk.
+const BED_GROUP = new Set([
+    'bed',                  // generic / plain
+    'white_bed', 'orange_bed', 'magenta_bed', 'light_blue_bed',
+    'yellow_bed', 'lime_bed', 'pink_bed', 'gray_bed',
+    'light_gray_bed', 'cyan_bed', 'purple_bed', 'blue_bed',
+    'brown_bed', 'green_bed', 'red_bed', 'black_bed',
+]);
+
+// All shulker box variants (plain purple + 16 dyed). Portable storage,
+// nest-friendly for sub-containers — always keep unlimited.
+const SHULKER_BOXES = [
+    'shulker_box',
+    'white_shulker_box', 'orange_shulker_box', 'magenta_shulker_box', 'light_blue_shulker_box',
+    'yellow_shulker_box', 'lime_shulker_box', 'pink_shulker_box', 'gray_shulker_box',
+    'light_gray_shulker_box', 'cyan_shulker_box', 'purple_shulker_box', 'blue_shulker_box',
+    'brown_shulker_box', 'green_shulker_box', 'red_shulker_box', 'black_shulker_box',
+];
+
 // Items the bot should NEVER discard (high value)
+// NOTE: lava_bucket and chest were removed 2026-04-15 — both are now tier 1 junk.
+// Items in SINGLETON_KEEPS / STACK_CAPS / BED_GROUP take precedence over KEEP_ALWAYS
+// via snapshotInventory, so duplicates here are safe.
 const KEEP_ALWAYS = new Set([
     // Tools & weapons
     'diamond_sword', 'diamond_pickaxe', 'diamond_axe', 'diamond_shovel', 'diamond_hoe',
@@ -62,9 +126,12 @@ const KEEP_ALWAYS = new Set([
     // Precious resources
     'diamond', 'emerald', 'gold_ingot', 'iron_ingot', 'raw_iron', 'raw_gold',
     'lapis_lazuli', 'redstone', 'ender_pearl', 'blaze_rod', 'nether_star',
+    'ancient_debris',   // extremely rare — keep unlimited until smelted to netherite_scrap
     // Utility items
-    'crafting_table', 'furnace', 'chest', 'bucket', 'water_bucket', 'lava_bucket',
+    'crafting_table', 'furnace', 'bucket', 'water_bucket',
     'torch', 'bed', 'red_bed', 'cyan_bed',
+    // Shulker boxes (all variants — portable storage, nest-friendly)
+    ...SHULKER_BOXES,
 ]);
 
 // Goal keyword → items that become protected when that keyword is in the goal.
@@ -154,7 +221,8 @@ function getItemValue(itemName, goalProtected = new Set()) {
         'rotten_flesh', 'poisonous_potato', 'spider_eye',
     ].includes(itemName)) return 0;
 
-    // Tier 1: Bulk stone/soil & common bulk blocks — usually junk
+    // Tier 1: Bulk stone/soil, common bulk blocks, ore blocks, & deprecated
+    // utility items (lava_bucket, chest) — all treated as junk.
     if ([
         // Cobblestone / igneous
         'cobblestone', 'mossy_cobblestone',
@@ -178,6 +246,20 @@ function getItemValue(itemName, goalProtected = new Set()) {
         'dripstone_block', 'calcite',
         // Badlands
         'terracotta',
+        // Ore BLOCKS — smelt to resources then drop the block form.
+        // Bot's rule: keep the extracted resource, not the unprocessed ore.
+        'iron_ore', 'deepslate_iron_ore',
+        'gold_ore', 'deepslate_gold_ore', 'nether_gold_ore',
+        'copper_ore', 'deepslate_copper_ore',
+        'diamond_ore', 'deepslate_diamond_ore',
+        'emerald_ore', 'deepslate_emerald_ore',
+        'redstone_ore', 'deepslate_redstone_ore',
+        'lapis_ore', 'deepslate_lapis_ore',
+        'coal_ore', 'deepslate_coal_ore',
+        'nether_quartz_ore',
+        // Deprecated KEEP_ALWAYS (as of 2026-04-15) — explicit drops
+        'lava_bucket',  // fuel resource but JP doesn't want multiples hoarded
+        'chest',        // bot uses shulker_boxes for mobile storage
     ].includes(itemName)) return 1;
 
     // Tier 2: Common drops & basic materials
@@ -212,11 +294,17 @@ function getItemValue(itemName, goalProtected = new Set()) {
 /**
  * Walk the bot's inventory and return { name -> { total, discardable, value } }.
  *   - `total`: total count across all stacks.
- *   - `discardable`: count the bot can safely dispose. For SINGLETON_KEEPS this
- *     is `total - 1` (keep 1); otherwise it equals `total`. Entries with
- *     `discardable === 0` are omitted.
- *   - `value`: effective tier for discard decisions. Singleton extras are
- *     forced to tier 1 (junk); everything else comes from getItemValue.
+ *   - `discardable`: count the bot can safely dispose. Depends on limit rules:
+ *       * SINGLETON_KEEPS (keep 1)  → discardable = total - 1
+ *       * BED_GROUP (keep 1 across all colors)  → keeper color discardable = total-1, other colors = total
+ *       * STACK_CAPS (keep up to cap)  → discardable = max(0, total - cap)
+ *       * default  → discardable = total
+ *   - `value`: effective tier. Capped/singleton/bed extras are forced to tier 1
+ *     (junk); everything else uses getItemValue.
+ *
+ * Priority of checks: SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue.
+ * Entries where `discardable <= 0` are omitted from the snapshot — those items
+ * are fully protected.
  *
  * This helper is the single source of truth for inventory classification —
  * use it in place of ad-hoc aggregation loops.
@@ -230,14 +318,44 @@ function snapshotInventory(bot, goalProtected) {
     }
 
     const snapshot = {};
+    // BED_GROUP: first bed color encountered with total > 0 is the keeper;
+    // all remaining bed colors are fully discardable.
+    let bedKeeperChosen = false;
+
     for (const [name, total] of Object.entries(totals)) {
+        // 1. Hard singletons — keep exactly 1
         if (SINGLETON_KEEPS.has(name)) {
             const extras = total - 1;
-            if (extras <= 0) continue; // keep the single one; nothing to discard
+            if (extras <= 0) continue;
             snapshot[name] = { total, discardable: extras, value: 1 };
-        } else {
-            snapshot[name] = { total, discardable: total, value: getItemValue(name, goalProtected) };
+            continue;
         }
+
+        // 2. Bed group — keep 1 of any color across the entire group
+        if (BED_GROUP.has(name)) {
+            if (!bedKeeperChosen) {
+                bedKeeperChosen = true;
+                const extras = total - 1;
+                if (extras <= 0) continue;
+                snapshot[name] = { total, discardable: extras, value: 1 };
+            } else {
+                // Already have a keeper bed — all of this color are junk
+                snapshot[name] = { total, discardable: total, value: 1 };
+            }
+            continue;
+        }
+
+        // 3. Stack caps — keep up to cap
+        if (STACK_CAPS.has(name)) {
+            const cap = STACK_CAPS.get(name);
+            const extras = total - cap;
+            if (extras <= 0) continue;
+            snapshot[name] = { total, discardable: extras, value: 1 };
+            continue;
+        }
+
+        // 4. Default — classification via getItemValue
+        snapshot[name] = { total, discardable: total, value: getItemValue(name, goalProtected) };
     }
     return snapshot;
 }
@@ -371,15 +489,18 @@ export async function autoDiscardAllJunk(bot, goal = null) {
             while (remaining > 0) {
                 const found = bot.inventory.findInventoryItem(item.name);
                 if (!found) break;
-                // Respect SINGLETON_KEEPS: never drop below 1 of a keeper item.
-                const floor = SINGLETON_KEEPS.has(item.name) ? 1 : 0;
-                const available = Math.max(0, found.count - floor);
-                if (available === 0) break;
-                const toDrop = Math.min(remaining, available);
+                const toDrop = Math.min(remaining, found.count);
                 await safeToss(bot, found.type, null, toDrop);
                 remaining -= toDrop;
             }
-            const label = SINGLETON_KEEPS.has(item.name)
+            // snapshot.discardable already accounts for SINGLETON_KEEPS / BED_GROUP
+            // / STACK_CAPS — so `item.count` is exactly what we need to drop, and
+            // the `remaining` cap guarantees we never drop below the limit regardless
+            // of how stacks are split across inventory slots.
+            const isLimited = SINGLETON_KEEPS.has(item.name)
+                || BED_GROUP.has(item.name)
+                || STACK_CAPS.has(item.name);
+            const label = isLimited
                 ? `${item.count} extra ${item.name}`
                 : `${item.count} ${item.name}`;
             discarded.push(label);
