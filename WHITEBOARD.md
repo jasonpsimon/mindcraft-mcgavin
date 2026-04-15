@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (inventory limits overhaul — SINGLETON_KEEPS + STACK_CAPS + BED_GROUP + shulkers + ore-blocks-as-junk)_
+_Last updated: 2026-04-15 (to-do queue regrouped by status → importance; #7a restored to Recently completed)_
 
 ---
 
@@ -25,7 +25,83 @@ _Nothing active. Pick next item from the to-do queue._
 
 ## To-do queue
 
-Items not yet started (or still partial). Numbers preserved from project history; status marker shows where each stands.
+Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Within each status group, items are sorted by importance/impact/severity — highest first. Numbers preserved from project history.
+
+---
+
+**⏳ Not started**
+
+### 11. Tool / weapon / armor tier hierarchies (keep best, drop lower tiers)
+
+**Status:** ⏳ not started • **Priority:** medium (pairs well with the inventory overhaul; same file, same patterns)
+
+Currently all tools, weapons, and armor are in KEEP_ALWAYS (tier 5, unlimited). If the bot has wooden + stone + iron pickaxe, all three are kept forever. Should keep only the best tier of each role; lower tiers become tier 1 junk.
+
+**Fix sketch:**
+1. New `TOOL_HIERARCHY` in `inventory_utils.js` — per role (pickaxe, axe, shovel, hoe, sword), list tiers ordered best→worst (netherite > diamond > iron > stone > wooden).
+2. New `ARMOR_SLOTS` — four per-slot hierarchies (helmet, chestplate, leggings, boots), each netherite > diamond > iron > golden > leather (chainmail if present — rare).
+3. Extend `snapshotInventory` with a fifth check (after STACK_CAPS): for each role, find the best tier the bot owns → tier 5; lower tiers in that role → tier 1 junk with `discardable = total`.
+4. Remove individual tool/weapon/armor item names from KEEP_ALWAYS — the new hierarchy logic supersedes them.
+
+**Caveats (document, don't solve):**
+- **Durability not considered.** A half-broken iron pickaxe still beats a fresh wooden one. Practically fine — bots craft new when tools break.
+- **Enchantments not considered.** An enchanted wooden pickaxe (Efficiency V) would still be classified as junk if iron exists. Edge case for gemma-4.
+- **Golden tools** stay out of hierarchies (rare drops, terrible durability, not crafted by bot).
+
+**Signals to watch:** bot doesn't accumulate a wooden_pickaxe trail while mining iron; after crafting iron tools, AutoRecovery drains the stone tier on next inventory-full.
+
+### 7. Respect player-built structures (50-block no-disturb radius)
+
+**Status:** ⏳ not started • **Priority:** medium (protective feature, no active blocker)
+
+The bot must not disturb player-built structures. No breaking, placing, digging, tossing items, or otherwise modifying blocks within 50 blocks of any player-built structure.
+
+**Fix sketch:**
+1. New config file or in-world registry `player_structures.json` — list of `{name, x, y, z, radius}` entries.
+2. New helper `_isNearPlayerStructure(bot, x, y, z)` in `skills.js` (similar shape to `_isInSpawnZone`).
+3. Add check inline in `breakBlockAt`, `placeBlock`, and SafeToss underground dig branch. On violation, return false with `"near player structure"` error (matchable by AutoRecovery).
+4. **Reuses spawn-zone infrastructure:** factor out a `ProtectedZone` abstraction; one `_isInAnyProtectedZone(x, y, z)` gate handles spawn + all player structures.
+
+**Auto-detection (later):** watch for `placeBlock` events from the player, cluster by proximity + time, promote to a protected structure automatically after N placements.
+
+### 7b. Self-cleanup of incidental block placements
+
+**Status:** ⏳ not started • **Priority:** medium (world-stewardship behavior)
+
+JP observed the bot placing vertical/horizontal columns of resource blocks (cobblestone, dirt) for unclear reasons — pathfinder scaffolding / LLM confusion. Bot should track its placements and clean them up.
+
+**Fix sketch:**
+1. Track every block via `bot.placedBlocks = [{x, y, z, type, placedAt, purpose}]` (similar to `bot.placedTorches`).
+2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
+3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
+4. Cap list size (200, FIFO). Clear on bot death/respawn.
+
+### 8. Humanized action delays
+
+**Status:** ⏳ not started • **Priority:** low
+
+Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and could trigger anti-cheat on some servers. Add variable delay between commands.
+
+**Fix sketch:**
+- New file `src/agent/human_delays.js` with command→delay-range map.
+- In `Agent.handleMessage` after a command completes: `await new Promise(r => setTimeout(r, getHumanDelay(command_name)))`.
+- Base delay 3s, scale by complexity (1-2s trivial, 2-3s movement, 3-5s gather/craft, 4-6s complex). ±1000ms jitter.
+- Don't apply to mode-triggered actions (self_preservation, self_defense) — those react instantly.
+
+---
+
+**🟡 Partial**
+
+### 10. Bot survival hardening (more)
+
+**Status:** 🟡 fall prevention + auto-eat shipped 2026-04-15. Lava/mob/dimension safety pending. • **Priority:** high (every avoidable death is a respawn-loop)
+
+**Remaining work:**
+- **Lava avoidance** — strict avoid + cost penalty for lava/magma; detect `bot.entity.isInLava` and swim/jump up immediately.
+- **Mob retreat** — when health < 6 (3 hearts) AND hostile mob nearby, override current goal with `moveAway` until health regenerates.
+- **Pre-fight equip** — `self_defense` mode ensure best weapon is equipped before attacking. Partially done via #4 `equipHighestAttack`.
+- **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
+- **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness today.
 
 ### 2. Bot swim capabilities
 
@@ -57,55 +133,9 @@ This item and #2 share terrain-awareness logic — consider a single "terrain pr
 - Place wall_torch attached to left wall vs floor torch
 - Update `goToSurface` ordering hint (right-side torches = ascent direction)
 
-### 7. Respect player-built structures (50-block no-disturb radius)
+---
 
-**Status:** ⏳ not started • **Priority:** medium (protective feature, no active blocker)
-
-The bot must not disturb player-built structures. No breaking, placing, digging, tossing items, or otherwise modifying blocks within 50 blocks of any player-built structure.
-
-**Fix sketch:**
-1. New config file or in-world registry `player_structures.json` — list of `{name, x, y, z, radius}` entries.
-2. New helper `_isNearPlayerStructure(bot, x, y, z)` in `skills.js` (similar shape to `_isInSpawnZone`).
-3. Add check inline in `breakBlockAt`, `placeBlock`, and SafeToss underground dig branch. On violation, return false with `"near player structure"` error (matchable by AutoRecovery).
-4. **Reuses spawn-zone infrastructure:** factor out a `ProtectedZone` abstraction; one `_isInAnyProtectedZone(x, y, z)` gate handles spawn + all player structures.
-
-**Auto-detection (later):** watch for `placeBlock` events from the player, cluster by proximity + time, promote to a protected structure automatically after N placements.
-
-### 7a. Replant tree saplings after chopping
-
-**Status:** ⏳ not started • **Priority:** medium (world-stewardship behavior)
-
-When the bot chops down a tree, plant a matching sapling at the base block to keep the world ecosystem renewable.
-
-**Fix sketch:**
-1. In `skills.js collectBlock` (or wherever `bot.dig` of a `*_log` block happens), detect when the broken block is a tree log AND it's the lowest log in its column (block below = dirt/grass/podzol).
-2. Map log → sapling: `oak_log → oak_sapling`, `mangrove_log → mangrove_propagule`, etc.
-3. After break completes, briefly defer (200ms), check inventory for matching sapling, call `placeBlock(bot, sapling_name, x, y, z, 'top')`.
-4. Wrap in try/catch — sapling placement failures are non-fatal.
-
-### 7b. Self-cleanup of incidental block placements
-
-**Status:** ⏳ not started • **Priority:** medium (world-stewardship behavior)
-
-JP observed the bot placing vertical/horizontal columns of resource blocks (cobblestone, dirt) for unclear reasons — pathfinder scaffolding / LLM confusion. Bot should track its placements and clean them up.
-
-**Fix sketch:**
-1. Track every block via `bot.placedBlocks = [{x, y, z, type, placedAt, purpose}]` (similar to `bot.placedTorches`).
-2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
-3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
-4. Cap list size (200, FIFO). Clear on bot death/respawn.
-
-### 8. Humanized action delays
-
-**Status:** ⏳ not started • **Priority:** low
-
-Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and could trigger anti-cheat on some servers. Add variable delay between commands.
-
-**Fix sketch:**
-- New file `src/agent/human_delays.js` with command→delay-range map.
-- In `Agent.handleMessage` after a command completes: `await new Promise(r => setTimeout(r, getHumanDelay(command_name)))`.
-- Base delay 3s, scale by complexity (1-2s trivial, 2-3s movement, 3-5s gather/craft, 4-6s complex). ±1000ms jitter.
-- Don't apply to mode-triggered actions (self_preservation, self_defense) — those react instantly.
+**🔁 Ongoing**
 
 ### 9. Reduce LLM reliance through programmatic enhancements
 
@@ -123,36 +153,6 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 - **Crafting plans** — auto-execute when prerequisites met (already have `getCraftingPlan`, just need auto-trigger).
 - **Pattern-matched chat responses** — common greetings, status queries → canned. Only escalate to LLM for unusual input.
 - **Auto-craft basic-need items** — torches when coal+stick available, sticks when oak_planks low, tools (best tier inventory supports). _(Surfaced 2026-04-14: bot's #5/#6 torch features silent-skipped because bot hadn't crafted any torches.)_
-
-### 10. Bot survival hardening (more)
-
-**Status:** 🟡 fall prevention + auto-eat shipped 2026-04-15. Lava/mob/dimension safety pending. • **Priority:** high (every avoidable death is a respawn-loop)
-
-**Remaining work:**
-- **Lava avoidance** — strict avoid + cost penalty for lava/magma; detect `bot.entity.isInLava` and swim/jump up immediately.
-- **Mob retreat** — when health < 6 (3 hearts) AND hostile mob nearby, override current goal with `moveAway` until health regenerates.
-- **Pre-fight equip** — `self_defense` mode ensure best weapon is equipped before attacking. Partially done via #4 `equipHighestAttack`.
-- **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
-- **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness today.
-
-### 11. Tool / weapon / armor tier hierarchies (keep best, drop lower tiers)
-
-**Status:** ⏳ not started • **Priority:** medium (pairs well with the inventory overhaul; same file, same patterns)
-
-Currently all tools, weapons, and armor are in KEEP_ALWAYS (tier 5, unlimited). If the bot has wooden + stone + iron pickaxe, all three are kept forever. Should keep only the best tier of each role; lower tiers become tier 1 junk.
-
-**Fix sketch:**
-1. New `TOOL_HIERARCHY` in `inventory_utils.js` — per role (pickaxe, axe, shovel, hoe, sword), list tiers ordered best→worst (netherite > diamond > iron > stone > wooden).
-2. New `ARMOR_SLOTS` — four per-slot hierarchies (helmet, chestplate, leggings, boots), each netherite > diamond > iron > golden > leather (chainmail if present — rare).
-3. Extend `snapshotInventory` with a fifth check (after STACK_CAPS): for each role, find the best tier the bot owns → tier 5; lower tiers in that role → tier 1 junk with `discardable = total`.
-4. Remove individual tool/weapon/armor item names from KEEP_ALWAYS — the new hierarchy logic supersedes them.
-
-**Caveats (document, don't solve):**
-- **Durability not considered.** A half-broken iron pickaxe still beats a fresh wooden one. Practically fine — bots craft new when tools break.
-- **Enchantments not considered.** An enchanted wooden pickaxe (Efficiency V) would still be classified as junk if iron exists. Edge case for gemma-4.
-- **Golden tools** stay out of hierarchies (rare drops, terrible durability, not crafted by bot).
-
-**Signals to watch:** bot doesn't accumulate a wooden_pickaxe trail while mining iron; after crafting iron tools, AutoRecovery drains the stone tier on next inventory-full.
 
 ---
 
@@ -266,3 +266,7 @@ Commits `3c11948` + `d9a5f66`, merged as `6fdcff2`. Reentrant FIFO mutex gating 
 ### 2026-04-14 — Spawn-zone protection design + initial escape work
 
 Implemented `_isInSpawnZone` (`SPAWN_PROTECTION_RADIUS = 250`) blocking destructive actions inside zone. Initial `escapeSpawnZone` skill auto-walks bot to 350 blocks from spawn on every spawn event. Refined later through Bugs A/B/C and the rewrite above.
+
+### Pre-2026-04-15 — #7a Replant tree saplings ✅
+
+Already implemented in `skills.js collectBlock` (lines 494-641). Full `LOG_TO_SAPLING` mapping for 9 tree types (oak/birch/spruce/dark_oak/jungle/acacia/mangrove→propagule/cherry/pale_oak). Tracks tree base positions (lowest log per x/z = the stump) during a multi-log collect. After the dig batch, replants saplings on dirt/grass/podzol/mud/rooted_dirt/coarse_dirt/mycelium/moss_block. Skips if no sapling in inventory; spawn-zone protection inherited from `placeBlock`; non-fatal try/catch. Logs `"Replanted N sapling(s) where trees were chopped"` on success. Discovered to already exist 2026-04-15.
