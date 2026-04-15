@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (Cannot-smelt AutoRecovery pattern shipped; Known issues now down to 2)_
+_Last updated: 2026-04-15 (Cannot-smelt handler extended: FUEL + FINAL_PRODUCT branches for meta-confusion cases)_
 
 ---
 
@@ -217,9 +217,9 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 
 ## Recently completed
 
-### 2026-04-15 — AutoRecovery `Cannot smelt <ore>` handler ✅
+### 2026-04-15 — AutoRecovery `Cannot smelt <target>` handler ✅
 
-Commit `efec3e4`. LLM was calling `!smelt("coal_ore")` (and variants) and hitting the upstream mineflayer error "Cannot smelt X. Hint: make sure you are smelting the 'raw' item." The `isSmeltable()` heuristic in `src/utils/mcdata.js` only accepts `raw*`, `*log*`, and a small whitelist — so every ore-block smelt attempt short-circuits.
+Commits `efec3e4` + `79d02e6`. LLM was calling `!smelt("coal_ore")` (and variants) and hitting the upstream mineflayer error "Cannot smelt X. Hint: make sure you are smelting the 'raw' item." The `isSmeltable()` heuristic in `src/utils/mcdata.js` only accepts `raw*`, `*log*`, and a small whitelist — so every ore-block smelt attempt short-circuits. JP surfaced a related class of confusion: LLM trying to smelt fuels (coal, charcoal) or final products (iron_ingot, diamond, etc.) — both categorically wrong input types.
 
 **New AutoRecovery pattern + handler** in `src/agent/auto_recovery.js`:
 - `FAILURE_PATTERNS` entry `cannot_smelt` matching the error regex, routed to new `CORRECT_SMELT_TARGET` recovery action.
@@ -227,11 +227,13 @@ Commit `efec3e4`. LLM was calling `!smelt("coal_ore")` (and variants) and hittin
   - **Group A** (11 entries: coal_ore, redstone_ore, lapis_ore, diamond_ore, emerald_ore, nether_quartz_ore + deepslate variants): mining drops the final item directly. Recovery tells the LLM no smelting is needed and notes whether the final drop is already in inventory — **no auto-action** (Option i per JP's call).
   - **Group B** (7 entries: iron_ore, gold_ore, copper_ore + deepslate + nether_gold_ore): mining drops `raw_Y`. If `raw_Y` is in inventory, recovery silently auto-corrects `!smelt("X_ore")` → `!smelt("raw_Y")` with the count from the original command clamped to available supply. Else tells LLM to mine first.
   - **Group C** (1 entry: `ancient_debris`): smeltable in vanilla but the upstream heuristic rejects it. Recovery surfaces the gap honestly so the LLM can route around it.
+- `FURNACE_FUELS` set (5 entries: coal, charcoal, coal_block, blaze_rod, blaze_powder): recovery replies "X is a FUEL — goes INTO the furnace as energy, not as the smelt input" + inventory count.
+- `SMELT_FINAL_PRODUCTS` set (10 entries: iron_ingot, gold_ingot, copper_ingot, netherite_ingot, netherite_scrap, diamond, emerald, redstone, lapis_lazuli, quartz): recovery replies "X is already a final smelted product. Use it for crafting, not smelting input" + count.
 - Unknown items pass through the original error unchanged.
 
-**Verification:** regex unit-tested against five positive cases (coal_ore, iron_ore, deepslate_diamond_ore, ancient_debris, stone_brick) and one negative — all correctly classified. Bot restarted on new code, running cleanly in a deepslate biome with matching ores in range — next time gemma-4 decides to smelt one, AutoRecovery fires.
+**Verification:** regex unit-tested against positive cases (coal_ore, iron_ore, deepslate_diamond_ore, ancient_debris) and negative (unrelated errors, unsmeltable non-ores). All three sets verified non-overlapping. Bot restarted on new code, running cleanly in a deepslate biome with matching ores in range.
 
-Aligns with #9: converts a recurring LLM confusion into a deterministic code response. No prompt-rewriting required.
+Aligns with #9: converts three classes of recurring LLM production-chain confusion into deterministic code responses. No prompt-rewriting required.
 
 ### 2026-04-15 — D1 Legacy `history.memory` deprecation ✅
 
