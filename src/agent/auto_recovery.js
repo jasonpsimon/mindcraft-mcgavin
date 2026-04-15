@@ -63,6 +63,12 @@ const FAILURE_PATTERNS = [
         recovery: 'SEARCH_WIDER',
         priority: 6,
     },
+    {
+        name: 'inside_spawn_zone',
+        test: /near spawn|inside .* spawn zone|spawn protection/i,
+        recovery: 'ESCAPE_SPAWN_ZONE',
+        priority: 7,
+    },
 ];
 
 // ============================================================
@@ -301,9 +307,33 @@ export class AutoRecoveryEngine {
                 return await this.recoverPathfindTimeout(originalCommand);
             case 'SEARCH_WIDER':
                 return { recovered: false, result: failResult + '\n[AUTO-RECOVERY] Block not found nearby. Try searching a different area.' };
+            case 'ESCAPE_SPAWN_ZONE':
+                return await this.recoverInsideSpawnZone(originalCommand);
             default:
                 return { recovered: false, result: failResult };
         }
+    }
+
+    /**
+     * INSIDE SPAWN ZONE: walk out of the spawn protection zone, then retry.
+     * Primary escape path is the spawn-event hook in agent.js. This is the
+     * safety net for mid-session cases (respawn after death, teleport into
+     * zone, mod-induced re-entry).
+     */
+    async recoverInsideSpawnZone(originalCommand) {
+        console.log('[AutoRecovery] Escaping spawn protection zone...');
+        const escaped = await skills.escapeSpawnZone(this.agent.bot);
+        this._invalidateSnapshot();
+        if (!escaped) {
+            return {
+                recovered: false,
+                result: '[AUTO-RECOVERY] Tried to walk out of spawn zone but could not path there. Move manually or pick a different direction.'
+            };
+        }
+        if (originalCommand) {
+            console.log(`[AutoRecovery] Retrying after spawn-zone escape: ${originalCommand}`);
+        }
+        return this._successResult('Walked out of the spawn protection zone.', originalCommand);
     }
 
     // ============================================================

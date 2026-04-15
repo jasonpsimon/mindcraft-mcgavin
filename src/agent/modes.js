@@ -311,12 +311,22 @@ async function execute(mode, agent, func, timeout=-1) {
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
+    // Safety-critical modes (declared interrupts: ['all']) bypass the bot
+    // mutex entirely. They are reflexive, short-lived responses to damage,
+    // drowning, suffocation, or nearby hostiles; blocking them behind a long
+    // skill (SafeToss, digDown, escapeSpawnZone) caused the bot to die while
+    // waiting for its turn to defend itself. The small pathfinder-race risk
+    // we re-introduce here is strictly better than suffocation / zombie death.
+    const interruptsAll = Array.isArray(mode.interrupts) && mode.interrupts.includes('all');
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
-        // Serialize with LLM commands, AutoRecovery, SafeToss, digDown.
-        // Mode update loop stays non-blocking (execute is fire-and-forget from
-        // update), but the mode's actual bot actions queue behind any active
-        // lock holder instead of racing pathfinder.setGoal.
-        await withBotLock(`mode:${mode.name}`, () => func());
+        if (interruptsAll) {
+            // Reflex mode — run immediately without acquiring the mutex.
+            await func();
+        } else {
+            // Routine mode (item_collecting, torch_placing, etc.) — serialize
+            // with LLM commands, AutoRecovery, SafeToss, digDown.
+            await withBotLock(`mode:${mode.name}`, () => func());
+        }
     }, { timeout });
     mode.active = false;
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);

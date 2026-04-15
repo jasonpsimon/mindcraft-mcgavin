@@ -1114,13 +1114,305 @@ export async function safeToss(bot, itemType, metadata, count) {
  * Check if a position is within the spawn protection zone.
  * Returns true if the position is within SPAWN_RADIUS blocks of world spawn (XZ only).
  */
-const SPAWN_PROTECTION_RADIUS = 350;
+const SPAWN_PROTECTION_RADIUS = 250;
+const SPAWN_ESCAPE_DISTANCE = 350;  // walk to this distance from spawn on escape (100-block buffer past protection)
 function _isInSpawnZone(bot, x, z) {
     const spawn = bot.spawnPoint;
     if (!spawn) return false; // no spawn data yet — allow action
     const dx = x - spawn.x;
     const dz = z - spawn.z;
     return (dx * dx + dz * dz) <= SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS;
+}
+
+/**
+ * Configure a pf.Movements instance for safer terrain traversal across biomes,
+ * especially swamps, dripstone caves, nether, and other damage-prone terrain.
+ * Non-destructive: mutates the Movements object in place.
+ *
+ * Rationale: mineflayer-pathfinder's default Movements already treats blocks
+ * with empty boundingBox (grass, ferns, bushes, sugar_cane, vines, flowers,
+ * propagules, hanging_roots, etc.) as walk-through, and already avoids fire +
+ * cobweb + lava. We add additional damage-on-contact blocks so pathfinder
+ * routes around them instead of through them.
+ *
+ * Solid blocks that require destruction (mangrove_roots, muddy_mangrove_roots)
+ * are handled via destructive movements (pathfinder breaks them) + the
+ * autoBreakStuckPlant helper when pathfinder can't find a path at all.
+ */
+function _configureTerrainSafeMovements(bot, movements) {
+    // Damage-on-contact blocks — pathfinder should route around these
+    const hazards = [
+        'sweet_berry_bush',     // damages bot on contact
+        'pointed_dripstone',    // falls from ceiling, damages on landing
+        'cactus',               // damages adjacent entities
+        'wither_rose',          // inflicts Wither effect
+        'magma_block',          // damages entities standing on it
+        'fire',                 // already in default, belt + suspenders
+        'soul_fire',            // high damage fire variant
+        'powder_snow',          // can trap bot, slow freeze damage
+    ];
+    for (const name of hazards) {
+        const block = bot.registry.blocksByName[name];
+        if (block) movements.blocksToAvoid.add(block.id);
+    }
+}
+
+/**
+ * Attempt to unstick the bot by breaking an adjacent plant-type block.
+ * Call this after pathfinder reports no path — often a single plant-like
+ * block is blocking forward progress. Scans cardinal + diagonal neighbors
+ * at feet and head height for names matching plant-like patterns, breaks
+ * the first matching block found.
+ *
+ * Spawn protection nuance (per JP 2026-04-14):
+ * - Inside the spawn protection zone: allowed to break PLANTS (grass,
+ *   ferns, bushes, vines, flowers, moss, lichen, sugar_cane, lily_pad,
+ *   kelp, dripleaf, etc.) — environmental clutter that doesn't meaningfully
+ *   alter the spawn area.
+ * - Inside the spawn protection zone: will NOT break TREES (anything with
+ *   _log, _wood, _leaves, _sapling, propagule, _roots, _hyphae, _stem
+ *   nether variants, bamboo_block, azalea variants) — landscape features
+ *   that are intentional or player-placed.
+ * - Outside the spawn zone: breaks any plant-pattern match (including
+ *   mangrove roots for swamp traversal).
+ *
+ * General-purpose primitives breakBlockAt / placeBlock remain strict inside
+ * spawn — this plant-specific exception is scoped to autoBreakStuckPlant.
+ *
+ * Player-structure protection (whiteboard item #7) should add an additional
+ * guard here once implemented.
+ *
+ * Returns true if a block was broken (caller should retry their pathfind).
+ */
+// Plant-like blocks that are safe to break inside the spawn zone.
+// Leaves are included here (per JP 2026-04-14) — they decay naturally in
+// Minecraft anyway, so breaking one to clear a path is benign.
+const PLANT_LIKE_PATTERN = /bush|fern|grass|vine|flower|sprout|lichen|moss|fungus|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom|leaves/i;
+// Tree-associated structural blocks — do NOT break inside spawn zone
+// (logs, wood, saplings, tree roots, nether tree stems, bamboo/azalea blocks).
+// Leaves intentionally NOT in this list per JP: leaves behave like plants.
+const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
+
+export async function autoBreakStuckPlant(bot) {
+    return await withBotLock('autoBreakStuckPlant', async () => {
+        const pos = bot.entity.position.floored();
+        // Cardinal + diagonal neighbors at feet and head level (8 around feet, 8 around head)
+        const offsets = [
+            [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+            [1, 0, 1], [1, 0, -1], [-1, 0, 1], [-1, 0, -1],
+            [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+            [1, 1, 1], [1, 1, -1], [-1, 1, 1], [-1, 1, -1],
+        ];
+        for (const [dx, dy, dz] of offsets) {
+            const p = pos.offset(dx, dy, dz);
+            const block = bot.blockAt(p);
+            if (!block) continue;
+
+            const isPlant = PLANT_LIKE_PATTERN.test(block.name);
+            const isTreePart = TREE_PART_PATTERN.test(block.name);
+
+            // Only consider plant-like or tree-part blocks as unstick candidates
+            if (!isPlant && !isTreePart) continue;
+            if (_isDangerous(block.name)) continue;
+
+            // Spawn-zone check: allow breaking plants, skip tree parts
+            if (_isInSpawnZone(bot, p.x, p.z)) {
+                if (isTreePart) {
+                    console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is a tree part inside spawn zone — skipping`);
+                    continue;
+                }
+                // isPlant true, tree false — allowed inside spawn
+                console.log(`[AutoBreakPlant] Breaking plant ${block.name} inside spawn zone (plants allowed) at (${p.x}, ${p.y}, ${p.z})`);
+            } else {
+                // Outside spawn — break either plant or tree part
+                console.log(`[AutoBreakPlant] Breaking ${block.name} at (${p.x}, ${p.y}, ${p.z}) to free movement`);
+            }
+
+            try {
+                await bot.dig(block);
+                return true;
+            } catch (err) {
+                console.warn(`[AutoBreakPlant] Failed to break ${block.name}: ${err.message}`);
+            }
+        }
+        return false;
+    });
+}
+
+/**
+ * Walk the bot out of the spawn protection zone if it's inside it.
+ *
+ * Target: SPAWN_ESCAPE_DISTANCE (350) blocks from spawn in the direction the
+ * bot is already drifting (or +X if bot is exactly at spawn). Leaves a buffer
+ * past the protection boundary so small movements don't push the bot back in.
+ *
+ * Called on every spawn (before the self-prompter starts) and as an
+ * AutoRecovery handler if a destructive action hits spawn protection.
+ *
+ * Returns true if escape completed (or wasn't needed), false on path failure.
+ *
+ * Hardening: each direction attempt is wrapped in a timeout. If goToGoal
+ * hangs on terrain the pathfinder can't navigate (e.g., swamp water without
+ * swim — see whiteboard item #2), the attempt aborts and the next cardinal
+ * direction is tried. If all 4 directions fail, the function returns false
+ * cleanly so the self-prompter can still start.
+ */
+const SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS = 120000;  // 2 min per direction
+
+export async function escapeSpawnZone(bot) {
+    return await withBotLock('escapeSpawnZone', async () => {
+        const spawn = bot.spawnPoint;
+        if (!spawn) {
+            console.log('[SpawnEscape] No spawnPoint data yet — skipping escape');
+            return false;
+        }
+
+        const startPos = bot.entity.position;
+        const startDx = startPos.x - spawn.x;
+        const startDz = startPos.z - spawn.z;
+        const startDistSq = startDx * startDx + startDz * startDz;
+
+        // Already outside the protection zone — nothing to do
+        if (startDistSq > SPAWN_PROTECTION_RADIUS * SPAWN_PROTECTION_RADIUS) {
+            return true;
+        }
+
+        // Candidate directions, preferred order: drift direction first, then cardinals.
+        // Each entry is a unit vector (dx, dz).
+        const directions = [];
+        if (startDistSq >= 1) {
+            const d = Math.sqrt(startDistSq);
+            directions.push({ dx: startDx / d, dz: startDz / d, label: 'drift' });
+        }
+        directions.push(
+            { dx: 1, dz: 0, label: '+X' },
+            { dx: 0, dz: 1, label: '+Z' },
+            { dx: -1, dz: 0, label: '-X' },
+            { dx: 0, dz: -1, label: '-Z' },
+        );
+
+        // Helper: read current bot position and distance from spawn, guarding against NaN
+        // (bot.entity.position can transiently return NaN during chunk/tick boundaries).
+        const readPos = () => {
+            const p = bot.entity?.position;
+            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return null;
+            const dxp = p.x - spawn.x;
+            const dzp = p.z - spawn.z;
+            return {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                dist: Math.sqrt(dxp * dxp + dzp * dzp),
+            };
+        };
+
+        // Helper: are we out of the zone yet?
+        const isOutside = () => {
+            const p = readPos();
+            return p !== null && p.dist > SPAWN_PROTECTION_RADIUS;
+        };
+
+        const prevMovements = bot.pathfinder.movements;
+        try {
+            for (const dir of directions) {
+                // Check escape status before each attempt. A prior attempt may have
+                // moved us outside the zone even if it threw (e.g. goto exception
+                // after significant movement).
+                if (isOutside()) {
+                    const endP = readPos();
+                    console.log(`[SpawnEscape] Cleared zone at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                    return true;
+                }
+
+                let pos = readPos();
+                if (pos === null) {
+                    // Bot position not available yet (transient NaN). Wait a tick and skip.
+                    console.warn(`[SpawnEscape] Attempt ${dir.label}: position unavailable (likely chunk sync). Waiting 1s.`);
+                    await new Promise(r => setTimeout(r, 1000));
+                    pos = readPos();
+                    if (pos === null) {
+                        console.warn(`[SpawnEscape] Attempt ${dir.label}: still no position — skipping direction.`);
+                        continue;
+                    }
+                }
+
+                const tx = Math.floor(spawn.x + dir.dx * SPAWN_ESCAPE_DISTANCE);
+                const tz = Math.floor(spawn.z + dir.dz * SPAWN_ESCAPE_DISTANCE);
+                const ty = Math.floor(pos.y);
+
+                console.log(`[SpawnEscape] Attempt ${dir.label}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) — ${pos.dist.toFixed(1)} blocks from spawn. Walking to (${tx}, ${ty}, ${tz}).`);
+                log(bot, `Trying to leave spawn zone heading ${dir.label} toward (${tx}, ${tz}).`);
+
+                // Race goToGoal against a hard timeout — never hang the bot.
+                let timeoutHandle;
+                const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
+                const timeout = new Promise((_, reject) => {
+                    timeoutHandle = setTimeout(
+                        () => reject(new Error(`escape ${dir.label} timed out after ${SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS / 1000}s`)),
+                        SPAWN_ESCAPE_DIRECTION_TIMEOUT_MS
+                    );
+                });
+
+                const attemptStartDist = pos.dist;
+
+                try {
+                    await Promise.race([attempt, timeout]);
+                } catch (err) {
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} raised: ${err.message}`);
+                } finally {
+                    clearTimeout(timeoutHandle);
+                }
+
+                // Always check position after an attempt, regardless of outcome.
+                // Pathfinder can throw after walking us a long way; we count that as progress.
+                if (isOutside()) {
+                    const endP = readPos();
+                    console.log(`[SpawnEscape] Arrived at (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                    log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                    return true;
+                }
+
+                const endP = readPos();
+                if (endP) {
+                    const progress = endP.dist - attemptStartDist;
+                    console.warn(`[SpawnEscape] Attempt ${dir.label} finished with bot at ${endP.dist.toFixed(1)} blocks from spawn — still inside (progress: ${progress.toFixed(1)}).`);
+
+                    // If progress was minimal (<5 blocks), try to break a
+                    // blocking plant before the next direction. autoBreakStuckPlant
+                    // only breaks blocks OUTSIDE the spawn zone — useful at the
+                    // boundary where a plant just across the line is blocking us.
+                    if (progress < 5) {
+                        try {
+                            const broke = await autoBreakStuckPlant(bot);
+                            if (broke) {
+                                console.log(`[SpawnEscape] Broke a blocking plant — next direction will retry fresh terrain.`);
+                                log(bot, `Cleared a plant obstacle near the boundary. Continuing escape.`);
+                            }
+                        } catch (breakErr) {
+                            console.warn(`[SpawnEscape] autoBreakStuckPlant failed: ${breakErr.message}`);
+                        }
+                    }
+                }
+            }
+
+            // One final check in case the last attempt moved us out after its exception.
+            if (isOutside()) {
+                const endP = readPos();
+                console.log(`[SpawnEscape] Cleared on final check: (${Math.floor(endP.x)}, ${Math.floor(endP.y)}, ${Math.floor(endP.z)}) — ${endP.dist.toFixed(1)} blocks from spawn.`);
+                log(bot, `Cleared the spawn zone. I'm now ${Math.floor(endP.dist)} blocks from spawn.`);
+                return true;
+            }
+
+            console.warn('[SpawnEscape] All attempts finished inside zone. Giving up — self-prompter will start inside zone.');
+            log(bot, `I couldn't find a clear path out of the spawn zone in any direction. I'll keep trying as I explore.`);
+            return false;
+        } finally {
+            if (prevMovements) {
+                try { bot.pathfinder.setMovements(prevMovements); } catch (_) { /* ignore */ }
+            }
+        }
+    });
 }
 
 /**
@@ -1472,8 +1764,10 @@ export async function goToGoal(bot, goal) {
     }
     nonDestructiveMovements.placeCost = 2;
     nonDestructiveMovements.digCost = 10;
+    _configureTerrainSafeMovements(bot, nonDestructiveMovements);
 
     const destructiveMovements = new pf.Movements(bot);
+    _configureTerrainSafeMovements(bot, destructiveMovements);
 
     // Bump pathfinder timeouts for complex underground terrain
     bot.pathfinder.thinkTimeout = 10000;  // 10s total (default 5s)
@@ -1502,7 +1796,30 @@ export async function goToGoal(bot, goal) {
         return true;
     } catch (err) {
         clearInterval(doorCheckInterval);
-        // we need to catch so we can clean up the door check interval, then rethrow the error
+        // Before giving up, try to auto-clear a plant-like obstacle and retry
+        // ONCE. Handles common swamp/jungle stuck cases (mangrove propagule,
+        // dense ferns, vines). autoBreakStuckPlant respects spawn protection.
+        const errMsg = err?.message || '';
+        const isStuckError = /Path was stopped|no path|goal was changed|could not be completed/i.test(errMsg);
+        if (isStuckError) {
+            try {
+                const broke = await autoBreakStuckPlant(bot);
+                if (broke) {
+                    log(bot, `Broke a blocking plant and retrying path.`);
+                    const retryInterval = startDoorInterval(bot);
+                    try {
+                        await bot.pathfinder.goto(goal);
+                        clearInterval(retryInterval);
+                        return true;
+                    } catch (retryErr) {
+                        clearInterval(retryInterval);
+                        // Fall through — rethrow the original error with a note
+                    }
+                }
+            } catch (breakErr) {
+                console.warn(`[goToGoal] autoBreakStuckPlant failed: ${breakErr.message}`);
+            }
+        }
         throw err;
     }
 }
@@ -2439,18 +2756,35 @@ export async function digDown(bot, distance = 10) {
     try {
 
     // --- Cavern detection: look for existing caves before digging blindly ---
+    // Short-circuit ONLY if a NON-DESTRUCTIVE walk-in path exists. If reaching
+    // the cavern requires digging, fall through to the 45-degree staircase
+    // instead of letting pathfinder dig a straight-down vertical shaft.
     try {
         const cavern = scanForCaverns(bot, 100, 30);
         if (cavern && cavern.distance < distance * 2) {
-            console.log(`[digDown] Found cavern at ${cavern.pos}, pathing there instead of digging`);
-            log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z}! Heading there instead of digging.`);
+            const goal = new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2);
+            const nonDestructiveMovements = new pf.Movements(bot);
+            nonDestructiveMovements.canDig = false;  // hard-require walk-in path
+
+            let walkInPathFound = false;
             try {
-                // goToGoal sets its own movements internally — no need to reset here
-                await goToGoal(bot, new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2));
-                return true;
-            } catch (pathErr) {
-                console.warn(`[digDown] Could not path to cavern at ${cavern.pos}, digging normally:`, pathErr.message);
-                log(bot, `Cavern found but unreachable — digging down instead.`);
+                const result = await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, 4000);
+                walkInPathFound = result.status === 'success';
+            } catch (_) { /* pathfinder failed — treat as no walk-in path */ }
+
+            if (walkInPathFound) {
+                console.log(`[digDown] Found cavern at ${cavern.pos} with walk-in path — heading there`);
+                log(bot, `Found an open cavern nearby at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z} with a walk-in path! Heading there instead of digging.`);
+                try {
+                    await goToGoal(bot, goal);
+                    return true;
+                } catch (pathErr) {
+                    console.warn(`[digDown] Walk-in path failed mid-journey at ${cavern.pos}, falling back to staircase:`, pathErr.message);
+                    log(bot, `Walk-in path to cavern got interrupted — digging a staircase instead.`);
+                }
+            } else {
+                console.log(`[digDown] Cavern at ${cavern.pos} exists but requires digging to reach — using 45-degree staircase instead`);
+                log(bot, `Nearby cavern at ${cavern.pos.x}, ${cavern.pos.y}, ${cavern.pos.z} but no walk-in path. Digging a staircase toward it.`);
             }
         }
     } catch (e) {
