@@ -1764,9 +1764,11 @@ export async function goToGoal(bot, goal) {
     }
     nonDestructiveMovements.placeCost = 2;
     nonDestructiveMovements.digCost = 10;
+    nonDestructiveMovements.canSwim = true;  // pathfinder handles water as swimmable
     _configureTerrainSafeMovements(bot, nonDestructiveMovements);
 
     const destructiveMovements = new pf.Movements(bot);
+    destructiveMovements.canSwim = true;  // pathfinder handles water as swimmable
     _configureTerrainSafeMovements(bot, destructiveMovements);
 
     // Bump pathfinder timeouts for complex underground terrain

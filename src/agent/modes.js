@@ -37,11 +37,17 @@ const modes_list = [
             let blockAbove = bot.blockAt(bot.entity.position.offset(0, 1, 0));
             if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
             if (!blockAbove) blockAbove = {name: 'air'};
-            if (blockAbove.name === 'water') {
-                // does not call execute so does not interrupt other actions
-                if (!bot.pathfinder.goal) {
-                    bot.setControlState('jump', true);
-                }
+            // Drowning check: head in water OR oxygen dropping while submerged.
+            // Always hold jump when drowning, even during an active pathfind —
+            // mineflayer tolerates setControlState('jump', true) while pathfinder
+            // is running, and the lift helps the bot surface in shallow water.
+            // Prior bug: gating on !bot.pathfinder.goal suppressed the anti-drown
+            // reflex exactly when the bot was walking into water during an escape,
+            // causing it to drown mid-path.
+            const headInWater = blockAbove.name === 'water';
+            const lowOxygen = typeof bot.oxygenLevel === 'number' && bot.oxygenLevel < 18;
+            if (headInWater || (lowOxygen && bot.entity.isInWater)) {
+                bot.setControlState('jump', true);
             }
             else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
                 execute(this, agent, async () => {
