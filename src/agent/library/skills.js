@@ -1386,6 +1386,56 @@ function _recordEscapeExit(bot, spawn, exitPos) {
     }
 }
 
+// ---------- Teleport / reset instrumentation (2026-04-15) ----------
+// Observed: bot reaches 245 blocks from spawn, then jumps back to ~20
+// blocks with no death/reconnect logged. We want to catch the source.
+// Listens once per bot for mineflayer events that indicate server-side
+// position resets: forcedMove (server teleport packet), respawn, death,
+// and path_update failures. Also suspects any unexplained >100-block
+// position delta between hops.
+const _spawnEscapeInstrumented = new WeakSet();
+function _installSpawnEscapeInstrumentation(bot) {
+    if (_spawnEscapeInstrumented.has(bot)) return;
+    _spawnEscapeInstrumented.add(bot);
+
+    const posStr = () => {
+        const p = bot.entity?.position;
+        if (!p) return '(no entity)';
+        return `(${p.x?.toFixed(1)}, ${p.y?.toFixed(1)}, ${p.z?.toFixed(1)})`;
+    };
+
+    bot.on('forcedMove', () => {
+        console.log(`[SpawnEscape][EVENT] forcedMove — bot teleported by server to ${posStr()}`);
+    });
+
+    bot.on('respawn', () => {
+        console.log(`[SpawnEscape][EVENT] respawn (health=${bot.health}, food=${bot.food}) at ${posStr()}`);
+    });
+
+    bot.on('death', () => {
+        console.log(`[SpawnEscape][EVENT] death at ${posStr()}`);
+    });
+
+    bot.on('health', () => {
+        // Only log damage events, not heals
+        if (typeof bot._lastHealthLogged !== 'number') bot._lastHealthLogged = bot.health;
+        if (bot.health < bot._lastHealthLogged) {
+            console.log(`[SpawnEscape][EVENT] health drop ${bot._lastHealthLogged.toFixed(1)} → ${bot.health.toFixed(1)} at ${posStr()}`);
+        }
+        bot._lastHealthLogged = bot.health;
+    });
+
+    // Chat-style server messages — filter for teleport/kick/setblock keywords
+    bot.on('message', (jsonMsg) => {
+        const s = (typeof jsonMsg?.toString === 'function') ? jsonMsg.toString() : String(jsonMsg);
+        if (/teleport|tp |kicked|moved wrongly|flying is not enabled|banned/i.test(s)) {
+            console.log(`[SpawnEscape][EVENT] server-msg: ${s.slice(0, 200)}`);
+        }
+    });
+
+    console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners)');
+}
+
 // Race goToGoal against a hard timeout. Returns when either completes.
 // Exceptions are caught and logged; callers should re-check position.
 // On timeout, explicitly cancel any in-flight pathfinder goal so that
@@ -1415,6 +1465,7 @@ async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
 
 export async function escapeSpawnZone(bot) {
     return await withBotLock('escapeSpawnZone', async () => {
+        _installSpawnEscapeInstrumentation(bot);
         const spawn = bot.spawnPoint;
         if (!spawn) {
             console.log('[SpawnEscape] No spawnPoint data yet — skipping escape');
@@ -1537,6 +1588,7 @@ async function _commitToDirection(bot, spawn, dir, readPos, isOutside) {
         const tz = Math.floor(pos.z + u.dz * ESCAPE_HOP_DISTANCE);
         const ty = Math.floor(pos.y);
         const startDist = pos.dist;
+        const startX = pos.x, startY = pos.y, startZ = pos.z;
 
         console.log(`[SpawnEscape] ${dir.label} hop ${hopNum}: at (${Math.floor(pos.x)}, ${Math.floor(pos.z)}) [${startDist.toFixed(1)} from spawn] → (${tx}, ${tz})`);
         await _escapeTryPath(bot, tx, ty, tz, ESCAPE_HOP_TIMEOUT_MS, `${dir.label} hop ${hopNum}`);
@@ -1545,6 +1597,21 @@ async function _commitToDirection(bot, spawn, dir, readPos, isOutside) {
 
         const newPos = readPos();
         const progress = newPos ? (newPos.dist - startDist) : 0;
+
+        // Suspect-teleport detection: if the raw physical distance from
+        // start-of-hop to end-of-hop exceeds a threshold, the bot didn't
+        // walk there — something teleported it. We can't realistically
+        // walk >60 blocks in a 45-second hop given hop distance is 40.
+        if (newPos) {
+            const dx = newPos.x - startX;
+            const dy = newPos.y - startY;
+            const dz = newPos.z - startZ;
+            const travelled = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (travelled > 60) {
+                console.warn(`[SpawnEscape][SUSPECT-TELEPORT] ${dir.label} hop ${hopNum}: raw travel = ${travelled.toFixed(1)} blocks from (${startX.toFixed(1)}, ${startY.toFixed(1)}, ${startZ.toFixed(1)}) to (${newPos.x.toFixed(1)}, ${newPos.y.toFixed(1)}, ${newPos.z.toFixed(1)}) — bot cannot walk this far in ${ESCAPE_HOP_TIMEOUT_MS / 1000}s`);
+            }
+        }
+
         console.log(`[SpawnEscape] ${dir.label} hop ${hopNum} progress: ${progress.toFixed(1)} blocks`);
 
         if (progress >= ESCAPE_PROGRESS_THRESHOLD) {
