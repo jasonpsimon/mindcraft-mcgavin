@@ -9,10 +9,11 @@ _Last updated: 2026-04-15 (inventory limits overhaul — SINGLETON_KEEPS + STACK
 ## Current state (live on develop)
 
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `1c5b741`. All fixes merged + pushed to GitHub.
+- Branch: `develop` — HEAD `8f722ce`. All fixes merged + pushed to GitHub.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19). Tool selection now equipping correctly before every dig. Inventory full → drains ALL junk in one pass (goal-aware tier 0+1) instead of freeing 5 slots at a time — collapses N future SafeToss cycles into 1.
+- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19). Tool selection now equipping correctly before every dig.
 - Bot escapes spawn zone in 1 hop (226 → 265 blocks observed). Mining iron_ore yields drops (proves pickaxe equip is working).
+- Inventory management: goal-aware classification with 4-tier priority (SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue). On inventory-full, `autoDiscardAllJunk` drains every limit-violating stack in one pass (crafting_table/furnace/bow/shield/flint_and_steel/bucket/water_bucket kept at 1; 30+ resources/materials capped at 1 stack; bed kept at 1 across all colors; all 17 shulker_box variants unlimited; lava_bucket/chest/ore_blocks treated as junk).
 
 ---
 
@@ -134,6 +135,25 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 - **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
 - **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness today.
 
+### 11. Tool / weapon / armor tier hierarchies (keep best, drop lower tiers)
+
+**Status:** ⏳ not started • **Priority:** medium (pairs well with the inventory overhaul; same file, same patterns)
+
+Currently all tools, weapons, and armor are in KEEP_ALWAYS (tier 5, unlimited). If the bot has wooden + stone + iron pickaxe, all three are kept forever. Should keep only the best tier of each role; lower tiers become tier 1 junk.
+
+**Fix sketch:**
+1. New `TOOL_HIERARCHY` in `inventory_utils.js` — per role (pickaxe, axe, shovel, hoe, sword), list tiers ordered best→worst (netherite > diamond > iron > stone > wooden).
+2. New `ARMOR_SLOTS` — four per-slot hierarchies (helmet, chestplate, leggings, boots), each netherite > diamond > iron > golden > leather (chainmail if present — rare).
+3. Extend `snapshotInventory` with a fifth check (after STACK_CAPS): for each role, find the best tier the bot owns → tier 5; lower tiers in that role → tier 1 junk with `discardable = total`.
+4. Remove individual tool/weapon/armor item names from KEEP_ALWAYS — the new hierarchy logic supersedes them.
+
+**Caveats (document, don't solve):**
+- **Durability not considered.** A half-broken iron pickaxe still beats a fresh wooden one. Practically fine — bots craft new when tools break.
+- **Enchantments not considered.** An enchanted wooden pickaxe (Efficiency V) would still be classified as junk if iron exists. Edge case for gemma-4.
+- **Golden tools** stay out of hierarchies (rare drops, terrible durability, not crafted by bot).
+
+**Signals to watch:** bot doesn't accumulate a wooden_pickaxe trail while mining iron; after crafting iron tools, AutoRecovery drains the stone tier on next inventory-full.
+
 ---
 
 ## Notes
@@ -145,73 +165,42 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 - **Items 2 and 3 share terrain-awareness logic** — when both lands fully, factor into a "terrain profiles" abstraction.
 - **Items 0 and 7 share infrastructure** — both are "protected zone" rules. Factor out `ProtectedZone` abstraction once #7 ships.
 - **Item 8 should be last** — don't add delays on top of an unfinished bot. Fix behavior first, then slow it down.
-- **Item 9 is the philosophy** — every routine/mechanical decision the LLM is asked to make is a candidate to convert to code. Items #0, #2, #3, #4, #7, #10 are all applications.
+- **Item 9 is the philosophy** — every routine/mechanical decision the LLM is asked to make is a candidate to convert to code. Items #0, #2, #3, #4, #7, #10, #11, and today's inventory overhaul are all applications.
+- **#11 builds on today's inventory overhaul** — same file (`inventory_utils.js`), same `snapshotInventory` priority chain. Extending with tool/armor hierarchy is structurally a 5th check after STACK_CAPS. Factor once, extend cheaply.
 
 ---
 
 ## Recently completed
 
-### 2026-04-15 — Inventory limits overhaul (SINGLETON_KEEPS expanded, STACK_CAPS + BED_GROUP added, shulkers, ore blocks → junk) ✅
+### 2026-04-15 — Inventory management overhaul ✅
 
-Full pass through `src/utils/inventory_utils.js` to bring the keep/drop rules in line with how the bot actually plays.
+End-to-end redesign of inventory classification and disposal, landed in four commits (`21976f3`, `50bf280`, `f141be8`, `8f722ce`). Previously inventory-full recovery only freed 5 slots at a time, so junky biomes triggered 3–4 back-to-back SafeToss cycles before stabilizing (the "visually stuck" behavior JP observed during `!collectBlocks("iron_ore", 50)`). Classification was also outdated — oak/birch/spruce only for wood goals, ore blocks unclassified, no limit on how many crafting_tables the bot could hoard, etc.
 
-**SINGLETON_KEEPS expanded** (keep exactly 1 — extras tier 1 junk):
-`crafting_table, furnace, bow, shield, flint_and_steel, bucket, water_bucket`.
-Deliberately NOT singletons: `crossbow`, `fishing_rod`, `lava_bucket` (see below).
+**Disposal strategy — `autoDiscardAllJunk`.** Replaces the old "free 5 slots" behavior in `auto_recovery.js recoverInventoryFull`. Drains every limit-violating stack in one pass, then the 60-second `DISCARD_COOLDOWN_MS` keeps the bot from re-entering the loop for the rest of the collect. Other call sites (`recoverWrongTool`, `recoverNeedCraftingTable`, `recoverNeedFurnace`) intentionally keep the targeted 2-slot variant — they only need a sliver of space. New `getJunkStackCount` helper gives a pre-drain log line.
 
-**STACK_CAPS new** (keep up to 1 stack — extras tier 1 junk). `ender_pearl` caps at 16 (vanilla stack limit), everything else at 64:
-- Utility / mob-drop: `blaze_rod`, `blaze_powder`, `torch`, `bone`, `string`, `gunpowder`, `arrow`, `feather`, `leather`, `slime_ball`, `magma_cream`, `ghast_tear`, `glowstone_dust`, `amethyst_shard`
-- Food: `wheat`, `bread`
-- Ingots / raw / crystals: `iron_ingot`, `raw_iron`, `gold_ingot`, `raw_gold`, `copper_ingot`, `raw_copper`, `netherite_ingot`, `netherite_scrap`, `diamond`, `emerald`, `redstone`, `lapis_lazuli`, `coal`, `charcoal`, `quartz`
+**Classification — `snapshotInventory` priority chain.**  Single source of truth for every caller. For each inventory item, runs these checks in order:
 
-**BED_GROUP new** (keep 1 of any color across the whole group, all other colors junk): plain `bed` + 16 dyed variants.
+1. **SINGLETON_KEEPS** (keep 1): `crafting_table, furnace, bow, shield, flint_and_steel, bucket, water_bucket`. Explicitly not on this list: `crossbow`, `fishing_rod`, `lava_bucket` (chose not to singleton-limit).
+2. **BED_GROUP** (keep 1 of any color): plain `bed` + 16 dyed variants. First color encountered is the keeper; every other bed color in inventory becomes junk.
+3. **STACK_CAPS** (keep 1 stack). `ender_pearl` caps at 16 (vanilla stack limit); 30+ others at 64: `blaze_rod`, `blaze_powder`, `torch`, `bone`, `string`, `gunpowder`, `arrow`, `feather`, `leather`, `slime_ball`, `magma_cream`, `ghast_tear`, `glowstone_dust`, `amethyst_shard`, `wheat`, `bread`, `iron_ingot`, `raw_iron`, `gold_ingot`, `raw_gold`, `copper_ingot`, `raw_copper`, `netherite_ingot`, `netherite_scrap`, `diamond`, `emerald`, `redstone`, `lapis_lazuli`, `coal`, `charcoal`, `quartz`.
+4. **`getItemValue`** (fall-through). Fixed ordering bug: KEEP_ALWAYS checked BEFORE goal-protection (previously, items in both sets got downgraded from tier 5 → 4, which `getDiscardSuggestions` would surface as last-resort discards).
 
-**KEEP_ALWAYS (unlimited) changes:**
-- **Added:** `ancient_debris` (extraordinarily rare nether ore, protected until smelted), and all 17 `shulker_box` variants (portable storage, nest-friendly — JP: "shulker boxes are a keep as they can be nested").
-- **Removed:** `lava_bucket`, `chest` — both are now tier 1 junk. Rationale: bot hoards neither fuel nor storage chests; shulker_boxes cover mobile storage.
+Entries with `discardable <= 0` are omitted (treated as protected).
 
-**Ore blocks → tier 1 junk.** Previously unclassified (defaulted to value=2, never drained). Bot should smelt to the resource and drop the ore. Added: `iron_ore`, `deepslate_iron_ore`, `gold_ore`, `deepslate_gold_ore`, `nether_gold_ore`, `copper_ore`, `deepslate_copper_ore`, `diamond_ore`, `deepslate_diamond_ore`, `emerald_ore`, `deepslate_emerald_ore`, `redstone_ore`, `deepslate_redstone_ore`, `lapis_ore`, `deepslate_lapis_ore`, `coal_ore`, `deepslate_coal_ore`, `nether_quartz_ore`.
+**KEEP_ALWAYS additions & removals.**
+- Added: `ancient_debris` (rarer than diamonds, protected until smelted to `netherite_scrap`), and all 17 `shulker_box` variants (portable storage, nest-friendly — JP: "shulker boxes are a keep as they can be nested").
+- Removed: `lava_bucket`, `chest` — both moved to tier 1 junk. Bot doesn't hoard fuel or storage chests; shulker_boxes cover mobile storage.
 
-**Implementation:** `snapshotInventory` now runs a four-step priority check per inventory item — SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue. Entries with `discardable <= 0` are omitted from snapshot (protected). `autoDiscardAllJunk` dropped its `floor=1` defense-in-depth check — it was buggy for multi-stack edge cases and redundant because the `remaining = discardable` cap correctly bounds drops regardless of how stacks are split.
+**Tier 1 junk expansions** (so `autoDiscardAllJunk` actually drains them):
+- Biome-specific bulk: `magma_block`, `soul_sand`, `soul_soil`, `sandstone`, `red_sandstone`, `red_sand`, `end_stone`, `prismarine`, `prismarine_bricks`, `dark_prismarine`, `coarse_dirt`, `rooted_dirt`, `podzol`, `mycelium`, `terracotta`.
+- Ore blocks (smelt to the resource, drop the block): `iron_ore`, `deepslate_iron_ore`, `gold_ore`, `deepslate_gold_ore`, `nether_gold_ore`, `copper_ore`, `deepslate_copper_ore`, `diamond_ore`, `deepslate_diamond_ore`, `emerald_ore`, `deepslate_emerald_ore`, `redstone_ore`, `deepslate_redstone_ore`, `lapis_ore`, `deepslate_lapis_ore`, `coal_ore`, `deepslate_coal_ore`, `nether_quartz_ore`.
+- Deprecated utility: `lava_bucket`, `chest` (see KEEP_ALWAYS removals above).
 
-Extras of limited items are logged as `"N extra <item_name>"` for clarity; regular junk logs as `"N <item_name>"`.
+**Wood-type coverage.** New `ALL_PLANKS` / `ALL_LOGS` / `ALL_SAPLINGS` constants cover every MC 1.21 variant (oak, birch, spruce, dark_oak, jungle, acacia, mangrove, cherry, bamboo, pale_oak — mangrove uses `propagule`). GOAL_ITEM_MAP entries that previously only listed oak/birch/spruce now spread the full set, so a birch-forest bot with a "craft tools" goal no longer loses its birch_planks. `crafting_table` / `furnace` explicitly listed under craft/tool/smelt/house/etc. goals for defense-in-depth (redundant with KEEP_ALWAYS after the ordering fix, but readable).
 
-### 2026-04-15 — SINGLETON_KEEPS: drain extras of crafting_table / furnace ✅
+**Log output.** Extras of limited items (`SINGLETON_KEEPS` / `BED_GROUP` / `STACK_CAPS`) log as `"N extra <item_name>"`; regular junk logs as `"N <item_name>"`. Pre-drain log line: `[AutoRecovery] Clearing inventory (goal-aware drain-all-junk, N junk stack(s) to drain)...`.
 
-Observation: `crafting_table` and `furnace` are in KEEP_ALWAYS (tier 5, never discarded), but the bot only ever needs 1 of each at a time. A bot that accidentally crafts or picks up multiples would hold them forever, wasting inventory slots.
-
-**Fix:** new `SINGLETON_KEEPS = { crafting_table, furnace }` set. All three aggregation callers (`getDiscardSuggestions`, `getJunkStackCount`, `autoDiscardAllJunk`) now route through a shared `snapshotInventory(bot, goalProtected)` helper that applies the rule: for any SINGLETON_KEEPS item, keep 1, classify the rest as tier 1 junk with `discardable = total - 1`.
-
-Defense-in-depth: `autoDiscardAllJunk` adds a `floor = 1` safety check against `found.count` for SINGLETON_KEEPS items — so even if snapshot logic were to misreport, we can never drop below 1 of a keeper item.
-
-Extras appear in logs as `"N extra crafting_table"` to distinguish from regular junk. Easy to extend to other singleton-style items (shield, flint_and_steel, bed) later by adding them to the set.
-
-### 2026-04-15 — Inventory classification overhaul (wood coverage, junk coverage, ordering) ✅
-
-Three follow-on fixes to `src/utils/inventory_utils.js` after the drain-all-junk landing.
-
-**1. KEEP_ALWAYS ordering bug.** `getItemValue` checked `goalProtected` before `KEEP_ALWAYS`, which meant items in both sets (e.g., `crafting_table` during a "craft" goal, `torch` during a "mine" goal) were downgraded from value=5 (never discard) to value=4 (last-resort discardable — `getDiscardSuggestions` filters `< 5`). Fix: check KEEP_ALWAYS first. Value 4 goal-protected items can still appear as last-resort discards as designed; value 5 KEEP_ALWAYS items truly never do.
-
-**2. All wood types protected.** Introduced `ALL_PLANKS`, `ALL_LOGS`, `ALL_SAPLINGS` constants covering every MC 1.21 wood variant (oak, birch, spruce, dark_oak, jungle, acacia, mangrove, cherry, bamboo, pale_oak — mangrove uses `propagule` instead of `sapling`). `GOAL_ITEM_MAP` entries that previously listed only oak/birch/spruce now use `...ALL_PLANKS` / `...ALL_LOGS`, so a birch-forest bot with a "craft tools" goal no longer loses its birch_planks when AutoRecovery drains. Tier 3 plank/log list and tier 2 sapling list updated to match.
-
-**3. Explicit crafting_table/furnace in GOAL_ITEM_MAP.** Already in KEEP_ALWAYS tier 5, but explicitly listed under goals that need them (`craft`, `tool`, `pickaxe`, `sword`, `armor`, `smelt`, `furnace`, `house`, `shelter`, `survive`, `food`, `cook`, `mine`, `iron`, `diamond`, `build`) for defense-in-depth and readability.
-
-**4. Tier 1 junk expanded** to cover biome-specific bulk blocks that were previously unclassified (defaulting to value=2, which autoDiscardAllJunk doesn't drain): `magma_block`, `soul_sand`, `soul_soil`, `sandstone`, `red_sandstone`, `red_sand`, `end_stone`, `prismarine`, `prismarine_bricks`, `dark_prismarine`, `coarse_dirt`, `rooted_dirt`, `podzol`, `mycelium`, `terracotta`. Bot in a desert, nether, end, or ocean-monument biome now correctly treats the local bulk blocks as disposable.
-
-Net effect: classification now matches intuition across every vanilla biome and wood type. During any goal-driven work, goal-relevant items (including all wood variants and utility blocks) are preserved, and junk (including biome-specific bulk) drains cleanly in a single pass.
-
-### 2026-04-15 — Drain-all-junk disposal (SafeToss loop reduction) ✅
-
-Observed behavior: during a big `!collectBlocks("iron_ore", 50)` in a junky biome, bot was chaining SafeToss cycles back-to-back — each cycle only freed 5 slots worth of one or two item types, so a 7-type junk inventory triggered ~4 separate cycles before stabilizing. Each cycle is ~30-60s of dig-tunnel-toss-return, so this looked like "bot is visually stuck" to an observer.
-
-**Fix:** two small additions to the existing goal-aware classification system in `src/utils/inventory_utils.js`:
-
-- **`getJunkStackCount(bot, goal)`** — diagnostic helper returning the count of inventory slots holding tier 0 (trash: rotten_flesh, spider_eye, poisonous_potato) or tier 1 (bulk junk: cobblestone, dirt, gravel, sand, netherrack, andesite, diorite, granite, deepslate variants, tuff, mud, clay_ball, dripstone, calcite, mossy_cobblestone) items. Goal-aware — items bumped to tier 4 by the current goal (e.g., cobblestone during a "build" or "stone" goal) are excluded.
-- **`autoDiscardAllJunk(bot, goal)`** — like `autoDiscard`, but drains every tier 0+1 stack in one pass instead of stopping once N slots are free. Same goal-awareness, same `markDiscarded` cooldown behavior, same SafeToss under the hood.
-
-Then in `src/agent/auto_recovery.js` `recoverInventoryFull`, swapped `autoDiscard(bot, 5, goal)` for `autoDiscardAllJunk(bot, goal)` and added a log line showing the junk stack count before draining. The other two call sites (`recoverWrongTool`, `recoverNeedCraftingTable`, `recoverNeedFurnace` tool-craft pre-checks at `slotsNeeded=2`) intentionally keep the targeted `getDiscardSuggestions` — they only need a sliver of space, not a full drain.
-
-**Expected effect:** during targeted collects, inventory-full fires once, bot drains every junk stack in one SafeToss session, then has a clean 60s+ window (per `DISCARD_COOLDOWN_MS`) before any further disposal — usually long enough to finish the collect. Instead of 4 cycles × 45s = 3 min lost to disposal, it's one cycle of equivalent length. Cobblestone still gets protected when the goal involves building or stone work.
+**Open extensions (not yet implemented):** tool/weapon/armor tier hierarchies — keep only the best tier of each role and toss lower tiers. JP flagged this for a separate conversation.
 
 ### 2026-04-15 — #4 Wrong tool for the block ✅
 
