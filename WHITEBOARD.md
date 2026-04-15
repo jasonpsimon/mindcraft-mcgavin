@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (overnight audit: 7h 47m stable uptime confirms ViaBackwards + mutex + swim fixes; 3 new bugs surfaced — see "Newly found" section)_
+_Last updated: 2026-04-15 (bugs A + C fixed; bug B (escape plateau) now the active item)_
 
 ---
 
@@ -19,25 +19,23 @@ _Last updated: 2026-04-15 (overnight audit: 7h 47m stable uptime confirms ViaBac
 
 ## In-progress
 
-- **Bug A — `AutoBreakPlant` destroying terrain (`grass_block`) inside spawn zone.** Critical — actively harmful. See "Newly found bugs" below.
-- **Bug C — repeat-fail on same block (`Failed to break large_fern: Digging aborted` x3).** Wastes escape attempts. See "Newly found bugs" below.
+- **Bug B — escape loop plateau at ~130 blocks from spawn.** Bot oscillates across 4 directions without making meaningful forward progress after a death-respawn lands it back inside the zone. See "Newly found bugs" below for details + fix options.
 
 ---
 
 ## Newly found bugs (overnight audit 2026-04-15)
 
-### Bug A: `AutoBreakPlant` breaks `grass_block` terrain
+### Bug A: `AutoBreakPlant` breaks `grass_block` terrain — ✅ fixed 2026-04-15 (`ec75860`)
 
 **Severity:** critical — actively destroying player's spawn-area terrain.
 
-`PLANT_LIKE_PATTERN` regex matches "grass" which also matches `grass_block` (the solid dirt-with-grass-top cube, NOT the plant `short_grass`). Bot destroyed at least 3 grass_block tiles inside the spawn zone during escape attempts. Would also match `moss_block`, `rooted_dirt` in the wild.
+`PLANT_LIKE_PATTERN` regex matched "grass" which also matched `grass_block` (the solid dirt-with-grass-top cube, NOT the plant `short_grass`). Bot destroyed at least 3 grass_block tiles inside the spawn zone during escape attempts. Would also match `moss_block`, `rooted_dirt` in the wild.
 
-**Log evidence:**
-```
-[AutoBreakPlant] Breaking plant grass_block inside spawn zone (plants allowed) at (-80, …)
-```
+**Fix deployed:**
+1. Tightened regex: `grass` → `(^|_)grass$` (matches `short_grass`, `tall_grass`, but not `grass_block`). Also removed bare `moss` and `fungus` from the pattern.
+2. Hard exclusion list `SOLID_GROUND_BLOCKS` covering `grass_block`, `moss_block`, `mycelium`, `podzol`, `rooted_dirt`, `dirt_path`, `farmland`. Checked before any pattern matching.
 
-**Fix sketch (trivial):** add a hard exclusion list to `autoBreakStuckPlant` covering solid-ground blocks (`grass_block`, `moss_block`, `rooted_dirt`, `mycelium`, `podzol`, `dirt_path`). Tighten the regex to avoid matching `_block` suffix on solid terrain. Keep `short_grass`, `tall_grass`, `fern`, `large_fern` etc. still breakable.
+**Verified:** post-deploy, bot now only breaks `vine` and `short_grass` inside spawn. No `grass_block` events.
 
 ### Bug B: Escape loop plateau at ~130 blocks from spawn
 
@@ -50,15 +48,15 @@ Over 7h 47m: **39 escape attempts, 0 successful.** Bot oscillates at positions (
 - Remember successful escape exit points per spawn coordinate; next time around, head toward that known-good exit.
 - Shorter per-direction timeout (60s not 120s) so the bot cycles directions faster and exhausts the loop sooner.
 
-### Bug C: `autoBreakStuckPlant` retries same block that threw `Digging aborted`
+### Bug C: `autoBreakStuckPlant` retries same block that threw `Digging aborted` — ✅ fixed 2026-04-15 (`ec75860`)
 
 **Severity:** medium — wastes escape attempts, clutters log, slight concurrency-race signature.
 
 Three consecutive log entries: `Failed to break large_fern: Digging aborted` — all on the same block. `Digging aborted` is the classic pathfinder/dig interrupt-race signature, which can still happen when an `interrupts:['all']` mode (self_defense / cowardice / hurt) fires during the break and preempts the mutex.
 
-**Fix sketch (small):**
-- Track attempted positions within `autoBreakStuckPlant` per-call (short in-memory blacklist). If a block fails, skip it on immediate retry — try a different adjacent plant instead.
-- Optionally: retry after a 500ms cooldown (let the mode finish), or only retry once per specific block per escape-attempt cycle.
+**Fix deployed:** per-bot in-memory blacklist (`bot._autoBreakBlacklist` — `Map<"x,y,z", expiryTime>`). When a dig throws, the block's position is blacklisted for 30 seconds. On the next invocation, blacklisted positions are skipped — the helper tries a different adjacent plant instead. Entries self-prune on subsequent calls.
+
+**Verified:** deployed and running; blacklist has not fired yet because no new `Digging aborted` events occurred in the post-deploy window. Logic will exercise naturally when the next race happens.
 
 ---
 
