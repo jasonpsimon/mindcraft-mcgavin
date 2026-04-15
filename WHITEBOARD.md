@@ -19,7 +19,7 @@ _Last updated: 2026-04-15 (to-do queue regrouped by status → importance; #7a r
 
 ## In-progress
 
-_Nothing active. Pick next item from the to-do queue._
+**Memory compression exceeding 500-char limit.** LLM repeatedly truncates its own memory summaries with "Memory truncated to 500 chars. Compress it more next time." Compression prompt isn't strict enough. Fix lives in the memory summarization prompt template. Currently analyzing logs to find root issue.
 
 ---
 
