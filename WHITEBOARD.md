@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (D1 legacy-memory deprecation shipped; F+G queued for next session)_
+_Last updated: 2026-04-15 (D1 shipped; F+G queued; spawn-escape path persistence added to F as first concrete migration target)_
 
 ---
 
@@ -98,6 +98,7 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 1. `grep -rn 'long_term_memory.store\|longTermMemory.store' src/` — enumerate every call site.
 2. Trace each call to the trigger event — is it actually fired during normal play?
 3. If empty or sparse: design store-on-event hooks. Candidates:
+   - **Spawn-escape paths (first concrete migration target)** — `skills.js escapeSpawnZone` currently caches successful exit directions in `bot.escapeMemory` (in-process Map, 90s timeout, keyed by spawn coord). Every restart discards this and the bot rediscovers via the 8-direction search. Migrate to LongTermMemory: on successful escape, `store("Spawn escape from (x,y,z): direction D, N hops, resolved @(x',y',z')", category: "place", metadata: {spawn_xyz, success_xyz, direction})`. On next spawn, query for `"escape spawn zone from (x,y,z)"` — if a match comes back, try that direction first before the 8-way search. Keeps the 90s in-process cache for hot retries, adds cross-session persistence as the fallback tier.
    - New player preferences (JP said "X") → store as `category: player`
    - Discovered landmarks (found village, diamond vein @X,Y,Z) → store as `category: place`
    - Death causes (died to lava at Y=-12) → store as `category: strategy`
@@ -105,7 +106,7 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
    - Failed approaches (tried to smelt coal_ore directly, rejected) → store as `category: fact`
 4. Verify retrieval: during prompt building, does `ContextBuilder` actually surface the right long-term facts for the current context? Check semantic query quality (`_getContextQuery` in prompter.js).
 
-**Success signal:** after a play session, `longterm_index/` grows beyond seed count. After a death, next restart bot "remembers" the danger (avoids lava based on stored event). Cross-session continuity measurable.
+**Success signal:** after a play session, `longterm_index/` grows beyond seed count. After a death, next restart bot "remembers" the danger (avoids lava based on stored event). After a successful spawn-escape, subsequent restarts from the same spawn coord pick the proven direction on the first try without re-searching. Cross-session continuity measurable.
 
 **Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
 
