@@ -2,18 +2,52 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (safe-movements Stage 1 shipped — collectBlock plugin no longer digs straight-down shafts; #12 added for full Movements audit)_
+_Last updated: 2026-04-15 (end-of-day status refresh)_
 
 ---
 
 ## Current state (live on develop)
 
+**Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `8f722ce`. All fixes merged + pushed to GitHub.
+- Branch: `develop` — HEAD `b27f39c`. All fixes merged + pushed to GitHub.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Stability: ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced. Survival hardening shipped (maxDropDown=3, autoEat startAt=19). Tool selection now equipping correctly before every dig.
-- Bot escapes spawn zone in 1 hop (226 → 265 blocks observed). Mining iron_ore yields drops (proves pickaxe equip is working).
-- Inventory management: goal-aware classification with 4-tier priority (SINGLETON_KEEPS > BED_GROUP > STACK_CAPS > getItemValue). On inventory-full, `autoDiscardAllJunk` drains every limit-violating stack in one pass (crafting_table/furnace/bow/shield/flint_and_steel/bucket/water_bucket kept at 1; 30+ resources/materials capped at 1 stack; bed kept at 1 across all colors; all 17 shulker_box variants unlimited; lava_bucket/chest/ore_blocks treated as junk).
+- Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
+
+**Stability:**
+- ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced; all bot-mutating paths serialized via `withBotLock`.
+- Survival: `maxDropDown=3`, `autoEat startAt=19`, `_configureTerrainSafeMovements` applied to every Movements instance we control.
+- `self_preservation` reflex paths (drowning, sand/gravel, lava/fire, low-health flee) audited and confirmed mutex-bypass-safe via `interrupts:['all']`.
+- Safe Movements Stage 1: `bot.collectBlock.movements` now configured with `maxDropDown=3 / digCost=10 / canSwim=true / terrain-safe` — no more straight-down vertical shafts during `!collectBlocks`. Full audit tracked under #12.
+- Bot escapes spawn zone in 1 hop (226 → 265 blocks observed), 0 fall deaths post-hardening.
+
+**Inventory management (final shape):**
+- 5-tier classification priority chain in `snapshotInventory`: **SINGLETON_KEEPS → BED_GROUP → STACK_CAPS → TIERED_ITEMS → getItemValue**.
+- SINGLETON_KEEPS (keep 1): crafting_table, furnace, bow, shield, flint_and_steel, bucket, water_bucket.
+- BED_GROUP: 1 bed of any color across 17 variants.
+- STACK_CAPS (keep 1 stack): 30+ resources/materials, ender_pearl capped at 16.
+- TIERED_ITEMS: 9 roles × 6 tiers (pickaxe/axe/shovel/hoe/sword + helmet/chestplate/leggings/boots, netherite→leather). Only best tier owned per role is protected; lower tiers drain as junk.
+- KEEP_ALWAYS (unlimited): non-tiered tools (bow, crossbow, shield, fishing_rod, flint_and_steel, shears), precious resources, ancient_debris, utility blocks, all 17 shulker_box variants.
+- Tier 1 junk (drained): cobblestone/bulk stone/sandstone/soil variants, all 18 ore blocks (smelt to resource then drop), lava_bucket, chest.
+- `autoDiscardAllJunk` drains everything in one pass on inventory-full, 3 distinguishable log labels (`N X` / `N extra X` / `N lower-tier X`).
+
+**Protected zones (#7 shipped today):**
+- Unified shape `{name, type: 'spawn'|'structure'|'village', x, z, radius, yMin?, yMax?}` checked by `_isInAnyProtectedZone` before any destructive op.
+- Spawn zone (existing, 250-block radius, Y-agnostic).
+- Manual zones from `player_structures.json` at repo root (stub committed, empty `structures` array; users add as needed; graceful loader handles missing/malformed files).
+- Auto-detected villages (3 signals: ≥3 villagers clustered, ≥3 profession workstations clustered, any bell). 100-block radius, `yMin = centerY - 20`, `yMax = centerY + 30`. Periodic re-scan every 30s. Catches abandoned villages via workstations + bells even when no villagers remain.
+- AutoRecovery pattern `inside_protected_zone` routes "near spawn" / "near protected structure" / "protected structure 'X'" errors through `ESCAPE_SPAWN_ZONE` recovery so the bot auto-walks out and retries.
+- Perimeter plugged: `breakBlockAt`, `placeBlock`, `safeToss`, `autoBreakStuckPlant`, AND `collectBlock` all consult the zone check. `collectBlock` leak was caught post-deploy and fixed; motivated Rule 7.
+
+**LLM interaction & memory:**
+- ContextBuilder active (`use_context_builder: true`) — conversation prompts route through episodic + long-term memory at priority 6.
+- D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
+- AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
+
+**Open behaviors / active monitoring:**
+- Bot currently self-prompting toward diamond tools. Spawn zone protection filters out buried ores inside the zone; AutoRecovery walks bot out and retries.
+- No known crashes, no silent failures, all error paths log with structured prefixes.
+- Known issues section on the whiteboard is **empty** (self_preservation mutex stale entry audited out; memory compression closed by D1; Cannot-smelt closed by handler; mob-combat-ranged folded into #10 Layer 2).
 
 ---
 
