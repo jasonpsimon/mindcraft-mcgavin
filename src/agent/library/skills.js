@@ -1388,6 +1388,10 @@ function _recordEscapeExit(bot, spawn, exitPos) {
 
 // Race goToGoal against a hard timeout. Returns when either completes.
 // Exceptions are caught and logged; callers should re-check position.
+// On timeout, explicitly cancel any in-flight pathfinder goal so that
+// subsequent hop attempts start from a clean state (otherwise the
+// pathfinder can keep ticking the bot into unstable / NaN positions
+// while we try to issue new goals).
 async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
     let timeoutHandle;
     const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
@@ -1401,6 +1405,9 @@ async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
         await Promise.race([attempt, timeout]);
     } catch (err) {
         console.warn(`[SpawnEscape] ${label}: ${err.message}`);
+        // Cancel any pathfinder goal that may still be running so the
+        // bot settles before the next attempt reads position.
+        try { bot.pathfinder.setGoal(null); } catch (_) { /* ignore */ }
     } finally {
         clearTimeout(timeoutHandle);
     }
@@ -1503,15 +1510,26 @@ async function _commitToDirection(bot, spawn, dir, readPos, isOutside) {
     let sidestepSide = 'left';  // alternates
     let hopNum = 0;
 
+    let nanWaits = 0;
     while (stuckCount < ESCAPE_MAX_STUCKS_PER_DIRECTION) {
         if (isOutside()) return 'escaped';
 
-        const pos = readPos();
+        let pos = readPos();
         if (!pos) {
-            console.warn(`[SpawnEscape] ${dir.label}: position unavailable, waiting 1s`);
+            // Bot position transiently NaN (chunk sync, pathfinder tick race).
+            // Wait up to 3 seconds for it to resolve; if still null, bail this
+            // direction — it's not the pathfinder's fault, something's wrong
+            // with the bot's state.
+            nanWaits++;
+            if (nanWaits > 3) {
+                console.warn(`[SpawnEscape] ${dir.label}: position still unavailable after ${nanWaits}s — skipping direction`);
+                return 'stuck';
+            }
+            console.warn(`[SpawnEscape] ${dir.label}: position unavailable, waiting 1s (${nanWaits}/3)`);
             await new Promise(r => setTimeout(r, 1000));
             continue;
         }
+        nanWaits = 0;  // got a valid position, reset the counter
 
         hopNum++;
         // Next waypoint: 40 blocks further in primary direction
