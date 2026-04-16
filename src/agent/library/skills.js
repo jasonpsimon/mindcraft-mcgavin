@@ -455,13 +455,13 @@ export async function defendSelf(bot, range=9) {
         await equipHighestAttack(bot);
         if (bot.entity.position.distanceTo(enemy.position) >= 4 && enemy.name !== 'creeper' && enemy.name !== 'phantom') {
             try {
-                bot.pathfinder.setMovements(new pf.Movements(bot));
+                bot.pathfinder.setMovements(createMovements(bot));
                 await bot.pathfinder.goto(new pf.goals.GoalFollow(enemy, 3.5), true);
             } catch (err) {/* might error if entity dies, ignore */}
         }
         if (bot.entity.position.distanceTo(enemy.position) <= 2) {
             try {
-                bot.pathfinder.setMovements(new pf.Movements(bot));
+                bot.pathfinder.setMovements(createMovements(bot));
                 let inverted_goal = new pf.goals.GoalInvert(new pf.goals.GoalFollow(enemy, 2));
                 await bot.pathfinder.goto(inverted_goal, true);
             } catch (err) {/* might error if entity dies, ignore */}
@@ -545,7 +545,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     const isLog = Object.keys(LOG_TO_SAPLING).some(l => blocktypes.includes(l));
     const treeBasePositions = []; // store {x, y, z, saplingType}
 
-    const movements = new pf.Movements(bot);
+    const movements = createMovements(bot);
     movements.dontMineUnderFallingBlock = false;
     movements.dontCreateFlow = true;
 
@@ -720,7 +720,7 @@ export async function pickupNearbyItems(bot) {
     let nearestItem = getNearestItem(bot);
     let pickedUp = 0;
     while (nearestItem) {
-        let movements = new pf.Movements(bot);
+        let movements = createMovements(bot);
         movements.canDig = false;
         bot.pathfinder.setMovements(movements);
         await goToGoal(bot, new pf.goals.GoalFollow(nearestItem, 1));
@@ -779,7 +779,7 @@ export async function breakBlockAt(bot, x, y, z) {
 
         if (bot.entity.position.distanceTo(block.position) > 4.5) {
             let pos = block.position;
-            let movements = new pf.Movements(bot);
+            let movements = createMovements(bot);
             movements.canPlaceOn = false;
             movements.allow1by1towers = false;
             bot.pathfinder.setMovements(movements);
@@ -976,13 +976,13 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
         // too close
         let goal = new pf.goals.GoalNear(targetBlock.position.x, targetBlock.position.y, targetBlock.position.z, 2);
         let inverted_goal = new pf.goals.GoalInvert(goal);
-        bot.pathfinder.setMovements(new pf.Movements(bot));
+        bot.pathfinder.setMovements(createMovements(bot));
         await bot.pathfinder.goto(inverted_goal);
     }
     if (bot.entity.position.distanceTo(targetBlock.position) > 4.5) {
         // too far
         let pos = targetBlock.position;
-        let movements = new pf.Movements(bot);
+        let movements = createMovements(bot);
         bot.pathfinder.setMovements(movements);
         await goToGoal(bot, new pf.goals.GoalNear(pos.x, pos.y, pos.z, 4));
     }
@@ -1535,10 +1535,11 @@ export function loadPlayerStructures(bot) {
  *
  * Called once at agent startup from agent.js after loadPlayerStructures.
  *
- * Rule 7 note: this is Stage 1 of the broader Movements safety audit
- * tracked as whiteboard #12. Every other `new pf.Movements(bot)` in
- * skills.js still uses raw pathfinder defaults and should eventually
- * route through a shared createSafeMovements() helper.
+ * Rule 7 note: this was Stage 1 of the broader Movements safety audit
+ * tracked as whiteboard #12. As of the createMovements() factory, all
+ * pathfinder Movements in skills.js route through the shared factory
+ * which applies terrain-safe config and disables dig/scaffold in
+ * protected zones.
  */
 export function installSafePathfinderDefaults(bot) {
     if (!bot.collectBlock || !bot.collectBlock.movements) {
@@ -1815,6 +1816,44 @@ function _configureTerrainSafeMovements(bot, movements) {
         const block = bot.registry.blocksByName[name];
         if (block) movements.blocksToAvoid.add(block.id);
     }
+}
+
+/**
+ * Factory for pf.Movements that respects protected zones.
+ *
+ * Every callsite that needs pathfinder Movements should use this instead of
+ * raw `new pf.Movements(bot)`. When the bot is inside a protected zone
+ * (spawn, village, or manual structure), the returned Movements object has
+ * dig and scaffold disabled so the pathfinder walks around obstacles instead
+ * of digging through or scaffolding over them.
+ *
+ * Outside protected zones, returns a normal Movements object with terrain-safe
+ * hazard avoidance applied.
+ *
+ * This is the Rule 7 perimeter closure for pathfinder-initiated block
+ * modifications. Direct bot.dig / bot.placeBlock calls are guarded by their
+ * own per-function zone checks (breakBlockAt, placeBlock, collectBlock, etc.).
+ *
+ * @param {object} bot - The mineflayer bot
+ * @returns {pf.Movements} Zone-aware movements object
+ */
+function createMovements(bot) {
+    const m = new pf.Movements(bot);
+    _configureTerrainSafeMovements(bot, m);
+
+    // Protected zone check: disable dig and scaffold inside zones
+    const pos = bot.entity?.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
+        const zone = _isInAnyProtectedZone(bot, pos.x, pos.y, pos.z);
+        if (zone) {
+            m.canDig = false;
+            m.scaffoldingBlocks = new Set();
+            const label = zone.type === 'spawn' ? 'spawn zone' : `protected zone '${zone.name || zone.type}'`;
+            console.log(`[CreateMovements] Inside ${label} — pathfinder dig/scaffold disabled`);
+        }
+    }
+
+    return m;
 }
 
 /**
@@ -2894,7 +2933,7 @@ export async function goToGoal(bot, goal) {
      * @param {pf.goals.Goal} goal, the goal to navigate to.
      **/
 
-    const nonDestructiveMovements = new pf.Movements(bot);
+    const nonDestructiveMovements = createMovements(bot);
     const dontBreakBlocks = ['glass', 'glass_pane'];
     for (let block of dontBreakBlocks) {
         nonDestructiveMovements.blocksCantBreak.add(mc.getBlockId(block));
@@ -2903,12 +2942,12 @@ export async function goToGoal(bot, goal) {
     nonDestructiveMovements.digCost = 10;
     nonDestructiveMovements.canSwim = true;     // pathfinder handles water as swimmable
     nonDestructiveMovements.maxDropDown = 3;     // vanilla no-damage limit (was default 4 = sometimes-fall-damage)
-    _configureTerrainSafeMovements(bot, nonDestructiveMovements);
+    // _configureTerrainSafeMovements already applied by createMovements factory
 
-    const destructiveMovements = new pf.Movements(bot);
+    const destructiveMovements = createMovements(bot);
     destructiveMovements.canSwim = true;         // pathfinder handles water as swimmable
     destructiveMovements.maxDropDown = 3;         // vanilla no-damage limit
-    _configureTerrainSafeMovements(bot, destructiveMovements);
+    // _configureTerrainSafeMovements already applied by createMovements factory
 
     // Bump pathfinder timeouts for complex underground terrain
     bot.pathfinder.thinkTimeout = 10000;  // 10s total (default 5s)
@@ -3210,7 +3249,7 @@ export async function followPlayer(bot, username, distance=4) {
     if (!player)
         return false;
 
-    const move = new pf.Movements(bot);
+    const move = createMovements(bot);
     move.digCost = 10;
     bot.pathfinder.setMovements(move);
     let doorCheckInterval = startDoorInterval(bot);
@@ -3275,10 +3314,10 @@ export async function moveAway(bot, distance) {
     const pos = bot.entity.position;
     let goal = new pf.goals.GoalNear(pos.x, pos.y, pos.z, distance);
     let inverted_goal = new pf.goals.GoalInvert(goal);
-    bot.pathfinder.setMovements(new pf.Movements(bot));
+    bot.pathfinder.setMovements(createMovements(bot));
 
     if (bot.modes.isOn('cheat')) {
-        const move = new pf.Movements(bot);
+        const move = createMovements(bot);
         const path = await bot.pathfinder.getPathTo(move, inverted_goal, 10000);
         let last_move = path.path[path.path.length-1];
         if (last_move) {
@@ -3306,7 +3345,7 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
      **/
     let goal = new pf.goals.GoalFollow(entity, distance);
     let inverted_goal = new pf.goals.GoalInvert(goal);
-    bot.pathfinder.setMovements(new pf.Movements(bot));
+    bot.pathfinder.setMovements(createMovements(bot));
     await bot.pathfinder.goto(inverted_goal);
     return true;
 }
@@ -3325,7 +3364,7 @@ export async function avoidEnemies(bot, distance=16) {
     while (enemy) {
         const follow = new pf.goals.GoalFollow(enemy, distance+1); // move a little further away
         const inverted_goal = new pf.goals.GoalInvert(follow);
-        bot.pathfinder.setMovements(new pf.Movements(bot));
+        bot.pathfinder.setMovements(createMovements(bot));
         bot.pathfinder.setGoal(inverted_goal, true);
         await new Promise(resolve => setTimeout(resolve, 500));
         enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), distance);
@@ -3517,7 +3556,7 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
     // if distance is too far, move to the block
     if (bot.entity.position.distanceTo(block.position) > 4.5) {
         let pos = block.position;
-        bot.pathfinder.setMovements(new pf.Movements(bot));
+        bot.pathfinder.setMovements(createMovements(bot));
         await goToGoal(bot, new pf.goals.GoalNear(pos.x, pos.y, pos.z, 4));
     }
     if (block.name !== 'farmland') {
@@ -3562,7 +3601,7 @@ export async function activateNearestBlock(bot, type) {
     }
     if (bot.entity.position.distanceTo(block.position) > 4.5) {
         let pos = block.position;
-        bot.pathfinder.setMovements(new pf.Movements(bot));
+        bot.pathfinder.setMovements(createMovements(bot));
         await goToGoal(bot, new pf.goals.GoalNear(pos.x, pos.y, pos.z, 4));
     }
     await bot.activateBlock(block);
@@ -3936,7 +3975,7 @@ export async function digDown(bot, distance = 10) {
         const cavern = scanForCaverns(bot, 100, 30);
         if (cavern && cavern.distance < distance * 2) {
             const goal = new pf.goals.GoalNear(cavern.pos.x, cavern.pos.y, cavern.pos.z, 2);
-            const nonDestructiveMovements = new pf.Movements(bot);
+            const nonDestructiveMovements = createMovements(bot);
             nonDestructiveMovements.canDig = false;  // hard-require walk-in path
 
             let walkInPathFound = false;
