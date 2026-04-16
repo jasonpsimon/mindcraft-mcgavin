@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (autoBreakStuckPlant allowlist refinement shipped)_
+_Last updated: 2026-04-16 (safeTossBatch shipped — single dump run for all junk)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-16 (autoBreakStuckPlant allowlist refinement shipped)_
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is **running** — #22 ChunkWait verified live 2026-04-16.
-- Branch: `develop` — HEAD `37b6d4c`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
+- Branch: `develop` — HEAD `9300490`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
@@ -358,6 +358,12 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-16 — safeTossBatch: single dump run for all junk items ✅
+
+Commit `9300490`. `autoDiscard` and `autoDiscardAllJunk` were calling `safeToss` per item type — each call independently dug its own 8-block tunnel underground. A 4-item discard meant 4 tunnels carved through the cave, exposing lava and creating fall hazards. Massive terrain destruction for no reason.
+
+New `safeTossBatch(bot, items)` function: collects all items to discard first, digs ONE tunnel, digs ONE hole at the end, drops ALL items into that single hole, walks back. Both `autoDiscard` and `autoDiscardAllJunk` refactored to build a batch and call `safeTossBatch` once. `safeToss` remains unchanged for single-item use (`!discard` command).
 
 ### 2026-04-16 — autoBreakStuckPlant: movement-blocking allowlist for protected zones ✅
 
