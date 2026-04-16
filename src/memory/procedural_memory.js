@@ -104,6 +104,18 @@ export class ProceduralMemory {
         this._enforceMaxEntries();
         this.save();
 
+        // Instrumentation (#20): without this log, ConfidenceEngine tuning is blind
+        // to how procedural data is actually accumulating. Shows which commands are
+        // training, how confidence evolves, and total-corpus growth each turn. One
+        // line per recordAction — ~1 per LLM turn, cheap.
+        try {
+            const conf = this._calculateConfidence(entry, 0);
+            const cmdLabel = (entry.command || '').slice(0, 60);
+            console.log(`[ProceduralMemory] Recorded outcome ${cmdLabel}: ${success ? 'success' : 'fail'} (confidence now ${conf.toFixed(3)}, ${entry.successes}S/${entry.failures}F, ${this.entries.size} total records)`);
+        } catch (e) {
+            console.warn('[ProceduralMemory] instrumentation log failed:', e.message);
+        }
+
         return entry;
     }
 
