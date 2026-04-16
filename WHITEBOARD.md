@@ -139,58 +139,6 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 
 **Why this matters for #9:** bypassing the LLM entirely for routine actions is the purest expression of "let the LLM do what it's good at, program everything else."
 
-### 12. Movements safety audit — Rule 7 follow-through
-
-**Status:** 🟡 Stage 1 shipped (commit `e59a307` — `bot.collectBlock.movements` now safety-configured); full audit deferred • **Priority:** medium-high (bot safety; currently ~20 sites use raw pathfinder defaults)
-
-**Audit update 2026-04-15 (L2 findings):** full perimeter sweep confirmed 20+ raw-default callsites. Five are hot-path and should be prioritized before the broader refactor:
-
-- `skills.js:426, 432` — enemyKite combat (bot chased into lava/cactus = unnecessary damage)
-- `skills.js:740` — breakBlockAt approach (target buried → straight-down shaft risk, same class as Stage-1 fix)
-- `skills.js:937, 943` — placeBlock approach (2 sites, same pattern as breakBlockAt)
-- `skills.js:2889, 2920, 2939, 3131, 3176` — moveAwayFromEntity / moveAwayFromPosition / avoidEnemies / activateNearestBlock / activateFarmland
-
-Other raw sites (`collectBlock:506`, `pickupNearbyItems:681`, `followPlayer:2824`) carry lower risk and are acceptable as "deferred to full audit." Stage 2 (the `createSafeMovements` helper) unblocks #17 (skills.js decomposition — the helper extraction is a natural first module boundary).
-
-Rule 7 (Complete the perimeter) calls for every `pf.Movements` instance in the codebase to be constructed via a shared helper so the safety invariant — `maxDropDown=3`, `canSwim=true`, `_configureTerrainSafeMovements`, sensible `digCost` — holds everywhere. Right now only `goToGoal` (for its two internal Movements objects) and `bot.collectBlock.movements` (as of Stage 1) apply the safer config. Every other `new pf.Movements(bot)` in `skills.js` uses raw pathfinder defaults.
-
-**Known raw-defaults callsites (grep output 2026-04-15):**
-
-- `world.js:397` — isClearPath (read-only, low risk)
-- `skills.js:426/432` — defendSelf (hostile follow, short-lived)
-- `skills.js:506` — collectBlock local movements (short-lived, already has ProtectedZone filter)
-- `skills.js:681` — breakBlockAt approach (short-lived)
-- `skills.js:740` — breakBlockAt internal retry (short-lived)
-- `skills.js:937/943` — goToPlayer (destructive path to player)
-- `skills.js:2783/2848/2851/2879/2898/3090/3135` — various pathfinder setup blocks
-- `skills.js:3493` — digDown cavern-path pre-check (non-destructive, OK)
-- `CollectBlock.js` (plugin) — fixed via Stage 1
-
-Short-lived and short-distance pathfinding (breakBlockAt approach, defendSelf, unstuck) carries less straight-shaft risk because targets are usually at bot height. The biggest risks were `collectBlock` (fixed) and potentially `goToPlayer` if the player is buried.
-
-**Fix sketch:**
-
-1. New `createSafeMovements(bot, opts = {})` helper in `skills.js`. Returns a `new pf.Movements(bot)` with safety defaults applied:
-
-```js
-const m = new pf.Movements(bot);
-m.maxDropDown = opts.maxDropDown ?? 3;
-m.canSwim = opts.canSwim ?? true;
-m.digCost = opts.digCost ?? 10;  // discourage mining-through
-m.placeCost = opts.placeCost ?? 2;
-if (opts.canDig !== undefined) m.canDig = opts.canDig;
-_configureTerrainSafeMovements(bot, m);
-return m;
-```
-
-2. Route every `new pf.Movements(bot)` in `src/agent/library/skills.js` through `createSafeMovements(bot, {...})`. Per-site opts let callers override (e.g., `canDig=false` for non-destructive probes).
-
-3. Document the invariant in the helper's header — "No bare `new pf.Movements(bot)` anywhere in mindcraft-mcgavin code; use `createSafeMovements`."
-
-4. Optional lint-style check (sibling to the 29-test classification harness): a script that greps `src/` for `new pf.Movements(bot)` outside `createSafeMovements` itself and fails if any are found.
-
-**Signals to watch:** no more straight-down digging during `!collectBlocks`, `!goToPlayer`, or any other pathfinder-driven command. Bot consistently uses staircases and walks around obstacles rather than mining through.
-
 ### 7c. Heuristic auto-detection of player-built structures
 
 **Status:** ⏳ not started • **Priority:** medium (complements the #7 village detector; catches player bases)
@@ -310,6 +258,58 @@ Given world seed + MC version, regenerate each chunk deterministically and diff 
 - **Pre-fight equip** — `self_defense` mode ensure best weapon is equipped before attacking. Partially done via #4 `equipHighestAttack`.
 - **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
 - **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness today.
+
+### 12. Movements safety audit — Rule 7 follow-through
+
+**Status:** 🟡 Stage 1 shipped (commit `e59a307` — `bot.collectBlock.movements` now safety-configured); full audit deferred • **Priority:** medium-high (bot safety; currently ~20 sites use raw pathfinder defaults)
+
+**Audit update 2026-04-15 (L2 findings):** full perimeter sweep confirmed 20+ raw-default callsites. Five are hot-path and should be prioritized before the broader refactor:
+
+- `skills.js:426, 432` — enemyKite combat (bot chased into lava/cactus = unnecessary damage)
+- `skills.js:740` — breakBlockAt approach (target buried → straight-down shaft risk, same class as Stage-1 fix)
+- `skills.js:937, 943` — placeBlock approach (2 sites, same pattern as breakBlockAt)
+- `skills.js:2889, 2920, 2939, 3131, 3176` — moveAwayFromEntity / moveAwayFromPosition / avoidEnemies / activateNearestBlock / activateFarmland
+
+Other raw sites (`collectBlock:506`, `pickupNearbyItems:681`, `followPlayer:2824`) carry lower risk and are acceptable as "deferred to full audit." Stage 2 (the `createSafeMovements` helper) unblocks #17 (skills.js decomposition — the helper extraction is a natural first module boundary).
+
+Rule 7 (Complete the perimeter) calls for every `pf.Movements` instance in the codebase to be constructed via a shared helper so the safety invariant — `maxDropDown=3`, `canSwim=true`, `_configureTerrainSafeMovements`, sensible `digCost` — holds everywhere. Right now only `goToGoal` (for its two internal Movements objects) and `bot.collectBlock.movements` (as of Stage 1) apply the safer config. Every other `new pf.Movements(bot)` in `skills.js` uses raw pathfinder defaults.
+
+**Known raw-defaults callsites (grep output 2026-04-15):**
+
+- `world.js:397` — isClearPath (read-only, low risk)
+- `skills.js:426/432` — defendSelf (hostile follow, short-lived)
+- `skills.js:506` — collectBlock local movements (short-lived, already has ProtectedZone filter)
+- `skills.js:681` — breakBlockAt approach (short-lived)
+- `skills.js:740` — breakBlockAt internal retry (short-lived)
+- `skills.js:937/943` — goToPlayer (destructive path to player)
+- `skills.js:2783/2848/2851/2879/2898/3090/3135` — various pathfinder setup blocks
+- `skills.js:3493` — digDown cavern-path pre-check (non-destructive, OK)
+- `CollectBlock.js` (plugin) — fixed via Stage 1
+
+Short-lived and short-distance pathfinding (breakBlockAt approach, defendSelf, unstuck) carries less straight-shaft risk because targets are usually at bot height. The biggest risks were `collectBlock` (fixed) and potentially `goToPlayer` if the player is buried.
+
+**Fix sketch:**
+
+1. New `createSafeMovements(bot, opts = {})` helper in `skills.js`. Returns a `new pf.Movements(bot)` with safety defaults applied:
+
+```js
+const m = new pf.Movements(bot);
+m.maxDropDown = opts.maxDropDown ?? 3;
+m.canSwim = opts.canSwim ?? true;
+m.digCost = opts.digCost ?? 10;  // discourage mining-through
+m.placeCost = opts.placeCost ?? 2;
+if (opts.canDig !== undefined) m.canDig = opts.canDig;
+_configureTerrainSafeMovements(bot, m);
+return m;
+```
+
+2. Route every `new pf.Movements(bot)` in `src/agent/library/skills.js` through `createSafeMovements(bot, {...})`. Per-site opts let callers override (e.g., `canDig=false` for non-destructive probes).
+
+3. Document the invariant in the helper's header — "No bare `new pf.Movements(bot)` anywhere in mindcraft-mcgavin code; use `createSafeMovements`."
+
+4. Optional lint-style check (sibling to the 29-test classification harness): a script that greps `src/` for `new pf.Movements(bot)` outside `createSafeMovements` itself and fails if any are found.
+
+**Signals to watch:** no more straight-down digging during `!collectBlocks`, `!goToPlayer`, or any other pathfinder-driven command. Bot consistently uses staircases and walks around obstacles rather than mining through.
 
 ### 2. Bot swim capabilities
 
