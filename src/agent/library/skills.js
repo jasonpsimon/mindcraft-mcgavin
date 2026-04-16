@@ -1659,9 +1659,9 @@ function _configureTerrainSafeMovements(bot, movements) {
  * the first matching block found.
  *
  * Spawn protection nuance (per JP 2026-04-14):
- * - Inside the spawn protection zone: allowed to break PLANTS (grass,
- *   ferns, bushes, vines, flowers, moss, lichen, sugar_cane, lily_pad,
- *   kelp, dripleaf, etc.) — environmental clutter that doesn't meaningfully
+ * - Inside the spawn protection zone: allowed to break only blocks that
+ *   actually impede movement (sweet_berry_bush, vine, big_dripleaf,
+ *   mangrove_roots, leaves) — see MOVEMENT_BLOCKING_PLANTS. Passable
  *   alter the spawn area.
  * - Inside the spawn protection zone: will NOT break TREES (anything with
  *   _log, _wood, _leaves, _sapling, propagule, _roots, _hyphae, _stem
