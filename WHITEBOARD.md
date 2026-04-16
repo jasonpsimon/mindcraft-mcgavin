@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (#22 ChunkWait verified live — graduated to Recently completed)_
+_Last updated: 2026-04-16 (#16.2 block-family expansion shipped — awaiting live verification)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-16 (#22 ChunkWait verified live — graduated to Recently
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is **running** — #22 ChunkWait verified live 2026-04-16.
-- Branch: `develop` — HEAD `fea104f`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
+- Branch: `develop` — HEAD `ab997fb`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
@@ -61,7 +61,20 @@ _Empty._
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
 
-_Empty. #22 ChunkWait graduated 2026-04-16 after live verification (see Recently completed)._
+### 16.2. Block-family expansion for logs and planks
+
+**Status:** shipped `ab997fb` — awaiting live verification • **Priority:** high
+
+When the LLM requests a specific wood type (e.g., `oak_log`) that doesn’t exist in the current biome, `collectBlock` and `goToNearestBlock` now automatically expand the search to all log variants before reporting failure. Eliminates the infinite loop where the bot cycles searchForBlock → "Could not find" → goToSurface → retry on a wood type absent from the biome.
+
+**Implementation:** `BLOCK_FAMILIES` constant + `expandBlockFamily()` helper at module top of `skills.js`. Data-driven — one table entry per family (logs and planks shipped). `collectBlock` adds family members to the `blocktypes` array (same pattern as ore/deepslate expansion). `goToNearestBlock` falls back through variants with "No X found — using Y instead" log message.
+
+**Root cause (discovered during log review):** The original #16.2 described a generic empty-search loop. Actual root cause was the LLM picking biome-specific wood types — a Principle 1 problem (mechanical decision the LLM is bad at). Fix is code-level block-family equivalence, not an AutoRecovery pattern.
+
+**How to verify:**
+- [ ] Bot issues collectBlocks("oak_log", N) in a non-oak biome → log shows family expansion finding spruce/birch/etc. instead
+- [ ] Bot issues searchForBlock("oak_log", N) in a non-oak biome → log shows "No oak_log found — using spruce_log instead"
+- [ ] No regression: bot collecting logs in a biome that HAS the requested type still works normally
 
 ---
 
@@ -96,14 +109,6 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 **Success signal:** after a play session, `longterm_index/` grows beyond seed count. After a death, next restart bot "remembers" the danger (avoids lava based on stored event). After a successful spawn-escape, subsequent restarts from the same spawn coord pick the proven direction on the first try without re-searching. Cross-session continuity measurable.
 
 **Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
-
-### 16.2. Empty-search AutoRecovery pattern
-
-**Status:** ⏳ not started • **Priority:** high (observed in live play 2026-04-15) • **Source:** audit finding L6.2
-
-Item #16 was split: #16.1 NaN coord guard shipped 2026-04-15 (commit `a2a05d5`); #16.2 still pending.
-
-LLM observed looping `!searchForBlock("oak_log", 100)` → "Could not find any oak_log in 100 blocks" → `!goToSurface` → retry, forever. No AutoRecovery pattern catches this class of failure — exactly the Principle 1 failure mode the fork is supposed to prevent. Add `empty_search_result` pattern in `src/agent/auto_recovery.js` matching the "Could not find any X in N blocks" error, dispatching to a new action like `TRY_ALTERNATIVE_RESOURCE` / `EXPAND_SEARCH_RADIUS` / `RELOCATE` — anything deterministic that breaks the loop. Dispatch-action choice is a design decision, deferred for JP input.
 
 ### G. Procedural memory / ConfidenceEngine activation audit
 
