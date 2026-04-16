@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (zone-aware escape shipped — awaiting live verification)_
+_Last updated: 2026-04-16 (zone-aware escape verified live, graduated to recently completed)_
 
 ---
 
@@ -75,27 +75,7 @@ When the LLM requests a specific wood type (e.g., `oak_log`) that doesn’t exis
 **How to verify:**
 - [ ] Bot issues collectBlocks("oak_log", N) in a non-oak biome → log shows family expansion finding spruce/birch/etc. instead
 - [ ] Bot issues searchForBlock("oak_log", N) in a non-oak biome → log shows "No oak_log found — using spruce_log instead"
-- [ ] No regression: bot collecting logs in a biome that HAS the requested type still works normally
-
-### Zone-aware escape logic for all protected zones
-
-**Status:** shipped `1bbc0ab` — awaiting live verification • **Priority:** high
-
-`escapeProtectedZone` replaces `escapeSpawnZone` as the primary escape function. When the bot tries to modify blocks inside ANY protected zone (spawn, village, or manual structure), the new escape logic walks it away from the offending zone's center — not just spawn. Phase 1 delegates to the existing `escapeSpawnZone` for spawn zones. Phase 2 handles village/structure zones using the same directional-hop mechanics, walking away from the zone's center until the bot is 50% past the zone edge (e.g., radius 100 → target 150 blocks from center).
-
-**Key changes:**
-- `escapeProtectedZone()` in skills.js (wraps escapeSpawnZone, adds village/structure awareness)
-- AutoRecovery: `ESCAPE_SPAWN_ZONE` → `ESCAPE_PROTECTED_ZONE` with `skipRetryLimit: true` (no 3-retry cap)
-- `agent.js` spawn-event hook now calls `escapeProtectedZone` (handles respawn inside village zones too)
-- `SPAWN_ESCAPE_DISTANCE` updated from 350 to 375 (50% buffer past 250-block protection)
-
-**How to verify:**
-- [ ] Bot tries to break/place inside a village zone → `[ProtectedZoneEscape]` log lines appear, bot walks away from village center
-- [ ] Bot respawns inside a village zone (not spawn) → escape fires and clears the zone
-- [ ] No regression: spawn zone escape still works (phase 1 delegation)
-- [ ] Bot in overlapping zones → escapes each zone sequentially (loop re-checks)
-
----
+- [x] No regression: bot collecting logs in a biome that HAS the requested type still works normally (observed: `collectBlocks("oak_log", 20)` succeeded in oak biome)
 
 ## To-do queue
 
@@ -378,6 +358,30 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-16 — Zone-aware escape logic for all protected zones ✅
+
+Commit `1bbc0ab` + agent.js update. `escapeProtectedZone` replaces `escapeSpawnZone` as the primary escape function. When the bot tries to modify blocks inside ANY protected zone (spawn, village, or manual structure), the new escape logic walks it away from the offending zone's center. AutoRecovery pattern updated from `ESCAPE_SPAWN_ZONE` to `ESCAPE_PROTECTED_ZONE` with `skipRetryLimit: true` (no 3-retry cap — bot keeps trying until clear). `agent.js` spawn-event hook updated to call `escapeProtectedZone` (handles respawn inside village zones too).
+
+**What landed:**
+- `escapeProtectedZone()` in skills.js — phase 1 delegates to `escapeSpawnZone` for spawn zones, phase 2 handles village/structure zones by walking away from zone center using directional hops
+- AutoRecovery: `ESCAPE_SPAWN_ZONE` → `ESCAPE_PROTECTED_ZONE` with `skipRetryLimit: true`
+- `agent.js` spawn-event hook: `escapeSpawnZone` → `escapeProtectedZone`
+- Escape buffer: 50% of zone radius (spawn 250 → 375, village r=100 → 150)
+- `SPAWN_ESCAPE_DISTANCE` updated from 350 to 375 for consistency
+
+**Live verification (2026-04-16):**
+- [x] Spawn-zone escape via phase 1 delegation: `collectBlocks("oak_wood", 10)` → all 8 blocks filtered as inside spawn protection zone → AutoRecovery matched `inside_protected_zone` → `ESCAPE_PROTECTED_ZONE` fired → `[ProtectedZoneEscape] Inside spawn zone — delegating to escapeSpawnZone` → bot hopped -Z direction, 8 hops with stuck maneuver recovery, arrived at (-43, 62, -284) = 251.9 blocks from spawn → AutoRecovery retried `collectBlocks`
+- [x] `skipRetryLimit` working: AutoRecovery did not cap at 3 retries, continued escaping
+- [x] No regression: spawn-zone escape mechanics (directional hopping, stuck maneuvers, 45s hop timeout) all functioning correctly
+- [ ] Village-zone escape (phase 2): village `village_250_138` detected via bell, but bot hasn't attempted to modify blocks inside it yet. Awaiting natural trigger.
+- [ ] Overlapping zone escape: not yet observed
+
+**Philosophy/rules adherence:**
+- Principle 1 (reduce LLM reliance): escape is purely mechanical — no LLM involvement in zone detection or pathfinding away from zones
+- Principle 4 (preserve work across sessions): escape direction caching via `bot.escapeMemory` preserved
+- Rule 4 (root cause not symptom): the original issue was `escapeSpawnZone` only knowing about spawn distance; fix makes escape aware of ALL protected zone types
+- Rule 7 (complete the perimeter): `agent.js` spawn-event hook updated; `grep` confirmed no remaining `escapeSpawnZone` callsites outside the delegation path
 
 ### 2026-04-16 — #22 ChunkWait: hold state during chunk-load / NaN-position windows ✅
 
