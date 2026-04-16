@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (#22 ChunkWait in progress — hold state during chunk-load / NaN-position windows)_
+_Last updated: 2026-04-16 (#22 ChunkWait shipped — hold state during chunk-load / NaN-position windows; verification on next restart)_
 
 ---
 
@@ -53,39 +53,7 @@ _Last updated: 2026-04-16 (#22 ChunkWait in progress — hold state during chunk
 
 ## In-progress
 
-### #22. ChunkWait — hold state during chunk-load / NaN-position windows
-
-**Status:** 🟡 in progress (shipping) • **Priority:** **HIGH — observed degenerate loop cost ~300 LLM calls over 1hr on 2026-04-16**
-
-**Observation:** 2026-04-16 log audit found the bot stuck in a runaway loop from ~06:09 AM onward. Over 1,407 in-memory turns the bot issued 96 `!digDown` (all blocked by the #16.1 guard with `position is not loaded`), 76 `!goToSurface` (all timed out with `Timeout waiting for 25 chunks to load after 10000ms`), and 166 `!searchForBlock` against `NEARBY_BLOCKS: none`. Chunks were not loading from the server; `bot.entity.position` was NaN; every position-dependent skill failed; the agent had no recovery path so it burned LLM calls cycling through the same three commands forever.
-
-**Incidental regression found in the same audit:** my #16.1 guard (`"Could not start digDown — my position is not loaded yet. Wait a moment and try again."`) contains none of the keywords (`failed`/`error`/`invalid`/`exception`/...) that `agent.js:758` uses to classify outcomes — so every guard abort was being recorded as a SUCCESS in ProceduralMemory. Pollutes the training signal for `digDown`. Needs to die when ChunkWait takes over.
-
-**Design:** Introduce a `ChunkWait` module that owns the invariant "if the world is unusable, no commands run." When held, PLAYER chat gets a polite wait message, SELF / SYSTEM commands are silently skipped (no LLM burn), and `recordOutcome()` is skipped too (no polluted training signal). A periodic watchdog polls `bot.entity.position` finiteness and a light `waitForChunksToLoad(1500)` probe — clears the hold when both succeed. If the hold hasn't cleared after 180s, escalate: send a second player-facing message and trigger a soft-reconnect (replace the mineflayer client without killing the Agent). Runaway guard: if we bounce twice in 5 minutes, log loudly and back off so we don't hammer the server.
-
-**Philosophy alignment:**
-- **Principle 1 (reduce LLM reliance):** central motivation — zero LLM calls during doomed states.
-- **Principle 2 / 4 (memory is cognition / preserve work):** soft-reconnect preserves the full Agent object (memory subsystems, task state, AutoRecovery, ConfidenceEngine) across a bounce. Mineflayer client is the replaceable layer; Agent is persistent.
-- **Principle 8 (fail loudly, informatively):** every state transition logs with `[ChunkWait]` prefix. Escalation, bounce, runaway all loud.
-- **Rule 1 (flexibility):** messages and detectors live in named constants in `chunk_wait.js` — new detection cases land as data, not branches.
-- **Rule 4 (root cause):** the bug isn't "chunks fail to load" (that's server/network, not bot-logic). The bug is "bot burns turns during chunk-load gaps." ChunkWait addresses that directly.
-- **Rule 5 (no adverse effects):** soft-reconnect is the higher-risk surface. Mitigations: acquire bot mutex before swap (no in-flight skills mid-swap), `bot.removeAllListeners()` before null (no listener leaks), reset `_disconnectHandled` flag in new connect path, extract `_connectBot()` as pure refactor first so the behavior-change commit has a clean diff.
-- **Rule 7 (complete the perimeter):** new invariant — "no command execution while ChunkWait is held (except whitelist)." Audit covers `executeCommand` / `handleMessage` entry points, every chunk-timeout / NaN-position detection site, every existing per-skill `!isFinite(bot.entity.position` check. Documented in Commit E.
-
-**Whitelist (commands that bypass the hold, since they don't touch the world):** `!stop`, `!goal`, `!setMode`, `!stats`, `!help`.
-
-**Player-facing messages:**
-- **Hold entered (first contact during hold):** "I'm sorry, I can't yet. I need to wait until all the chunks have loaded first. It won't take but a minute or so…"
-- **Escalation / bounce (180s threshold reached):** "The chunks are still not loading, let me force a chunk reload. Give me one second, I will be right back…"
-
-**Ship plan (one concern per commit, per Rule 5 / Workflow Hygiene):**
-- A (this entry)
-- B1: extract `_connectBot()` helper from `start()` — pure refactor, behavior-preserving
-- B2: add `reconnect()` method on Agent + `_softReconnect` flag + `onDisconnect` gating so soft bounces skip `process.exit`
-- B3: new `src/agent/chunk_wait.js` module + watchdog + escalation wiring
-- C: `agent.js` gate around `executeCommand` + whitelist + skip `recordOutcome()` while held
-- D: `skills.js` #16.1 guards delegate to `ChunkWait.enter()` instead of returning their own user-facing string
-- E: move this entry to Recently completed + document the Rule 7 audit
+_Empty — #22 ChunkWait shipped (pending live verification on next bot restart)._
 
 ---
 
@@ -378,6 +346,52 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-16 — #22 ChunkWait: hold state during chunk-load / NaN-position windows ✅ (verification pending)
+
+Five-commit sequence (`d19476e` → `e5cf5ba` → `a5158ac` → `7f6741a` → `4107d70`) addressing the 2026-04-16 stuck-loop observation where the bot burned ~300 LLM calls over an hour cycling `!digDown` / `!goToSurface` / `!searchForBlock` against a NaN `bot.entity.position`. Also folds in the #16.1 guard-message-evading-keyword-list regression (guard returns were being recorded as ProceduralMemory successes).
+
+**What landed:**
+
+- **B1 `d19476e`** — pure refactor: extracted `_connectBot(save_data, init_message, count_id, load_mem)` from `Agent.start()`. Guards `AutoRecoveryEngine` + `initModes` + `_villageScanInterval` so they are idempotent across re-entry. Behavior-preserving on the first-connect path; prerequisite for B2.
+- **B2 `e5cf5ba`** — `reconnect()` method on Agent + `_softReconnect` flag + `onDisconnect` gating. When the flag is set, a disconnect triggers a 2s wait and a fresh `_connectBot()` call with stashed args (`null` init_message, `load_mem=true`) instead of `process.exit(1)`. Agent-level state (memory, task, AutoRecovery, ConfidenceEngine, prompter, history) is preserved across the bounce; only the mineflayer client + bot-tied bindings are recycled. Idempotent + tolerant of a missing bot handle.
+- **B3 `a5158ac`** — new `src/agent/chunk_wait.js` module. 500 ms watchdog on `bot.entity.position` finiteness with `enter()` / `exit()` state transitions. 180 s escalation cap sends the escalation chat message then calls `agent.reconnect()`. Runaway protection: > 2 reconnects in 5 min → `process.exit(1)` (principle #8 fail loudly, don't token-burn in a loop). Tunables (cadence, cap, whitelist, messages, runaway window) are all constructor options — Rule 1 flexibility. Agent hook in `start()` instantiates and starts the watchdog once, before `_connectBot()`, so the watchdog survives reconnects attached to the Agent rather than any bot.
+- **C `7f6741a`** — agent.js wiring. `handleMessage` now consults `chunk_wait.isHeld()` at ingress: player messages run through `shouldGate()` and, if non-whitelisted, get the polite throttled hold message via `notifyPlayerMessage(source)` and return without an LLM call; self-prompt / system / other-bot messages return silently (self_prompter resumes naturally once `exit()` fires). Both `recordOutcome` sites (hallucinated-command branch + post-execute branch) now skip when held — fixes the #16.1 false-positive class at source rather than by extending the keyword list.
+- **D `4107d70`** — skills.js + agent.js closure. `_connectBot` sets `this.bot.agent = this` after `initBot()` (refreshed every reconnect) so skill code has a backref to Agent subsystems. `digDown` + `digUp` NaN-position guards no longer emit `log(bot, 'Could not start digDown — my position is not loaded yet.')` user-facing; they call `bot.agent?.chunk_wait?.enter(reason)` instead. Silent `return false` + `console.warn` stay as Rule 5 defense-in-depth against a race where the skill guard fires before the watchdog tick.
+
+**Rule 7 perimeter audit (documented here so the invariant is checkable after future edits):**
+
+The new invariant is: _"no command execution and no procedural memory write while ChunkWait is held, except for whitelisted commands."_ Call-site enumeration:
+
+| Entry point | Location | Gated? | Mechanism |
+|---|---|---|---|
+| Player chat / command ingress | `agent.js handleMessage` top | Yes | `chunk_wait.isHeld()` + `shouldGate(message)` + `notifyPlayerMessage` |
+| Self-prompt / system / inter-bot ingress | `agent.js handleMessage` top | Yes | same branch, silent return |
+| Forced user command (`!newAction`-class) | `agent.js handleMessage` forced-command branch | Yes | runs after the ingress gate; only whitelisted commands reach it while held |
+| `executeCommand` inside LLM loop | `agent.js handleMessage` LLM loop | Yes | loop body never runs when ingress gate returns false |
+| `recordOutcome` — hallucinated command | `agent.js handleMessage` line ~862 | Yes | `!this.chunk_wait?.isHeld()` added |
+| `recordOutcome` — post-execute | `agent.js handleMessage` line ~905 | Yes | `!this.chunk_wait?.isHeld()` added |
+| AutoRecovery retry executeCommand | `agent.js handleMessage` recovery block | Indirect | only reached when an execute_res was produced, which itself required the ingress gate |
+| `digDown` NaN-position guard | `skills.js:3528` | Yes | delegates to `chunk_wait.enter(reason)`, `return false` |
+| `digUp` NaN-position guard | `skills.js:3753` | Yes | delegates to `chunk_wait.enter(reason)`, `return false` |
+| Watchdog self-entry on NaN | `chunk_wait.js _tick` | — | the source |
+| `onDisconnect` hard-exit path | `agent.js _connectBot` | Preserved | soft path only triggers when `_softReconnect=true`; default is still `process.exit(1)` so a real crash still surfaces in tmux |
+
+**Philosophy/rules adherence:**
+- Principle 1 (reduce LLM reliance): the entire purpose — zero LLM calls during a NaN window, purely programmatic gating.
+- Principle 2 (memory is cognition): skipping `recordOutcome` under hold protects procedural memory from false-positive success entries — more valuable than the pollution "average-out" would have been.
+- Principle 4 (preserve work across sessions): soft-reconnect preserves Agent-level state; the bounce is at the mineflayer-client layer.
+- Principle 8 (fail loudly): every state transition logs with `[ChunkWait]` / `[Reconnect]` prefix; runaway condition is a `process.exit(1)` so humans see it instead of an infinite token loop.
+- Rule 1 (flexibility): timeouts, whitelist, messages, runaway window, throttle all live as constructor options on `ChunkWait`.
+- Rule 5 (no adverse effects): B1 extracted first as a pure refactor so B2 + B3 had a clean diff surface; all `setInterval` / `setTimeout` sites are cleared before being re-armed; `start()` / `stop()` / `enter()` / `exit()` are idempotent; reconnect is a no-op if already in flight.
+- Rule 7 (complete the perimeter): audit above.
+
+**Works for anyone who clones the repo:** the fix lives entirely inside `src/agent/`. No external tmux wrapper, no systemd unit, no per-machine scripts. JP's "I want to fix the issue for all people, not just me" requirement satisfied.
+
+**Verification pending:** need to restart the bot on gaming and confirm:
+- `[ChunkWait] Watchdog started …` appears once in the log right after startup.
+- On an induced chunk-timeout: `[ChunkWait] ENTER held state — reason: …` → LLM traffic stops → `[ChunkWait] EXIT …` when position returns.
+- On a 180 s hold: escalation message in chat + `[Reconnect] Initiating soft reconnect` + fresh login on the same tmux window (no exit).
 
 ### 2026-04-15 — Mechanical audit bundle: #13, #14, #15, #16.1, #19, #20 ✅
 
