@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (safeTossBatch shipped — single dump run for all junk)_
+_Last updated: 2026-04-16 (createMovements factory shipped — Rule 7 perimeter closed)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-16 (safeTossBatch shipped — single dump run for all jun
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is **running** — #22 ChunkWait verified live 2026-04-16.
-- Branch: `develop` — HEAD `9300490`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
+- Branch: `develop` — HEAD `f2f53aa`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
@@ -358,6 +358,20 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-16 — createMovements factory: zone-aware pathfinder movements (Rule 7 perimeter closure) ✅
+
+Commit `f2f53aa`. The pathfinder was the last unguarded path that could modify blocks inside protected zones. Every `goToGoal`, `followPlayer`, `defendSelf`, `moveAway`, etc. created raw `pf.Movements` with full dig/scaffold enabled — the pathfinder would tunnel through terrain and place cobblestone scaffolds inside spawn/village/structure zones. JP observed this live: after respawn, the bot was punching holes in the ground and placing cobblestone during spawn escape.
+
+New `createMovements(bot)` factory replaces all 17 raw `new pf.Movements(bot)` callsites. When the bot is inside a protected zone, the factory disables `canDig` and clears `scaffoldingBlocks`. Outside zones, returns a normal Movements object with terrain-safe hazard avoidance applied via `_configureTerrainSafeMovements`.
+
+This completes the Rule 7 perimeter for protected zones. The invariant — "no block modification inside a protected zone" — is now enforced at every layer:
+- **Direct dig/place:** `breakBlockAt`, `placeBlock`, `collectBlock`, `safeToss`, `autoBreakStuckPlant` all check `_isInAnyProtectedZone`
+- **Pathfinder navigation:** `createMovements` factory disables dig/scaffold inside zones
+- **Escape recovery:** `escapeProtectedZone` walks out using non-destructive pathfinding
+- **Startup:** `bot.collectBlock.movements` configured via `_configureSafeMovements`
+
+Callsites replaced: `defendSelf` (2x), `collectBlock`, `pickupNearbyItems`, `breakBlockAt`, `placeBlock` (2x), `goToGoal` (2x), `followPlayer`, `moveAway` (2x), `moveAwayFromEntity`, `avoidEnemies`, `tillAndSow`, `activateNearestBlock`, `digDown`. `world.js:isClearPath` left unchanged (already `canDig=false`).
 
 ### 2026-04-16 — safeTossBatch: single dump run for all junk items ✅
 
