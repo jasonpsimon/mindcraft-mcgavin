@@ -1,4 +1,4 @@
-import { safeToss } from '../agent/library/skills.js';
+import { safeToss, safeTossBatch } from '../agent/library/skills.js';
 
 /**
  * Smart inventory management utilities.
@@ -528,27 +528,25 @@ export async function autoDiscard(bot, slotsNeeded = 5, goal = null) {
         return 'No junk items found to auto-discard.';
     }
 
-    const discarded = [];
+    // Build batch: resolve inventory item IDs for all suggestions
+    const batchItems = [];
     for (const item of suggestions) {
-        try {
-            let remaining = item.count;
-            while (remaining > 0) {
-                const found = bot.inventory.findInventoryItem(item.name);
-                if (!found) break;
-                const toDrop = Math.min(remaining, found.count);
-                await safeToss(bot, found.type, null, toDrop);
-                remaining -= toDrop;
-            }
-            discarded.push(`${item.count} ${item.name}`);
-            markDiscarded();
-        } catch (e) {
-            // Skip items that fail to discard
+        const found = bot.inventory.findInventoryItem(item.name);
+        if (found) {
+            batchItems.push({ type: found.type, count: item.count, name: item.name });
         }
     }
 
-    return discarded.length > 0
-        ? `Auto-discarded: ${discarded.join(', ')}. Freed ${discarded.length} inventory slot(s).`
-        : 'Failed to auto-discard items.';
+    if (batchItems.length === 0) {
+        return 'No junk items found in inventory to auto-discard.';
+    }
+
+    // Single dump run for all items
+    await safeTossBatch(bot, batchItems);
+    markDiscarded();
+
+    const labels = batchItems.map(i => `${i.count} ${i.name}`);
+    return `Auto-discarded: ${labels.join(', ')}. Freed ${batchItems.length} inventory slot(s).`;
 }
 
 /**
@@ -591,43 +589,35 @@ export async function autoDiscardAllJunk(bot, goal = null) {
 
     if (items.length === 0) return 'No junk items found to auto-discard.';
 
-    const discarded = [];
+    // Build batch: resolve inventory item IDs for all junk
+    const batchItems = [];
+    const labels = [];
     for (const item of items) {
-        try {
-            let remaining = item.count;
-            while (remaining > 0) {
-                const found = bot.inventory.findInventoryItem(item.name);
-                if (!found) break;
-                const toDrop = Math.min(remaining, found.count);
-                await safeToss(bot, found.type, null, toDrop);
-                remaining -= toDrop;
-            }
-            // snapshot.discardable already accounts for SINGLETON_KEEPS / BED_GROUP
-            // / STACK_CAPS / TIERED_ITEMS — so `item.count` is exactly what we need
-            // to drop, and the `remaining` cap guarantees we never drop below the
-            // limit regardless of how stacks are split across inventory slots.
-            //
-            // Three label categories, distinguishable at a glance in logs:
-            //   "N lower-tier X"  — X is an inferior tier, better exists in inventory
-            //   "N extra X"       — X hit a SINGLETON_KEEPS / BED_GROUP / STACK_CAPS cap
-            //   "N X"             — X is plain tier 0/1 junk (ores, bulk stone, etc.)
-            let label;
-            if (TIERED_ITEM_NAMES.has(item.name)) {
-                label = `${item.count} lower-tier ${item.name}`;
-            } else if (SINGLETON_KEEPS.has(item.name) || BED_GROUP.has(item.name) || STACK_CAPS.has(item.name)) {
-                label = `${item.count} extra ${item.name}`;
-            } else {
-                label = `${item.count} ${item.name}`;
-            }
-            discarded.push(label);
-            markDiscarded();
-        } catch (e) {
-            // Skip items that fail to discard; keep draining the rest
+        const found = bot.inventory.findInventoryItem(item.name);
+        if (!found) continue;
+        batchItems.push({ type: found.type, count: item.count, name: item.name });
+
+        // Three label categories, distinguishable at a glance in logs:
+        //   "N lower-tier X"  — X is an inferior tier, better exists in inventory
+        //   "N extra X"       — X hit a SINGLETON_KEEPS / BED_GROUP / STACK_CAPS cap
+        //   "N X"             — X is plain tier 0/1 junk (ores, bulk stone, etc.)
+        let label;
+        if (TIERED_ITEM_NAMES.has(item.name)) {
+            label = `${item.count} lower-tier ${item.name}`;
+        } else if (SINGLETON_KEEPS.has(item.name) || BED_GROUP.has(item.name) || STACK_CAPS.has(item.name)) {
+            label = `${item.count} extra ${item.name}`;
+        } else {
+            label = `${item.count} ${item.name}`;
         }
+        labels.push(label);
     }
 
-    return discarded.length > 0
-        ? `Auto-discarded all junk: ${discarded.join(', ')}. Drained ${discarded.length} slot(s).`
-        : 'Failed to auto-discard junk items.';
+    if (batchItems.length === 0) return 'No junk items found in inventory to auto-discard.';
+
+    // Single dump run for all items
+    await safeTossBatch(bot, batchItems);
+    markDiscarded();
+
+    return `Auto-discarded all junk: ${labels.join(', ')}. Drained ${batchItems.length} slot(s).`;
 }
 

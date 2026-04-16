@@ -1212,6 +1212,172 @@ export async function safeToss(bot, itemType, metadata, count) {
     });
 }
 
+/**
+ * Batch-toss multiple item types using a SINGLE dump run.
+ * Digs one tunnel (underground) or one hole (surface), drops ALL items into the
+ * same spot, then walks back. Avoids the N-tunnels-for-N-items problem.
+ *
+ * @param {object} bot - The mineflayer bot
+ * @param {Array<{type: number, count: number, name: string}>} items - Items to toss
+ *   Each entry: { type: itemId, count: howMany, name: displayName }
+ */
+export async function safeTossBatch(bot, items) {
+    if (!items || items.length === 0) return;
+
+    return await withBotLock('safeTossBatch', async () => {
+        const pos = bot.entity.position.floored();
+
+        // Protected zone — just toss everything directly, no digging
+        const tossZone = _isInAnyProtectedZone(bot, pos.x, pos.y, pos.z);
+        if (tossZone) {
+            const label = tossZone.type === 'spawn' ? 'spawn protection zone' : `protected structure '${tossZone.name}'`;
+            console.log(`[SafeTossBatch] Inside ${label} — tossing ${items.length} item type(s) without digging`);
+            for (const item of items) {
+                try { await bot.toss(item.type, null, item.count); } catch (_) {}
+            }
+            return;
+        }
+
+        const isUnderground = _isUnderground(bot, pos);
+        const prevMovements = bot.pathfinder.movements;
+
+        try {
+            if (isUnderground) {
+                // --- Underground: single dump run for all items ---
+                const TUNNEL_LEN = 8;
+                const directions = [
+                    { dx: 1, dz: 0, label: '+X' },
+                    { dx: -1, dz: 0, label: '-X' },
+                    { dx: 0, dz: 1, label: '+Z' },
+                    { dx: 0, dz: -1, label: '-Z' },
+                ];
+
+                for (const dir of directions) {
+                    // Verify all blocks in this direction are diggable at feet+head
+                    let canDig = true;
+                    for (let step = 1; step <= TUNNEL_LEN; step++) {
+                        const feetBlock = bot.blockAt(pos.offset(dir.dx * step, 0, dir.dz * step));
+                        const headBlock = bot.blockAt(pos.offset(dir.dx * step, 1, dir.dz * step));
+                        if (!feetBlock || !headBlock
+                            || !feetBlock.diggable || !headBlock.diggable
+                            || _isDangerous(feetBlock.name) || _isDangerous(headBlock.name)) {
+                            canDig = false;
+                            break;
+                        }
+                    }
+                    if (!canDig) continue;
+
+                    // Verify solid floor under the tunnel
+                    let hasFloor = true;
+                    for (let step = 1; step <= TUNNEL_LEN; step++) {
+                        const floor = bot.blockAt(pos.offset(dir.dx * step, -1, dir.dz * step));
+                        if (!floor || floor.name === 'air' || floor.name === 'cave_air'
+                            || _isDangerous(floor.name)) {
+                            hasFloor = false;
+                            break;
+                        }
+                    }
+                    if (!hasFloor) continue;
+
+                    // Need a diggable floor at the end for the dump hole
+                    const dumpFloor = bot.blockAt(pos.offset(dir.dx * TUNNEL_LEN, -1, dir.dz * TUNNEL_LEN));
+                    if (!dumpFloor || !dumpFloor.diggable || _isDangerous(dumpFloor.name)) continue;
+
+                    console.log(`[SafeTossBatch] Dump run ${dir.label} — walk-dig ${TUNNEL_LEN} blocks, dropping ${items.length} item type(s)`);
+                    const startPos = bot.entity.position.clone();
+
+                    try {
+                        // Walk-and-dig one step at a time
+                        for (let step = 1; step <= TUNNEL_LEN; step++) {
+                            const stepPos = pos.offset(dir.dx * step, 0, dir.dz * step);
+                            const headBlock = bot.blockAt(stepPos.offset(0, 1, 0));
+                            const feetBlock = bot.blockAt(stepPos);
+
+                            if (headBlock && headBlock.name !== 'air' && headBlock.name !== 'cave_air') {
+                                await _equipBestToolFor(bot, headBlock);
+                                await bot.dig(headBlock);
+                            }
+                            if (feetBlock && feetBlock.name !== 'air' && feetBlock.name !== 'cave_air') {
+                                await _equipBestToolFor(bot, feetBlock);
+                                await bot.dig(feetBlock);
+                            }
+
+                            await goToGoal(bot, new pf.goals.GoalNear(stepPos.x, stepPos.y, stepPos.z, 0));
+                        }
+
+                        // Dig 1-block hole at the dump spot
+                        const endPos = pos.offset(dir.dx * TUNNEL_LEN, 0, dir.dz * TUNNEL_LEN);
+                        const holePos = endPos.offset(0, -1, 0);
+                        const holeBlock = bot.blockAt(holePos);
+                        if (holeBlock && holeBlock.name !== 'air' && holeBlock.name !== 'cave_air') {
+                            await _equipBestToolFor(bot, holeBlock);
+                            await bot.dig(holeBlock);
+                        }
+
+                        // Drop ALL items into the same hole
+                        await bot.lookAt(holePos.offset(0.5, 0.5, 0.5));
+                        for (const item of items) {
+                            try {
+                                await bot.toss(item.type, null, item.count);
+                            } catch (e) {
+                                console.warn(`[SafeTossBatch] Failed to toss ${item.name}: ${e.message}`);
+                            }
+                        }
+                        console.log(`[SafeTossBatch] Dropped ${items.length} item type(s) in hole at ${holePos}, walking back`);
+
+                        // Walk back
+                        await new Promise(r => setTimeout(r, 300));
+                        await goToGoal(bot, new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1));
+                        console.log('[SafeTossBatch] Dump run complete — back at start');
+                        return;
+                    } catch (e) {
+                        console.warn(`[SafeTossBatch] Dump run ${dir.label} failed:`, e.message);
+                        try {
+                            await goToGoal(bot, new pf.goals.GoalNear(startPos.x, startPos.y, startPos.z, 1));
+                        } catch (_) { /* best effort return */ }
+                    }
+                }
+            } else {
+                // Surface: dig 1 block down, toss all items in, seal
+                const holePos = pos.offset(0, -1, 0);
+                const floorBlock = bot.blockAt(holePos);
+                if (floorBlock && floorBlock.diggable && !_isDangerous(floorBlock.name)) {
+                    const originalName = floorBlock.name;
+                    console.log(`[SafeTossBatch] Surface hole — ${originalName} at ${holePos}, dropping ${items.length} item type(s)`);
+                    try {
+                        await _equipBestToolFor(bot, floorBlock);
+                        await bot.dig(floorBlock);
+                        await bot.lookAt(holePos.offset(0.5, 0.5, 0.5));
+                        for (const item of items) {
+                            try {
+                                await bot.toss(item.type, null, item.count);
+                            } catch (e) {
+                                console.warn(`[SafeTossBatch] Failed to toss ${item.name}: ${e.message}`);
+                            }
+                        }
+                        await new Promise(r => setTimeout(r, 400));
+                        await _sealHole(bot, holePos, originalName);
+                        console.log('[SafeTossBatch] Surface dump complete');
+                        return;
+                    } catch (e) {
+                        console.warn('[SafeTossBatch] Surface hole failed:', e.message);
+                    }
+                }
+            }
+
+            // Last resort — toss everything normally
+            console.log('[SafeTossBatch] No disposal method worked, tossing normally');
+            for (const item of items) {
+                try { await bot.toss(item.type, null, item.count); } catch (_) {}
+            }
+        } finally {
+            if (prevMovements) {
+                try { bot.pathfinder.setMovements(prevMovements); } catch (_) {}
+            }
+        }
+    });
+}
+
 
 /**
  * Check if a position is within the spawn protection zone.
