@@ -3854,6 +3854,18 @@ export async function digUp(bot, distance = 10) {
 
         // Place floor block if there's air/cave_air under our destination
         if (floor && (floor.name === 'air' || floor.name === 'cave_air')) {
+            // Rule 7: digUp places blocks directly via bot.placeBlock, bypassing the
+            // skill-level placeBlock() wrapper that carries the ProtectedZone gate.
+            // Check the floor cell against every protected zone (spawn, structures,
+            // villages) before placing. Message wording matches the AutoRecovery
+            // `inside_protected_zone` regex so the bot auto-escapes and retries.
+            const floorZone = _isInAnyProtectedZone(bot, nextX, nextY - 1, nextZ);
+            if (floorZone) {
+                const label = floorZone.type === 'spawn' ? 'spawn' : `protected structure '${floorZone.name}'`;
+                console.log(`[ProtectedZone] Blocked digUp place at (${nextX}, ${nextY - 1}, ${nextZ}) — inside ${floorZone.radius}-block ${label}`);
+                log(bot, `Dug up ${ascended} blocks, but cannot place floor near ${label} (within ${floorZone.radius} blocks). Move further away first.`);
+                return ascended > 0;
+            }
             // Find a placeable block in inventory (cobblestone, stone, dirt, netherrack, etc.)
             const placeableBlocks = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'netherrack', 'granite', 'diorite', 'andesite', 'tuff', 'blackstone'];
             let placed = false;
