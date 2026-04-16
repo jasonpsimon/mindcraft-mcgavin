@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (zone-aware escape verified live, graduated to recently completed)_
+_Last updated: 2026-04-16 (autoBreakStuckPlant allowlist refinement shipped)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-16 (zone-aware escape verified live, graduated to recentl
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is **running** — #22 ChunkWait verified live 2026-04-16.
-- Branch: `develop` — HEAD `1bbc0ab`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
+- Branch: `develop` — HEAD `37b6d4c`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
@@ -358,6 +358,16 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-16 — autoBreakStuckPlant: movement-blocking allowlist for protected zones ✅
+
+Commit `37b6d4c`. Tightened which blocks `autoBreakStuckPlant` is allowed to break inside protected zones. Previously any plant-like block (grass, flowers, ferns, lily pads, etc.) could be broken — most of these are passable and the bot walks right through them.
+
+New `MOVEMENT_BLOCKING_PLANTS` allowlist limits protected-zone breaks to blocks that actually impede movement: `sweet_berry_bush`, `vine`, `sugar_cane`, `big_dripleaf`, `mangrove_roots`, `muddy_mangrove_roots`, and all leaf types. Passable blocks (short_grass, flowers, ferns, dead_bush, glow_lichen, kelp, seagrass, sea_pickle, lily_pad, pitcher_plant, torchflower, spore_blossom, nether_sprouts, small_dripleaf) are now left untouched.
+
+Also moved `mangrove_roots` / `muddy_mangrove_roots` out of `TREE_PART_PATTERN` — they block movement and should be breakable, not protected as tree structure. Entry gate updated to include `MOVEMENT_BLOCKING_PLANTS` so these blocks still get considered by the function.
+
+23/23 logic tests passed covering all block types.
 
 ### 2026-04-16 — Zone-aware escape logic for all protected zones ✅
 
