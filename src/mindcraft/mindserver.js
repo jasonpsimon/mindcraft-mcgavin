@@ -17,7 +17,17 @@ let server;
 const agent_connections = {};
 const agent_listeners = [];
 
-const settings_spec = JSON.parse(readFileSync(path.join(__dirname, 'public/settings_spec.json'), 'utf8'));
+// settings_spec drives the webapp settings UI. If the file is missing or
+// malformed, degrade to {} so the mindserver still boots — the spec is only
+// consulted in validation loops that treat an absent key as "no constraint."
+// Without this guard, a deploy-time file error crashed the whole server at
+// import time.
+let settings_spec = {};
+try {
+    settings_spec = JSON.parse(readFileSync(path.join(__dirname, 'public/settings_spec.json'), 'utf8'));
+} catch (e) {
+    console.warn('[MindServer] public/settings_spec.json load failed, using empty spec:', e.message);
+}
 
 class AgentConnection {
     constructor(settings, viewer_port) {

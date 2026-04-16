@@ -21,7 +21,17 @@ export class Prompter {
     constructor(agent, profile) {
         this.agent = agent;
         this.profile = profile;
-        let default_profile = JSON.parse(readFileSync('./profiles/defaults/_default.json', 'utf8'));
+
+        // Defaults + base profile fill missing fields in the individual profile. If
+        // either file is missing or malformed, degrade to {} so the bot can still
+        // start from a fully-specified individual profile (ThatCoolGuyDude.json). A
+        // typo or missing file here used to crash the process at startup.
+        let default_profile = {};
+        try {
+            default_profile = JSON.parse(readFileSync('./profiles/defaults/_default.json', 'utf8'));
+        } catch (e) {
+            console.warn('[Prompter] ./profiles/defaults/_default.json load failed, using empty defaults:', e.message);
+        }
         let base_fp = '';
         if (settings.base_profile.includes('survival')) {
             base_fp = './profiles/defaults/survival.json';
@@ -32,7 +42,12 @@ export class Prompter {
         } else if (settings.base_profile.includes('god_mode')) {
             base_fp = './profiles/defaults/god_mode.json';
         }
-        let base_profile = JSON.parse(readFileSync(base_fp, 'utf8'));
+        let base_profile = {};
+        try {
+            base_profile = JSON.parse(readFileSync(base_fp, 'utf8'));
+        } catch (e) {
+            console.warn(`[Prompter] ${base_fp || '(no base profile matched settings.base_profile)'} load failed, using empty base:`, e.message);
+        }
 
         // first use defaults to fill in missing values in the base profile
         for (let key in default_profile) {

@@ -13,8 +13,20 @@ export class Coder {
         this.code_template = '';
         this.code_lint_template = '';
 
-        this.code_template = readFileSync('./bots/execTemplate.js', 'utf8');
-        this.code_lint_template = readFileSync('./bots/lintTemplate.js', 'utf8');
+        // Templates are load-bearing for code generation. Missing files should not
+        // crash the process — log and degrade (empty template means coder emits
+        // unwrapped LLM code; lint still runs if ESLint loads). Operator sees the
+        // gap in the log and can restore the file without a restart-loop.
+        try {
+            this.code_template = readFileSync('./bots/execTemplate.js', 'utf8');
+        } catch (e) {
+            console.warn('[Coder] ./bots/execTemplate.js load failed, using empty template:', e.message);
+        }
+        try {
+            this.code_lint_template = readFileSync('./bots/lintTemplate.js', 'utf8');
+        } catch (e) {
+            console.warn('[Coder] ./bots/lintTemplate.js load failed, using empty template:', e.message);
+        }
         mkdirSync('.' + this.fp, { recursive: true });
     }
 
