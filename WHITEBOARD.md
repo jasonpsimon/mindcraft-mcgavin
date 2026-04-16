@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (audit intake — `/mindcraft-audit` first-run findings)_
+_Last updated: 2026-04-15 (mechanical bundle shipped — #13, #14, #15, #16.1, #19, #20)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-15 (audit intake — `/mindcraft-audit` first-run finding
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `b27f39c`. All fixes merged + pushed to GitHub.
+- Branch: `develop` — HEAD `fb35d52`. Six-commit mechanical bundle just landed (Principle 8 sweep + Rule 7 digUp leak + NaN guards + startup hardening). All merged; push to GitHub pending verification.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
@@ -89,43 +89,13 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 
 **Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
 
-### 13. digUp ProtectedZone guard (perimeter leak — bug)
+### 16.2. Empty-search AutoRecovery pattern
 
-**Status:** ⏳ not started • **Priority:** high (same perimeter-leak shape as the `collectBlock` / grass_block regression that motivated Rule 7) • **Source:** audit finding L2.1
+**Status:** ⏳ not started • **Priority:** high (observed in live play 2026-04-15) • **Source:** audit finding L6.2
 
-`src/agent/library/skills.js:3870` — `digUp` places staircase blocks with no ProtectedZone check. `!digUp(5)` from spawn places blocks inside the protected zone, same class of failure as the pre-Rule-7 `collectBlock` leak.
+Item #16 was split: #16.1 NaN coord guard shipped 2026-04-15 (commit `a2a05d5`); #16.2 still pending.
 
-**Fix:** add `if (_isInAnyProtectedZone(bot, nextX, nextY - 1, nextZ)) return false;` before the placement, with an actionable error message tuned to match the AutoRecovery `inside_protected_zone` regex so the bot auto-escapes and retries. One-line fix; bundle with #14 and other small perimeter patches.
-
-### 14. File I/O startup hardening (3 bugs, bundled)
-
-**Status:** ⏳ not started • **Priority:** high (any of these crashes the bot on startup if the file is missing/malformed) • **Source:** audit findings L2.6, L2.7, L2.8
-
-Three `readFileSync` sites lack try/catch + graceful fallback:
-
-- `src/agent/coder.js:16-17` — reads `./bots/execTemplate.js` + `./bots/lintTemplate.js` in constructor.
-- `src/models/prompter.js:24, 35` — reads `_default.json` profile + base profile.
-- `src/mindcraft/mindserver.js:20` — reads `settings_spec.json` at server startup.
-
-**Fix:** wrap each in try/catch, log `[<Subsystem>] <file> load failed: <error>, using fallback`, return empty/default. Small sweep, single commit. Aligns with Principle 8 (fail loudly but informatively, don't crash with raw ENOENT).
-
-### 16. NaN coord guard in `digDown` + empty-search AutoRecovery pattern
-
-**Status:** ⏳ not started • **Priority:** high (both observable in live play 2026-04-15) • **Source:** audit finding L4.3 + L6.2
-
-Two distinct issues bundled because they share a runtime trigger (LLM trying to search while chunks aren't fully loaded):
-
-1. **NaN coord guard.** `src/agent/library/skills.js digDown` started with position `(NaN, 56, NaN)` in live logs — `bot.entity.position` was un-set at the time the skill read it, likely a chunk-not-loaded state. `digDown` proceeded, then aborted later on the chunk check. Add a top-of-function guard: `if (!isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) { console.warn('[Skills] digDown: position NaN, aborting'); return false; }`. Audit other skills for the same pattern.
-
-2. **Empty-search AutoRecovery pattern.** LLM observed looping `!searchForBlock("oak_log", 100)` → "Could not find any oak_log in 100 blocks" → `!goToSurface` → retry, forever. No AutoRecovery pattern catches this class of failure — exactly the Principle 1 failure mode the fork is supposed to prevent. Add `empty_search_result` pattern in `src/agent/auto_recovery.js` matching the "Could not find any X in N blocks" error, dispatching to a new action like `TRY_ALTERNATIVE_RESOURCE` / `EXPAND_SEARCH_RADIUS` / `RELOCATE` — anything deterministic that breaks the loop.
-
-### 19. connection_handler.js silent-catch logging (2 bugs)
-
-**Status:** ⏳ not started • **Priority:** medium-high (connection issues become undebuggable) • **Source:** audit finding L3.3
-
-`src/agent/connection_handler.js:46, 68` — two `catch (_) {}` wildcard swallows. Line 46 discards server-output send failures; line 68 swallows disconnect-reason parse failures. Operators have no signal when connection misbehaves.
-
-**Fix:** `catch (e) { console.warn('[ServerProxy] Send failed:', e.message); }` and `catch (e) { console.warn('[ParseKickReason] JSON parse failed, using raw fallback:', e.message); }`. Two-line fix, ship with #13/#14 bundle.
+LLM observed looping `!searchForBlock("oak_log", 100)` → "Could not find any oak_log in 100 blocks" → `!goToSurface` → retry, forever. No AutoRecovery pattern catches this class of failure — exactly the Principle 1 failure mode the fork is supposed to prevent. Add `empty_search_result` pattern in `src/agent/auto_recovery.js` matching the "Could not find any X in N blocks" error, dispatching to a new action like `TRY_ALTERNATIVE_RESOURCE` / `EXPAND_SEARCH_RADIUS` / `RELOCATE` — anything deterministic that breaks the loop. Dispatch-action choice is a design decision, deferred for JP input.
 
 ### G. Procedural memory / ConfidenceEngine activation audit
 
@@ -218,22 +188,6 @@ JP observed the bot placing vertical/horizontal columns of resource blocks (cobb
 2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
 3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
 4. Cap list size (200, FIFO). Clear on bot death/respawn.
-
-### 15. full_state.js error-logging sweep (9 violations)
-
-**Status:** ⏳ not started • **Priority:** medium (biggest single Principle-8 compliance gain per minute) • **Source:** audit finding L3.1
-
-`src/agent/library/full_state.js:36, 43, 53, 65, 73, 94, 100, 106` — every state-building operation wraps in a `catch (e) { /* use default */ }` pattern. Returns a sensible default but logs nothing. Operator cannot distinguish healthy reads from silently-degraded reads (position NaN, biome lookup fail, inventory read fail, etc.).
-
-**Fix:** one-line per catch: `console.warn('[FullState] <operation> read failed, using default:', e.message);`. 9 catches, mechanical sweep, single commit. One of the easiest high-value changes in the audit.
-
-### 20. ProceduralMemory instrumentation
-
-**Status:** ⏳ not started • **Priority:** medium (precursor to tuning G) • **Source:** audit finding L4.2
-
-`src/memory/procedural_memory.js` emits zero structured log lines during play despite ConfidenceEngine actively reading from it. Either (a) ProceduralMemory is being written and not logging, or (b) it's read-only at runtime. Cannot tell without instrumentation.
-
-**Fix:** add `[ProceduralMemory] Recorded outcome <command>: <success|fail> (confidence now <X>, N total records)` on each record/update. Without this, #G tuning decisions are flying blind.
 
 ### 18. Model-provider server-side logging sweep (17 files)
 
@@ -378,7 +332,7 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 
 ## Notes
 
-- **Audited 2026-04-15** — first run of the `/mindcraft-audit` skill (v1.1). Full reports in `mindcraft-mcgavin-audit/2026-04-15/` (workspace-local, not committed): `L1-mechanical-dead-code.md`, `L2-perimeter.md`, `L3-error-handling.md`, `L4-subsystem-activation.md`, `L5-partial-migrations.md`, `L6-rules-vs-code.md`, `AUDIT_SUMMARY.md`. Verdict: codebase in good shape; 9 new entries (#13–#21 + L1.4) added to the to-do queue above. Biggest single Principle-1 lever: G threshold drop (0.98 → 0.95). Biggest single Principle-8 sweep: #15 `full_state.js` logging.
+- **Audited 2026-04-15** — first run of the `/mindcraft-audit` skill (v1.1). Full reports in `mindcraft-mcgavin-audit/2026-04-15/` (workspace-local, not committed): `L1-mechanical-dead-code.md`, `L2-perimeter.md`, `L3-error-handling.md`, `L4-subsystem-activation.md`, `L5-partial-migrations.md`, `L6-rules-vs-code.md`, `AUDIT_SUMMARY.md`. Verdict: codebase in good shape; 9 new entries (#13–#21 + L1.4) added to the to-do queue above. Biggest single Principle-1 lever: G threshold drop (0.98 → 0.95). Mechanical bundle shipped 2026-04-15: #13, #14, #15, #16.1, #19, #20 — Principle-8 sweeps complete across `full_state.js`, `connection_handler.js`, and `procedural_memory.js`; Rule 7 digUp leak closed; startup hardening in place.
 - **Item 0 fully resolved 2026-04-15** — bot escapes spawn zone in 1 hop with 0 deaths after combined fix landed (escape rewrite + survival hardening + Bug A/C fixes).
 - **Item 1 fully resolved 2026-04-14** — ViaBackwards 5.0.4 on server. Bot stays connected cleanly.
 - **Item 4 fully resolved 2026-04-15** — `_equipBestToolFor` wired into all 7 `bot.dig` callsites; iron_ore drops confirmed.
@@ -392,6 +346,25 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-15 — Mechanical audit bundle: #13, #14, #15, #16.1, #19, #20 ✅
+
+Six-commit sweep following the `/mindcraft-audit` intake. Each shipped as a one-concern commit per Rule 5, node --check clean, bot stayed running through the work — changes take effect on next restart.
+
+- **#15 full_state.js error-logging sweep** (commit `af2cec3`) — 9 `catch (e) { /* use default */ }` sites in `src/agent/library/full_state.js` replaced with `console.warn('[FullState] <op> read failed, using default:', e.message)`. Operators can now distinguish healthy reads from silently-degraded reads (position NaN, biome lookup fail, inventory read fail, etc.). Pure Principle 8 sweep, additive only.
+- **#19 connection_handler.js silent-catch logging** (commit `6c613ec`) — two wildcard `catch (_) {}` sites in `src/agent/connection_handler.js` replaced with named catches that log `[ServerProxy] Send failed: …` and `[ParseKickReason] JSON parse failed, using raw fallback: …`. Connection issues no longer undebuggable.
+- **#14 readFileSync startup hardening** (commit `eb73110`) — 5 readFileSync sites across `coder.js` (exec/lint templates), `prompter.js` (_default.json + base profile), and `mindserver.js` (settings_spec.json) wrapped in try/catch with graceful fallbacks. A missing or malformed file no longer crashes the bot at startup — operator sees `[<Subsystem>] <file> load failed, using <fallback>` and can repair without a restart-loop. Individual profiles that fully specify their fields still boot cleanly.
+- **#13 digUp ProtectedZone guard + Rule 7 audit** (commit `605e485`) — `digUp` placed staircase floor blocks via `bot.placeBlock` directly, bypassing the zone-gated skill-level `placeBlock()`. Added the missing `_isInAnyProtectedZone(nextX, nextY-1, nextZ)` check with wording that matches the AutoRecovery `inside_protected_zone` regex so the bot auto-escapes. Commit message records the full Rule 7 grep audit: every `bot.placeBlock` / `bot.dig(` callsite in `src/` enumerated and shown guarded — perimeter now closed across the whole codebase.
+- **#16.1 digDown/digUp NaN position guard** (commit `a2a05d5`) — live play observed `digDown` starting at `(NaN, 56, NaN)` because `bot.entity.position` wasn't populated yet. Top-of-function guards in both staircase skills bail with a directive log (`my position is not loaded yet. Wait a moment and try again.`) instead of propagating NaN into blockAt lookups. Remaining position-reading callsites documented in commit for a later bundle.
+- **#20 ProceduralMemory instrumentation** (commit `fb35d52`) — one log line at end of `recordAction`: `[ProceduralMemory] Recorded outcome <cmd>: <success|fail> (confidence now X.XXX, NS/MF, K total records)`. Unblocks #G threshold tuning — now we can see the confidence distribution evolve in real play instead of tuning blind. Wrapped in try/catch so a logging bug can never break the record path.
+
+**Philosophy/rules adherence across the bundle:**
+- Principle 8 applied three times (#15, #19, #20) — biggest single visibility gain per minute of work.
+- Principle 4 (root cause, not band-aid): #13 is the real perimeter fix, not a downstream filter.
+- Rule 7 explicitly followed and documented for #13 — the audit record lives in the commit message itself.
+- Rule 5: every commit has a clean diff (no whitespace damage, no unrelated changes), every file passes `node --check`, zero call-site changes for #15/#19/#20, targeted additions for #13/#14/#16.1.
+
+**Post-deploy verification**: bot is still running the pre-bundle code; changes take effect on next restart. Expected log lines after restart to confirm: `[FullState] …` (only on actual failures), `[ServerProxy] Send failed …` (on socket hiccups), `[ProceduralMemory] Recorded outcome …` (once per LLM turn with trained commands).
 
 ### 2026-04-15 — Safe Movements Stage 1: stop collectBlock from digging straight shafts ✅
 
