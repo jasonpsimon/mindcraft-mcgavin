@@ -248,14 +248,14 @@ export class Agent {
                     console.warn('[VillageDetect] startVillageScanner threw:', scanErr.message);
                 }
 
-                // Vacate the spawn protection zone before anything else happens.
+                // Vacate any protected zone before anything else happens.
                 // If the bot spawns inside the zone, no destructive action can succeed;
                 // the LLM can't reliably reason its way out of a 250-block exclusion zone,
-                // so this is a pure mechanical pre-game move.
+                // so this is a pure mechanical pre-game move. Handles spawn, village, and structure zones.
                 try {
-                    await skills.escapeSpawnZone(this.bot);
+                    await skills.escapeProtectedZone(this.bot);
                 } catch (escapeErr) {
-                    console.warn('[SpawnEscape] Error during spawn escape:', escapeErr.message);
+                    console.warn('[ProtectedZoneEscape] Error during spawn escape:', escapeErr.message);
                 }
 
                 this._setupEventHandlers(save_data, init_message);

@@ -1218,7 +1218,7 @@ export async function safeToss(bot, itemType, metadata, count) {
  * Returns true if the position is within SPAWN_RADIUS blocks of world spawn (XZ only).
  */
 const SPAWN_PROTECTION_RADIUS = 250;
-const SPAWN_ESCAPE_DISTANCE = 350;  // walk to this distance from spawn on escape (100-block buffer past protection)
+const SPAWN_ESCAPE_DISTANCE = 375;  // walk to this distance from spawn on escape (50% buffer past 250-block protection)
 function _isInSpawnZone(bot, x, z) {
     const spawn = bot.spawnPoint;
     if (!spawn) return false; // no spawn data yet — allow action
@@ -2065,6 +2065,146 @@ export async function escapeSpawnZone(bot) {
             console.warn(`[SpawnEscape] All 8 directions exhausted. Final distance: ${endP ? endP.dist.toFixed(1) : '?'} blocks from spawn.`);
             log(bot, `I tried all 8 directions but couldn't escape the spawn zone. Continuing from inside.`);
             return false;
+        } finally {
+            if (prevMovements) {
+                try { bot.pathfinder.setMovements(prevMovements); } catch (_) { /* ignore */ }
+            }
+        }
+    });
+}
+
+/**
+ * Escape ANY protected zone — spawn, village, or manual structure.
+ *
+ * Phase 1: if inside spawn zone, delegate to escapeSpawnZone (specialized,
+ * uses cached exits and directional-commit with spawn-distance checks).
+ *
+ * Phase 2: after spawn escape (or if not in spawn), check
+ * _isInAnyProtectedZone at current position. If still inside a
+ * village/structure zone, walk away from THAT zone's center using the
+ * same directional-hop mechanics. Repeat until clear of all zones or
+ * MAX_ZONE_ESCAPES attempts exhausted (prevents infinite loops if zones
+ * overlap pathologically).
+ *
+ * Returns true if bot is outside all protected zones, false otherwise.
+ */
+const MAX_ZONE_ESCAPES = 5;  // cap on sequential zone escapes (village -> village -> ...)
+// Buffer: bot walks 50% past the zone edge (e.g., radius 100 -> target 150)
+
+export async function escapeProtectedZone(bot) {
+    return await withBotLock('escapeProtectedZone', async () => {
+        _installSpawnEscapeInstrumentation(bot);
+
+        // Helper: current position with NaN guard
+        const readPos = () => {
+            const p = bot.entity?.position;
+            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return null;
+            return { x: p.x, y: p.y, z: p.z };
+        };
+
+        // Helper: check if bot is outside ALL protected zones
+        const isClear = () => {
+            const p = readPos();
+            if (!p) return false;
+            return _isInAnyProtectedZone(bot, p.x, p.y, p.z) === null;
+        };
+
+        // Already clear — nothing to do
+        if (isClear()) return true;
+
+        // Phase 1: spawn zone escape (if applicable)
+        const pos0 = readPos();
+        if (pos0 && _isInSpawnZone(bot, pos0.x, pos0.z)) {
+            console.log('[ProtectedZoneEscape] Inside spawn zone — delegating to escapeSpawnZone');
+            await escapeSpawnZone(bot);
+            if (isClear()) return true;
+            console.log('[ProtectedZoneEscape] Still inside a protected zone after spawn escape — entering phase 2');
+        }
+
+        // Phase 2: escape non-spawn zones (village, manual structure)
+        const prevMovements = bot.pathfinder.movements;
+        try {
+            for (let attempt = 0; attempt < MAX_ZONE_ESCAPES; attempt++) {
+                if (isClear()) return true;
+
+                const pos = readPos();
+                if (!pos) {
+                    console.warn('[ProtectedZoneEscape] No bot position — aborting');
+                    return false;
+                }
+
+                const zone = _isInAnyProtectedZone(bot, pos.x, pos.y, pos.z);
+                if (!zone) return true;  // clear
+
+                // For spawn zone that we somehow didn't escape in phase 1, use
+                // spawn center. For others, use the zone's center coordinates.
+                let centerX, centerZ, targetDist;
+                if (zone.type === 'spawn') {
+                    const spawn = bot.spawnPoint;
+                    centerX = spawn.x;
+                    centerZ = spawn.z;
+                    targetDist = SPAWN_ESCAPE_DISTANCE;
+                } else {
+                    centerX = zone.x !== undefined ? zone.x : pos.x;
+                    centerZ = zone.z !== undefined ? zone.z : pos.z;
+                    targetDist = Math.ceil((zone.radius || 100) * 1.5);
+                }
+
+                const driftDx = pos.x - centerX;
+                const driftDz = pos.z - centerZ;
+                const currentDist = Math.sqrt(driftDx * driftDx + driftDz * driftDz);
+
+                console.log(`[ProtectedZoneEscape] Inside ${zone.type} zone${zone.name ? ' "' + zone.name + '"' : ''} (center ${Math.floor(centerX)},${Math.floor(centerZ)} radius ${zone.radius || '?'}). Bot is ${currentDist.toFixed(0)} blocks from center, need ${targetDist}. Attempt ${attempt + 1}/${MAX_ZONE_ESCAPES}`);
+
+                // Rank directions away from this zone's center
+                const directions = _rank8DirectionsByDrift(driftDx, driftDz);
+
+                // isOutside check for _commitToDirection: distance from THIS zone's center
+                const isOutsideZone = () => {
+                    const p = readPos();
+                    if (!p) return false;
+                    const dx = p.x - centerX;
+                    const dz = p.z - centerZ;
+                    return Math.sqrt(dx * dx + dz * dz) > targetDist;
+                };
+
+                // readPos variant that includes dist from zone center (for _commitToDirection logging)
+                const readPosFromZone = () => {
+                    const p = readPos();
+                    if (!p) return null;
+                    const dx = p.x - centerX;
+                    const dz = p.z - centerZ;
+                    return { ...p, dist: Math.sqrt(dx * dx + dz * dz) };
+                };
+
+                // Build a fake "spawn" object for _commitToDirection's stuck maneuver
+                // (it uses spawn coords to ensure sidesteps don't decrease distance)
+                const fakeSpawn = { x: centerX, z: centerZ };
+
+                let escaped = false;
+                for (const dir of directions) {
+                    if (isOutsideZone()) { escaped = true; break; }
+                    const result = await _commitToDirection(bot, fakeSpawn, dir, readPosFromZone, isOutsideZone);
+                    if (result === 'escaped') { escaped = true; break; }
+                }
+
+                if (escaped) {
+                    const p = readPos();
+                    const zoneName = zone.name || zone.type;
+                    console.log(`[ProtectedZoneEscape] Escaped ${zoneName} — now at (${Math.floor(p.x)}, ${Math.floor(p.z)})`);
+                    log(bot, `Moved out of protected zone "${zoneName}".`);
+                    // Loop continues — re-check in case we landed in another zone
+                    continue;
+                }
+
+                // All 8 directions exhausted for this zone
+                console.warn(`[ProtectedZoneEscape] Could not escape ${zone.name || zone.type} after all 8 directions`);
+                log(bot, `Tried to leave protected zone "${zone.name || zone.type}" but couldn't find a path out.`);
+                return false;
+            }
+
+            // Fell out of the loop — either clear or max attempts
+            return isClear();
         } finally {
             if (prevMovements) {
                 try { bot.pathfinder.setMovements(prevMovements); } catch (_) { /* ignore */ }

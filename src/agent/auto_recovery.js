@@ -65,15 +65,16 @@ const FAILURE_PATTERNS = [
     },
     {
         name: 'inside_protected_zone',
-        // Matches error messages from skills.js breakBlockAt/placeBlock when the
-        // bot tries to modify a block inside ANY protected zone — spawn zone
-        // (original) or a registered player structure / auto-detected village
-        // (added 2026-04-15 with #7). All route to the same escape recovery
-        // since escapeSpawnZone walks the bot to the nearest non-protected
-        // position, which also gets it out of any structure/village zone.
+        // Matches error messages from skills.js breakBlockAt/placeBlock/collectBlock
+        // when the bot tries to modify a block inside ANY protected zone — spawn,
+        // village, or manual structure. Routes to escapeProtectedZone which is
+        // aware of all zone types and walks away from the offending zone's center.
+        // skipRetryLimit: the bot should never give up on escaping a protected
+        // zone — it literally can't do useful work while stuck inside one.
         test: /near spawn|inside .* spawn zone|spawn protection|near protected structure|protected structure ['"]/i,
-        recovery: 'ESCAPE_SPAWN_ZONE',
+        recovery: 'ESCAPE_PROTECTED_ZONE',
         priority: 7,
+        skipRetryLimit: true,
     },
     {
         name: 'cannot_smelt',
@@ -316,7 +317,7 @@ export class AutoRecoveryEngine {
                 this.recentFailures.push({ key: failureKey, time: Date.now() });
                 this.recentFailures = this.recentFailures.filter(f => Date.now() - f.time < 60000);
                 const repeatedCount = this.recentFailures.filter(f => f.key === failureKey).length;
-                if (repeatedCount >= this.maxRepeatedFailures) {
+                if (repeatedCount >= this.maxRepeatedFailures && !pattern.skipRetryLimit) {
                     console.log(`[AutoRecovery] Command ${commandName} has failed ${repeatedCount} times with same error — giving up`);
                     this.recentFailures = this.recentFailures.filter(f => f.key !== failureKey);
                     return {
@@ -377,8 +378,8 @@ export class AutoRecoveryEngine {
                 return await this.recoverPathfindTimeout(originalCommand);
             case 'SEARCH_WIDER':
                 return { recovered: false, result: failResult + '\n[AUTO-RECOVERY] Block not found nearby. Try searching a different area.' };
-            case 'ESCAPE_SPAWN_ZONE':
-                return await this.recoverInsideSpawnZone(originalCommand);
+            case 'ESCAPE_PROTECTED_ZONE':
+                return await this.recoverInsideProtectedZone(originalCommand);
             case 'CORRECT_SMELT_TARGET':
                 return await this.recoverWrongSmeltTarget(failResult, originalCommand);
             default:
@@ -387,25 +388,26 @@ export class AutoRecoveryEngine {
     }
 
     /**
-     * INSIDE SPAWN ZONE: walk out of the spawn protection zone, then retry.
-     * Primary escape path is the spawn-event hook in agent.js. This is the
-     * safety net for mid-session cases (respawn after death, teleport into
-     * zone, mod-induced re-entry).
+     * INSIDE PROTECTED ZONE: walk out of ANY protected zone (spawn, village,
+     * manual structure), then retry. Uses escapeProtectedZone which is aware
+     * of all zone types and walks away from the offending zone's center.
+     * For spawn zones, delegates to the specialized escapeSpawnZone internally.
+     * For villages/structures, uses directional hops away from the zone center.
      */
-    async recoverInsideSpawnZone(originalCommand) {
-        console.log('[AutoRecovery] Escaping spawn protection zone...');
-        const escaped = await skills.escapeSpawnZone(this.agent.bot);
+    async recoverInsideProtectedZone(originalCommand) {
+        console.log('[AutoRecovery] Escaping protected zone...');
+        const escaped = await skills.escapeProtectedZone(this.agent.bot);
         this._invalidateSnapshot();
         if (!escaped) {
             return {
                 recovered: false,
-                result: '[AUTO-RECOVERY] Tried to walk out of spawn zone but could not path there. Move manually or pick a different direction.'
+                result: '[AUTO-RECOVERY] Tried to walk out of the protected zone but could not find a clear path. Move manually or pick a different direction.'
             };
         }
         if (originalCommand) {
-            console.log(`[AutoRecovery] Retrying after spawn-zone escape: ${originalCommand}`);
+            console.log(`[AutoRecovery] Retrying after protected-zone escape: ${originalCommand}`);
         }
-        return this._successResult('Walked out of the spawn protection zone.', originalCommand);
+        return this._successResult('Walked out of the protected zone.', originalCommand);
     }
 
     /**
