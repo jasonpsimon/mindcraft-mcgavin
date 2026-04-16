@@ -99,6 +99,12 @@ export class Agent {
      * chunk_wait module that drives reconnect() calls.
      */
     async _connectBot(save_data, init_message, count_id, load_mem) {
+        // Stash the original connect args so reconnect() can re-enter this
+        // method with appropriate overrides (null init_message so a queued
+        // task message is not replayed; load_mem=true so task.initBotTask is
+        // skipped and only the existing goal is re-set).
+        this._connectArgs = { save_data, init_message, count_id, load_mem };
+
         console.log(this.name, 'logging into minecraft...');
         this.bot = initBot(this.name);
         if (!this.auto_recovery) {
@@ -108,14 +114,37 @@ export class Agent {
             this.auto_recovery = new AutoRecoveryEngine(this);
         }
 
-        // Connection Handler
-        const onDisconnect = (event, reason) => {
+        // Connection Handler.
+        // On a hard disconnect (kick / network error / first disconnect) we
+        // exit the process so tmux / an external supervisor sees a crash.
+        // On a soft reconnect (this._softReconnect === true, set by
+        // reconnect()), we instead re-enter _connectBot() with stashed args
+        // and skip process.exit entirely so the Agent survives.
+        const onDisconnect = async (event, reason) => {
             if (this._disconnectHandled) return;
             this._disconnectHandled = true;
 
             // Log and Analyze
             // handleDisconnection handles logging to console and server
             const { type } = handleDisconnection(this.name, reason);
+
+            if (this._softReconnect) {
+                const args = this._connectArgs;
+                this._softReconnect = false;
+                this._disconnectHandled = false;
+                log(this.name, `[Reconnect] Disconnect received (${event}) during soft reconnect — re-entering _connectBot.`);
+                // Brief wait so the server fully deregisters us before a
+                // new login attempt (duplicate-login errors otherwise).
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                try {
+                    await this._connectBot(args.save_data, null, args.count_id, true);
+                    log(this.name, `[Reconnect] Soft reconnect dispatched; waiting for spawn.`);
+                } catch (e) {
+                    console.error('[Reconnect] Soft reconnect failed, exiting:', e);
+                    process.exit(1);
+                }
+                return;
+            }
 
             process.exit(1);
         };
@@ -237,6 +266,57 @@ export class Agent {
                 process.exit(0);
             }
         });
+    }
+
+    /**
+     * Trigger a soft reconnect of the mineflayer client without killing the
+     * Node process. Sets this._softReconnect so the onDisconnect handler in
+     * _connectBot re-enters _connectBot() with the stashed args instead of
+     * calling process.exit(1). The Agent (memory, task, AutoRecovery,
+     * prompter, history, ConfidenceEngine) is preserved across the bounce;
+     * only the mineflayer client + bot-tied event bindings are recycled.
+     *
+     * Intended caller: chunk_wait.js after the 180s escalation timer when
+     * chunks still have not loaded. Also safe to call from any future
+     * recovery path that needs a fresh server connection without losing
+     * session state.
+     *
+     * Idempotent — if a reconnect is already in flight, the new request is
+     * logged and ignored rather than stacking.
+     *
+     * @param {string} reason Human-readable reason (logged locally, NOT
+     *                        sent to the server or players).
+     */
+    async reconnect(reason = 'unspecified') {
+        if (this._softReconnect) {
+            log(this.name, `[Reconnect] Already reconnecting — ignoring new request (${reason}).`);
+            return;
+        }
+        this._softReconnect = true;
+        log(this.name, `[Reconnect] Initiating soft reconnect: ${reason}`);
+        try {
+            if (this.bot && typeof this.bot.end === 'function') {
+                // bot.end() fires the 'end' event → onDisconnect → (soft path)
+                // → _connectBot(). The onDisconnect handler guards against
+                // double-firing via this._disconnectHandled.
+                this.bot.end('soft-reconnect');
+            } else if (this.bot && typeof this.bot.quit === 'function') {
+                this.bot.quit('soft-reconnect');
+            } else {
+                // No live bot to end — go direct. Rare path (would mean the
+                // client failed to construct), but handled for safety.
+                log(this.name, '[Reconnect] No bot handle; calling _connectBot directly.');
+                this._softReconnect = false;
+                this._disconnectHandled = false;
+                const args = this._connectArgs;
+                await this._connectBot(args.save_data, null, args.count_id, true);
+            }
+        } catch (e) {
+            console.warn('[Reconnect] bot.end threw:', e.message);
+            // Fall through — onDisconnect may still fire from a lower-level
+            // socket close. If it doesn't, the chunk_wait watchdog will try
+            // again on its own cadence.
+        }
     }
 
     async _setupEventHandlers(save_data, init_message) {
