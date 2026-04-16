@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-15 (end-of-day status refresh)_
+_Last updated: 2026-04-15 (audit intake — `/mindcraft-audit` first-run findings)_
 
 ---
 
@@ -65,55 +65,11 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-### 7c. Heuristic auto-detection of player-built structures
-
-**Status:** ⏳ not started • **Priority:** medium (complements the #7 village detector; catches player bases)
-
-Current state (post-#7): the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages via villager/workstation/bell signals. It does NOT auto-detect player-built bases.
-
-**Approach**: scan chunks for clusters of "strongly player-characteristic" blocks — stone_bricks + polished stones, doors, glass panes, wool, concrete, redstone components, banners, item frames, beds (outside villages), crafted stairs/slabs. ≥5 clustered within ~10 blocks → propose a protected zone with type='player_base'. False-positive mitigation: list curated to exclude ambiguous blocks (torches, crafting_tables, chests, furnaces — these cluster in villages too and the village detector already handles those).
-
-**Deferred decisions:** exact threshold (5? 8?), cluster radius (10? 16?), block list tuning. Start conservative, tune from observed false-positives.
-
-### 7d. Block-update watcher for runtime-placed structures
-
-**Status:** ⏳ not started • **Priority:** low (complements 7c — catches live placements as they happen)
-
-Listen to mineflayer's `blockUpdate` events, filter to player-placed (not world-generation), record `{player, block, x, y, z, timestamp}`. Cluster by proximity + time. Promote to protected zone after N placements within X blocks/Y minutes. Pairs well with 7c (startup heuristic) + live tracking.
-
-### 7e. Seed-based chunk-diff detection (research-only)
-
-**Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
-
-Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
-
-### 7b. Self-cleanup of incidental block placements
-
-**Status:** ⏳ not started • **Priority:** medium (world-stewardship behavior)
-
-JP observed the bot placing vertical/horizontal columns of resource blocks (cobblestone, dirt) for unclear reasons — pathfinder scaffolding / LLM confusion. Bot should track its placements and clean them up.
-
-**Fix sketch:**
-1. Track every block via `bot.placedBlocks = [{x, y, z, type, placedAt, purpose}]` (similar to `bot.placedTorches`).
-2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
-3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
-4. Cap list size (200, FIFO). Clear on bot death/respawn.
-
-### 8. Humanized action delays
-
-**Status:** ⏳ not started • **Priority:** low
-
-Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and could trigger anti-cheat on some servers. Add variable delay between commands.
-
-**Fix sketch:**
-- New file `src/agent/human_delays.js` with command→delay-range map.
-- In `Agent.handleMessage` after a command completes: `await new Promise(r => setTimeout(r, getHumanDelay(command_name)))`.
-- Base delay 3s, scale by complexity (1-2s trivial, 2-3s movement, 3-5s gather/craft, 4-6s complex). ±1000ms jitter.
-- Don't apply to mode-triggered actions (self_preservation, self_defense) — those react instantly.
-
 ### F. Long-term memory population audit
 
-**Status:** ⏳ not started • **Priority:** medium-high (biggest leverage for "gemma-4 punches above its weight")
+**Status:** ⏳ not started • **Priority:** **HIGH — promoted 2026-04-15 after audit confirmed subsystem is frozen** (biggest leverage for "gemma-4 punches above its weight")
+
+**Audit update 2026-04-15 (L5.3 + L4):** the investigation this item called for was done during `/mindcraft-audit` and confirmed the suspicion. Static grep across `src/`: zero `long_term_memory.store` / `longTermMemory.store` / `.add()` callsites outside `src/memory/seed_memory.js:237`. Runtime log tail (500 lines of active play): zero `[LongTermMemory] Stored` lines. Index file entry count: ~39, matching the seed count exactly. LongTermMemory is frozen at seed; the fork's cross-session learning story is currently aspirational. Status moved from "investigation needed" to "integration needed" — first concrete migration target (spawn-escape path) remains the right starting point, see below.
 
 The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowledge store. `seed_memory.js` populates 46 Minecraft-fundamental facts at startup. Beyond the seed, the system is only populated by explicit `agent.long_term_memory.store(text, category, metadata)` calls from gameplay code — and there's no evidence any gameplay path actually calls it. Investigation needed: is `store()` called anywhere outside the seed? If not, long-term memory is frozen at 46 facts forever and the fork's cross-session learning story is aspirational.
 
@@ -133,9 +89,49 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 
 **Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
 
+### 13. digUp ProtectedZone guard (perimeter leak — bug)
+
+**Status:** ⏳ not started • **Priority:** high (same perimeter-leak shape as the `collectBlock` / grass_block regression that motivated Rule 7) • **Source:** audit finding L2.1
+
+`src/agent/library/skills.js:3870` — `digUp` places staircase blocks with no ProtectedZone check. `!digUp(5)` from spawn places blocks inside the protected zone, same class of failure as the pre-Rule-7 `collectBlock` leak.
+
+**Fix:** add `if (_isInAnyProtectedZone(bot, nextX, nextY - 1, nextZ)) return false;` before the placement, with an actionable error message tuned to match the AutoRecovery `inside_protected_zone` regex so the bot auto-escapes and retries. One-line fix; bundle with #14 and other small perimeter patches.
+
+### 14. File I/O startup hardening (3 bugs, bundled)
+
+**Status:** ⏳ not started • **Priority:** high (any of these crashes the bot on startup if the file is missing/malformed) • **Source:** audit findings L2.6, L2.7, L2.8
+
+Three `readFileSync` sites lack try/catch + graceful fallback:
+
+- `src/agent/coder.js:16-17` — reads `./bots/execTemplate.js` + `./bots/lintTemplate.js` in constructor.
+- `src/models/prompter.js:24, 35` — reads `_default.json` profile + base profile.
+- `src/mindcraft/mindserver.js:20` — reads `settings_spec.json` at server startup.
+
+**Fix:** wrap each in try/catch, log `[<Subsystem>] <file> load failed: <error>, using fallback`, return empty/default. Small sweep, single commit. Aligns with Principle 8 (fail loudly but informatively, don't crash with raw ENOENT).
+
+### 16. NaN coord guard in `digDown` + empty-search AutoRecovery pattern
+
+**Status:** ⏳ not started • **Priority:** high (both observable in live play 2026-04-15) • **Source:** audit finding L4.3 + L6.2
+
+Two distinct issues bundled because they share a runtime trigger (LLM trying to search while chunks aren't fully loaded):
+
+1. **NaN coord guard.** `src/agent/library/skills.js digDown` started with position `(NaN, 56, NaN)` in live logs — `bot.entity.position` was un-set at the time the skill read it, likely a chunk-not-loaded state. `digDown` proceeded, then aborted later on the chunk check. Add a top-of-function guard: `if (!isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) { console.warn('[Skills] digDown: position NaN, aborting'); return false; }`. Audit other skills for the same pattern.
+
+2. **Empty-search AutoRecovery pattern.** LLM observed looping `!searchForBlock("oak_log", 100)` → "Could not find any oak_log in 100 blocks" → `!goToSurface` → retry, forever. No AutoRecovery pattern catches this class of failure — exactly the Principle 1 failure mode the fork is supposed to prevent. Add `empty_search_result` pattern in `src/agent/auto_recovery.js` matching the "Could not find any X in N blocks" error, dispatching to a new action like `TRY_ALTERNATIVE_RESOURCE` / `EXPAND_SEARCH_RADIUS` / `RELOCATE` — anything deterministic that breaks the loop.
+
+### 19. connection_handler.js silent-catch logging (2 bugs)
+
+**Status:** ⏳ not started • **Priority:** medium-high (connection issues become undebuggable) • **Source:** audit finding L3.3
+
+`src/agent/connection_handler.js:46, 68` — two `catch (_) {}` wildcard swallows. Line 46 discards server-output send failures; line 68 swallows disconnect-reason parse failures. Operators have no signal when connection misbehaves.
+
+**Fix:** `catch (e) { console.warn('[ServerProxy] Send failed:', e.message); }` and `catch (e) { console.warn('[ParseKickReason] JSON parse failed, using raw fallback:', e.message); }`. Two-line fix, ship with #13/#14 bundle.
+
 ### G. Procedural memory / ConfidenceEngine activation audit
 
-**Status:** ⏳ not started • **Priority:** medium (complementary to F)
+**Status:** ⏳ not started • **Priority:** medium-high (complementary to F; actionable in one line of config once #20 instrumentation lands)
+
+**Audit update 2026-04-15 (L4.1 + L5.2):** live data now available. `ConfidenceEngine` is firing 24× in 500 log lines — every repeat command comes back at **92-93% confidence**. `highThreshold` in `src/memory/confidence_engine.js` is `0.98`. Gap is 3-5 percentage points. The engine is ready to bypass; the threshold is miscalibrated. Static `procedural_memory.json` inspection shows max stored confidence of 0.68, so the 0.98 threshold has never fired historically either. **Quick win: lower `highThreshold` to 0.95 and monitor for false-positive bypasses** — should unlock HIGH-tier bypasses on established patterns immediately. If none appear in a week of play, consider 0.90. Instrumentation from #20 (logs on record/update) is a prerequisite for tuning with confidence. Depends on #20 to ship first.
 
 `ProceduralMemory` tracks action-context pairs with Wilson-score confidence. `ConfidenceEngine.evaluate()` decides HIGH (≥0.85, bypass LLM) / MEDIUM (0.5-0.84, suggest) / LOW (<0.5, full reasoning). The audit question: what's the actual distribution? If the engine always falls through to LOW (cold-start with no data), procedural memory is collecting metrics nobody reads and the entire bypass mechanism is inert.
 
@@ -152,6 +148,15 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 ### 12. Movements safety audit — Rule 7 follow-through
 
 **Status:** 🟡 Stage 1 shipped (commit `e59a307` — `bot.collectBlock.movements` now safety-configured); full audit deferred • **Priority:** medium-high (bot safety; currently ~20 sites use raw pathfinder defaults)
+
+**Audit update 2026-04-15 (L2 findings):** full perimeter sweep confirmed 20+ raw-default callsites. Five are hot-path and should be prioritized before the broader refactor:
+
+- `skills.js:426, 432` — enemyKite combat (bot chased into lava/cactus = unnecessary damage)
+- `skills.js:740` — breakBlockAt approach (target buried → straight-down shaft risk, same class as Stage-1 fix)
+- `skills.js:937, 943` — placeBlock approach (2 sites, same pattern as breakBlockAt)
+- `skills.js:2889, 2920, 2939, 3131, 3176` — moveAwayFromEntity / moveAwayFromPosition / avoidEnemies / activateNearestBlock / activateFarmland
+
+Other raw sites (`collectBlock:506`, `pickupNearbyItems:681`, `followPlayer:2824`) carry lower risk and are acceptable as "deferred to full audit." Stage 2 (the `createSafeMovements` helper) unblocks #17 (skills.js decomposition — the helper extraction is a natural first module boundary).
 
 Rule 7 (Complete the perimeter) calls for every `pf.Movements` instance in the codebase to be constructed via a shared helper so the safety invariant — `maxDropDown=3`, `canSwim=true`, `_configureTerrainSafeMovements`, sensible `digCost` — holds everywhere. Right now only `goToGoal` (for its two internal Movements objects) and `bot.collectBlock.movements` (as of Stage 1) apply the safer config. Every other `new pf.Movements(bot)` in `skills.js` uses raw pathfinder defaults.
 
@@ -191,6 +196,100 @@ return m;
 4. Optional lint-style check (sibling to the 29-test classification harness): a script that greps `src/` for `new pf.Movements(bot)` outside `createSafeMovements` itself and fails if any are found.
 
 **Signals to watch:** no more straight-down digging during `!collectBlocks`, `!goToPlayer`, or any other pathfinder-driven command. Bot consistently uses staircases and walks around obstacles rather than mining through.
+
+### 7c. Heuristic auto-detection of player-built structures
+
+**Status:** ⏳ not started • **Priority:** medium (complements the #7 village detector; catches player bases)
+
+Current state (post-#7): the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages via villager/workstation/bell signals. It does NOT auto-detect player-built bases.
+
+**Approach**: scan chunks for clusters of "strongly player-characteristic" blocks — stone_bricks + polished stones, doors, glass panes, wool, concrete, redstone components, banners, item frames, beds (outside villages), crafted stairs/slabs. ≥5 clustered within ~10 blocks → propose a protected zone with type='player_base'. False-positive mitigation: list curated to exclude ambiguous blocks (torches, crafting_tables, chests, furnaces — these cluster in villages too and the village detector already handles those).
+
+**Deferred decisions:** exact threshold (5? 8?), cluster radius (10? 16?), block list tuning. Start conservative, tune from observed false-positives.
+
+### 7b. Self-cleanup of incidental block placements
+
+**Status:** ⏳ not started • **Priority:** medium (world-stewardship behavior)
+
+JP observed the bot placing vertical/horizontal columns of resource blocks (cobblestone, dirt) for unclear reasons — pathfinder scaffolding / LLM confusion. Bot should track its placements and clean them up.
+
+**Fix sketch:**
+1. Track every block via `bot.placedBlocks = [{x, y, z, type, placedAt, purpose}]` (similar to `bot.placedTorches`).
+2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
+3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
+4. Cap list size (200, FIFO). Clear on bot death/respawn.
+
+### 15. full_state.js error-logging sweep (9 violations)
+
+**Status:** ⏳ not started • **Priority:** medium (biggest single Principle-8 compliance gain per minute) • **Source:** audit finding L3.1
+
+`src/agent/library/full_state.js:36, 43, 53, 65, 73, 94, 100, 106` — every state-building operation wraps in a `catch (e) { /* use default */ }` pattern. Returns a sensible default but logs nothing. Operator cannot distinguish healthy reads from silently-degraded reads (position NaN, biome lookup fail, inventory read fail, etc.).
+
+**Fix:** one-line per catch: `console.warn('[FullState] <operation> read failed, using default:', e.message);`. 9 catches, mechanical sweep, single commit. One of the easiest high-value changes in the audit.
+
+### 20. ProceduralMemory instrumentation
+
+**Status:** ⏳ not started • **Priority:** medium (precursor to tuning G) • **Source:** audit finding L4.2
+
+`src/memory/procedural_memory.js` emits zero structured log lines during play despite ConfidenceEngine actively reading from it. Either (a) ProceduralMemory is being written and not logging, or (b) it's read-only at runtime. Cannot tell without instrumentation.
+
+**Fix:** add `[ProceduralMemory] Recorded outcome <command>: <success|fail> (confidence now <X>, N total records)` on each record/update. Without this, #G tuning decisions are flying blind.
+
+### 18. Model-provider server-side logging sweep (17 files)
+
+**Status:** ⏳ not started • **Priority:** low-medium (code-quality sweep, not functionally broken) • **Source:** audit finding L3.7
+
+17 model-provider files (`src/models/claude.js:50`, `gpt.js:75`, `deepseek.js:41`, etc.) catch inference failures and set a user-facing `"My brain disconnected, try again."` fallback with zero server-side log. Operator has no visibility into which model failed, what error (rate limit? auth? timeout?), or whether retrying is futile.
+
+**Fix:** `console.warn('[ModelProvider:${this.model_name}] Inference failed:', err.message);` before the user-facing fallback. Repeat across 17 files.
+
+### 21. L1 cleanup bundle (low-priority nits)
+
+**Status:** ⏳ not started • **Priority:** low (documentation / Rule-3 nits surfaced by L1 migration-marker grep) • **Source:** audit findings L1.1, L1.3, L6.3, L6.5
+
+Four small items in one bundle so none are forgotten:
+
+- `src/agent/modes.js:38` — `// hacky fix when blocks are not loaded` comment admits a band-aid (Rule 4). Either investigate the root cause (chunk timing?) or upgrade the comment to explain why treat-as-air is the right fallback.
+- `src/models/prompter.js:552` — bare `// deprecated` comment with no "why" / "when to remove" context (Rule 3). Either remove the deprecated code or annotate.
+- `src/agent/history.js:66` — the `!settings.use_context_builder` gate reads as profile-driven but the default actually lives in `src/settings.js:100`. Add a one-line pointer comment to save the next audit a round-trip (L5.1 shakedown lesson).
+- `src/models/prompter.js:237` — `// Combine legacy summary with episodic memory retrieval` comment. Needs read-in-context to confirm whether this branch is gated by `!use_context_builder` (clean) or always runs (contradicts D1 story).
+
+### L1.4 verification — possibly-dead exports (pending JP confirmation)
+
+**Status:** ⏳ pending JP confirmation • **Priority:** low • **Source:** audit finding L1.4
+
+Two exports in `src/agent/library/skills.js` have no internal caller, no `!command` registration in `actions.js`, and no external grep hit:
+
+- `tillAndSow` (line 3071)
+- `activateNearestBlock` (line 3160)
+
+The LLM can reach them only via `coder.js`-generated code addressing `skills.X()` by name, but there's no documentation path for the LLM to know they exist. May be intentional library surface for future commands, or forgotten leftovers.
+
+**Question for JP:** were these ever wired, are they planned surface, or forgotten? If planned, convert to tracked command-registration work. If forgotten, remove per Principle 5.
+
+### 7d. Block-update watcher for runtime-placed structures
+
+**Status:** ⏳ not started • **Priority:** low (complements 7c — catches live placements as they happen)
+
+Listen to mineflayer's `blockUpdate` events, filter to player-placed (not world-generation), record `{player, block, x, y, z, timestamp}`. Cluster by proximity + time. Promote to protected zone after N placements within X blocks/Y minutes. Pairs well with 7c (startup heuristic) + live tracking.
+
+### 8. Humanized action delays
+
+**Status:** ⏳ not started • **Priority:** low
+
+Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and could trigger anti-cheat on some servers. Add variable delay between commands.
+
+**Fix sketch:**
+- New file `src/agent/human_delays.js` with command→delay-range map.
+- In `Agent.handleMessage` after a command completes: `await new Promise(r => setTimeout(r, getHumanDelay(command_name)))`.
+- Base delay 3s, scale by complexity (1-2s trivial, 2-3s movement, 3-5s gather/craft, 4-6s complex). ±1000ms jitter.
+- Don't apply to mode-triggered actions (self_preservation, self_defense) — those react instantly.
+
+### 7e. Seed-based chunk-diff detection (research-only)
+
+**Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
+
+Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
 
 ---
 
@@ -238,6 +337,16 @@ This item and #2 share terrain-awareness logic — consider a single "terrain pr
 - Place wall_torch attached to left wall vs floor torch
 - Update `goToSurface` ordering hint (right-side torches = ascent direction)
 
+### 17. `skills.js` decomposition (long-term)
+
+**Status:** 🟡 partial — gated on #12 Stage 2 shipping first • **Priority:** low (architectural; deferred until #12 lands) • **Source:** audit finding L6.1
+
+`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
+
+**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
+
+Defer until #12 Stage 2 actually ships — jumping ahead would create a split-refactor hazard. Keep flagged so it isn't forgotten.
+
 ---
 
 **🔁 Ongoing**
@@ -269,6 +378,7 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 
 ## Notes
 
+- **Audited 2026-04-15** — first run of the `/mindcraft-audit` skill (v1.1). Full reports in `mindcraft-mcgavin-audit/2026-04-15/` (workspace-local, not committed): `L1-mechanical-dead-code.md`, `L2-perimeter.md`, `L3-error-handling.md`, `L4-subsystem-activation.md`, `L5-partial-migrations.md`, `L6-rules-vs-code.md`, `AUDIT_SUMMARY.md`. Verdict: codebase in good shape; 9 new entries (#13–#21 + L1.4) added to the to-do queue above. Biggest single Principle-1 lever: G threshold drop (0.98 → 0.95). Biggest single Principle-8 sweep: #15 `full_state.js` logging.
 - **Item 0 fully resolved 2026-04-15** — bot escapes spawn zone in 1 hop with 0 deaths after combined fix landed (escape rewrite + survival hardening + Bug A/C fixes).
 - **Item 1 fully resolved 2026-04-14** — ViaBackwards 5.0.4 on server. Bot stays connected cleanly.
 - **Item 4 fully resolved 2026-04-15** — `_equipBestToolFor` wired into all 7 `bot.dig` callsites; iron_ore drops confirmed.
