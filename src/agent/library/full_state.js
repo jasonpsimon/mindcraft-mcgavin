@@ -33,14 +33,14 @@ export function getFullState(agent) {
                 z: Number(pos.z.toFixed(2))
             };
         }
-    } catch (e) { /* use default */ }
+    } catch (e) { console.warn('[FullState] position read failed, using default:', e.message); }
 
     // Weather
     let weather = 'Clear';
     try {
         if (bot.thunderState > 0) weather = 'Thunderstorm';
         else if (bot.rainState > 0) weather = 'Rain';
-    } catch (e) { /* use default */ }
+    } catch (e) { console.warn('[FullState] weather read failed, using default:', e.message); }
 
     // Time
     let timeLabel = 'Unknown';
@@ -50,7 +50,7 @@ export function getFullState(agent) {
         if (timeOfDay < 6000) timeLabel = 'Morning';
         else if (timeOfDay < 12000) timeLabel = 'Afternoon';
         else timeLabel = 'Night';
-    } catch (e) { /* use default */ }
+    } catch (e) { console.warn('[FullState] time read failed, using default:', e.message); }
 
     // Surroundings — blocks can fail if chunks aren't loaded
     let below = 'unknown', legs = 'unknown', head = 'unknown', aboveHead = 'unknown';
@@ -62,7 +62,7 @@ export function getFullState(agent) {
         const headBlock = getBlockAtPosition(bot, 0, 1, 0);
         head = headBlock?.name || 'unknown';
         aboveHead = getFirstBlockAboveHead(bot, null, 32) || 'unknown';
-    } catch (e) { /* use defaults */ }
+    } catch (e) { console.warn('[FullState] surroundings read failed, using defaults:', e.message); }
 
     // Players
     let players = [], bots = [];
@@ -70,7 +70,7 @@ export function getFullState(agent) {
         players = getNearbyPlayerNames(bot);
         bots = convoManager.getInGameAgents().filter(b => b !== agent.name);
         players = players.filter(p => !bots.includes(p));
-    } catch (e) { /* use defaults */ }
+    } catch (e) { console.warn('[FullState] players read failed, using defaults:', e.message); }
 
     // Inventory — can fail if inventory isn't loaded
     let counts = {}, stacksUsed = 0, totalSlots = 36;
@@ -91,19 +91,19 @@ export function getFullState(agent) {
             boots: boots ? boots.name : null,
             mainHand: bot.heldItem ? bot.heldItem.name : null
         };
-    } catch (e) { /* use defaults */ }
+    } catch (e) { console.warn('[FullState] inventory read failed, using defaults:', e.message); }
 
     // Entity types
     let entityTypes = [];
     try {
         entityTypes = getNearbyEntityTypes(bot).filter(t => t !== 'player' && t !== 'item');
-    } catch (e) { /* use default */ }
+    } catch (e) { console.warn('[FullState] entityTypes read failed, using default:', e.message); }
 
     // Modes
     let modesSummary = '';
     try {
         modesSummary = bot.modes?.getMiniDocs() || '';
-    } catch (e) { /* use default */ }
+    } catch (e) { console.warn('[FullState] modes read failed, using default:', e.message); }
 
     return {
         name: agent.name,
@@ -182,6 +182,7 @@ function _safeBiome(bot) {
     try {
         return getBiomeName(bot) || 'unknown';
     } catch (e) {
+        console.warn('[FullState] biome read failed, using default:', e.message);
         return 'unknown';
     }
 }
