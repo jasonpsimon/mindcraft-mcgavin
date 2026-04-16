@@ -1687,10 +1687,29 @@ function _configureTerrainSafeMovements(bot, movements) {
 // would match both "short_grass" (plant) and "grass_block" (solid dirt cube).
 // "(^|_)grass$" matches the former, skips the latter.
 const PLANT_LIKE_PATTERN = /bush|fern|(^|_)grass$|vine|flower|sprout|lichen|sugar_cane|dead_bush|nether_sprouts|kelp|seagrass|sea_pickle|lily_pad|dripleaf|pitcher_plant|torchflower|spore_blossom|leaves/i;
-// Tree-associated structural blocks — do NOT break inside spawn zone
-// (logs, wood, saplings, tree roots, nether tree stems, bamboo/azalea blocks).
+// Tree-associated structural blocks — do NOT break inside protected zones
+// (logs, wood, saplings, nether tree stems, bamboo/azalea blocks).
 // Leaves intentionally NOT in this list per JP: leaves behave like plants.
-const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae|roots)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
+// Mangrove roots NOT in this list — they block movement and should be breakable.
+const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae)$|^(bamboo_block|bamboo_sapling|azalea|flowering_azalea)$/i;
+
+// Tight allowlist: blocks that actually impede bot movement and are allowed
+// to be broken inside protected zones. Everything else (short_grass, flowers,
+// ferns, dead_bush, glow_lichen, kelp, seagrass, sea_pickle, lily_pad,
+// pitcher_plant, torchflower, spore_blossom, nether_sprouts, small_dripleaf)
+// is passable — the bot walks right through them, no need to break.
+const MOVEMENT_BLOCKING_PLANTS = new Set([
+    'sweet_berry_bush',       // solid hitbox + damages on contact
+    'vine',                   // dense wall vines block pathing
+    'sugar_cane',             // solid hitbox
+    'big_dripleaf',           // solid platform
+    'mangrove_roots',         // solid hitbox, blocks movement
+    'muddy_mangrove_roots',   // solid hitbox, blocks movement
+    // All leaf types — solid hitbox, common obstruction near trees
+    'oak_leaves', 'spruce_leaves', 'birch_leaves', 'dark_oak_leaves',
+    'jungle_leaves', 'acacia_leaves', 'mangrove_leaves', 'cherry_leaves',
+    'pale_oak_leaves', 'azalea_leaves', 'flowering_azalea_leaves',
+]);
 
 // Hard exclusion list — solid-terrain blocks that would otherwise be
 // misclassified as plants. Never break these even if they match the
@@ -1738,12 +1757,15 @@ export async function autoBreakStuckPlant(bot) {
             const isPlant = PLANT_LIKE_PATTERN.test(block.name);
             const isTreePart = TREE_PART_PATTERN.test(block.name);
 
-            // Only consider plant-like or tree-part blocks as unstick candidates
-            if (!isPlant && !isTreePart) continue;
+            // Only consider plant-like, tree-part, or known movement-blocking
+            // blocks as unstick candidates. The MOVEMENT_BLOCKING_PLANTS check
+            // catches blocks like mangrove_roots that don't match either pattern.
+            if (!isPlant && !isTreePart && !MOVEMENT_BLOCKING_PLANTS.has(block.name)) continue;
             if (_isDangerous(block.name)) continue;
 
-            // Protected-zone check: allow breaking plants, skip tree parts
-            // (spawn zone OR any registered player-structure zone)
+            // Protected-zone check: only break blocks that actually impede
+            // movement. Passable plants (grass, flowers, ferns, etc.) are
+            // left untouched. Tree structural blocks (logs, wood) always skipped.
             const breakZone = _isInAnyProtectedZone(bot, p.x, p.y, p.z);
             if (breakZone) {
                 const label = breakZone.type === 'spawn' ? 'spawn zone' : `protected structure '${breakZone.name}'`;
@@ -1751,8 +1773,11 @@ export async function autoBreakStuckPlant(bot) {
                     console.log(`[AutoBreakPlant] ${block.name} at (${p.x}, ${p.y}, ${p.z}) is a tree part inside ${label} — skipping`);
                     continue;
                 }
-                // isPlant true, tree false — allowed inside protected zones
-                console.log(`[AutoBreakPlant] Breaking plant ${block.name} inside spawn zone (plants allowed) at (${p.x}, ${p.y}, ${p.z})`);
+                if (!MOVEMENT_BLOCKING_PLANTS.has(block.name)) {
+                    // Passable plant — bot can walk through it, no need to break
+                    continue;
+                }
+                console.log(`[AutoBreakPlant] Breaking movement-blocking ${block.name} inside ${label} at (${p.x}, ${p.y}, ${p.z})`);
             } else {
                 // Outside spawn — break either plant or tree part
                 console.log(`[AutoBreakPlant] Breaking ${block.name} at (${p.x}, ${p.y}, ${p.z}) to free movement`);
