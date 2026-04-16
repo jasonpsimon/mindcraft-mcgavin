@@ -23,6 +23,7 @@ import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { AutoRecoveryEngine } from './auto_recovery.js';
+import { ChunkWait } from './chunk_wait.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -81,6 +82,16 @@ export class Agent {
         this.task = new Task(this, settings.task, taskStart);
         this.blocked_actions = settings.blocked_actions.concat(this.task.blocked_actions || []);
         blacklistCommands(this.blocked_actions);
+
+        // Start the chunk-wait watchdog *before* connecting so it begins
+        // ticking immediately. It survives reconnects (attached to the
+        // Agent, not to any bot instance) and remains safe to consult from
+        // any caller via this.chunk_wait.* — see Rule 7 perimeter notes in
+        // chunk_wait.js.
+        if (!this.chunk_wait) {
+            this.chunk_wait = new ChunkWait(this);
+        }
+        this.chunk_wait.start();
 
         await this._connectBot(save_data, init_message, count_id, load_mem);
     }
