@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (#22 ChunkWait shipped — hold state during chunk-load / NaN-position windows; verification on next restart)_
+_Last updated: 2026-04-16 (#22 ChunkWait shipped + pushed to GitHub; verification on next restart)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio.
-- Branch: `develop` — HEAD `fb35d52`. Six-commit mechanical bundle just landed (Principle 8 sweep + Rule 7 digUp leak + NaN guards + startup hardening). All merged; push to GitHub pending verification.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is currently **stopped** pending ChunkWait verification restart.
+- Branch: `develop` — HEAD `48baae2`. #22 ChunkWait sequence landed (B1 refactor → B2 soft-reconnect → B3 watchdog module → C agent wiring → D skills guards → E whiteboard audit), pushed to `origin/develop` 2026-04-16.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
 
