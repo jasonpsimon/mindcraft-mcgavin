@@ -10,6 +10,38 @@ import { withBotLock } from '../bot_mutex.js';
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
 
+// Block-family equivalence: when the LLM requests a specific variant but any
+// member of the family would satisfy the goal, expand the search to all members.
+// Prevents loops where the bot asks for "oak_log" in a biome with only spruce.
+// Add new families as needed — each key is a family name; value is the full member list.
+const BLOCK_FAMILIES = {
+    _log: [
+        'oak_log', 'spruce_log', 'birch_log', 'dark_oak_log',
+        'jungle_log', 'acacia_log', 'mangrove_log', 'cherry_log',
+        'pale_oak_log',
+    ],
+    _planks: [
+        'oak_planks', 'spruce_planks', 'birch_planks', 'dark_oak_planks',
+        'jungle_planks', 'acacia_planks', 'mangrove_planks', 'cherry_planks',
+        'bamboo_planks',
+    ],
+};
+
+/**
+ * Expand a block type to include all family variants if it belongs to a known
+ * family. Returns an array — the requested type first, then siblings.
+ * Non-family blocks return a single-element array.
+ */
+function expandBlockFamily(blockType) {
+    for (const members of Object.values(BLOCK_FAMILIES)) {
+        if (members.includes(blockType)) {
+            // Requested type first so it is preferred when present
+            return [blockType, ...members.filter(m => m !== blockType)];
+        }
+    }
+    return [blockType];
+}
+
 export function log(bot, message) {
     bot.output += message + '\n';
 }
@@ -488,6 +520,16 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         blocktypes.push('grass_block');
     if (blockType === 'cobblestone')
         blocktypes.push('stone');
+    // Block-family expansion: if the requested type belongs to a known family
+    // (e.g., oak_log -> all log types), expand so the bot finds whichever
+    // variant exists in the current biome. Prevents the LLM from looping on
+    // a specific wood type that doesn't grow here.
+    const familyExpanded = expandBlockFamily(blockType);
+    if (familyExpanded.length > 1) {
+        for (const variant of familyExpanded) {
+            if (!blocktypes.includes(variant)) blocktypes.push(variant);
+        }
+    }
     const isLiquid = blockType === 'lava' || blockType === 'water';
 
     let collected = 0;
@@ -2741,6 +2783,22 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
     }
     else {
         block = world.getNearestBlock(bot, blockType, range);
+        // Block-family fallback: if the specific type wasn't found, try all
+        // family variants (e.g., oak_log miss -> try spruce_log, birch_log, ...).
+        // Prevents the LLM from looping on a wood type absent in this biome.
+        if (!block) {
+            const variants = expandBlockFamily(blockType);
+            if (variants.length > 1) {
+                for (const variant of variants) {
+                    if (variant === blockType) continue;
+                    block = world.getNearestBlock(bot, variant, range);
+                    if (block) {
+                        log(bot, `No ${blockType} found — using ${variant} instead.`);
+                        break;
+                    }
+                }
+            }
+        }
     }
     if (!block) {
         log(bot, `Could not find any ${blockType} in ${range} blocks.`);
