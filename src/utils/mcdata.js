@@ -60,6 +60,7 @@ export function initBot(username) {
         auth: settings.auth,
         version: mc_version,
         checkTimeoutInterval: 60000,  // 60s keep-alive check (default 30s) — reduces disconnects on slow servers
+        viewDistance: 'normal',       // mineflayer defaults to 'far'; lower server chunk-send pressure to reduce "Timeout waiting for N chunks" kicks (paired with whiteboard #22 ChunkWait)
     }
     if (!mc_version || mc_version === "auto") {
         delete options.version;
