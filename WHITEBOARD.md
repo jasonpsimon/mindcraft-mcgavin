@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (createMovements factory shipped — Rule 7 perimeter closed)_
+_Last updated: 2026-04-16 (optimization audit findings added to to-do queue)_
 
 ---
 
@@ -109,6 +109,18 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 
 **Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
 
+### OPT-A. Delete safeToss — complete the safeTossBatch migration
+
+**Status:** ⏳ not started • **Priority:** high (Principle 5 — kill redundancy; ~150 lines of duplicated disposal logic)
+
+**Root cause:** `safeTossBatch` was built to solve the N-tunnels-for-N-items problem. `safeToss` is the old single-item path that should have been removed when batch landed. It wasn't — an unfinished migration. Both functions share nearly identical tunnel validation, direction checking, walk-dig loops, surface hole logic, and fallback patterns.
+
+`withBotLock` is reentrant (uses `AsyncLocalStorage` — nested calls detect the held token and run directly), so there is no deadlock barrier to consolidation. The lock was never a reason to keep both.
+
+**Fix:** Delete `safeToss` entirely. Update every callsite to use `safeTossBatch` with a single-item array. Check whether any caller passes meaningful `metadata` — if so, add metadata support to `safeTossBatch`. This also resolves Finding G (`discard` calling `safeToss` per stack) — once `safeToss` is gone, `discard` naturally routes through batch.
+
+**Blast radius (to verify at implementation time):** grep every `safeToss` callsite in `src/`, confirm each can be converted to the `safeTossBatch` `{type, count, name}` shape. Verify `discard` function in skills.js, `autoDiscard` and `autoDiscardAllJunk` in inventory_utils.js.
+
 ### G. Procedural memory / ConfidenceEngine activation audit
 
 **Status:** ⏳ not started • **Priority:** medium-high (complementary to F; actionable in one line of config once #20 instrumentation lands)
@@ -201,6 +213,14 @@ JP observed the bot placing vertical/horizontal columns of resource blocks (cobb
 3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
 4. Cap list size (200, FIFO). Clear on bot death/respawn.
 
+### OPT-H. Verify sugar_cane in MOVEMENT_BLOCKING_PLANTS — possible regression
+
+**Status:** ⏳ not started • **Priority:** medium (correctness — sugar_cane has no collision box in Minecraft)
+
+Earlier session work explicitly removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` because it has no collision box and the bot walks through it. Current code (line ~1909 in skills.js) still lists it. Either the removal was never committed or a later change reintroduced it.
+
+**Fix:** Check git log for the removal. If it was removed and reintroduced, revert. If it was never committed, remove it. Sugar cane does not impede movement — it should not be in a movement-blocking allowlist.
+
 ### 18. Model-provider server-side logging sweep (17 files)
 
 **Status:** ⏳ not started • **Priority:** low-medium (code-quality sweep, not functionally broken) • **Source:** audit finding L3.7
@@ -233,6 +253,23 @@ The LLM can reach them only via `coder.js`-generated code addressing `skills.X()
 
 **Question for JP:** were these ever wired, are they planned surface, or forgotten? If planned, convert to tracked command-registration work. If forgotten, remove per Principle 5.
 
+### OPT-bundle. Unverified optimization findings from 2026-04-16 audit
+
+**Status:** ⏳ not started — **needs full Rule 2 codebase read before any can be actioned** • **Priority:** low (code quality; none functionally broken)
+
+Surface-level findings from an optimization audit that did NOT follow proper review process (governing docs and full codebase were not read before analysis). Listed here so they aren't lost, but each must be verified with a proper Rule 1/2/3/4 pass before implementation.
+
+- **B.** `goToGoal` creates two Movements objects every call (lines ~2936-2950) — both `nonDestructiveMovements` and `destructiveMovements` constructed upfront via `createMovements(bot)`. The destructive one may only be needed if the non-destructive path fails. Needs verification: is there a reason both are created eagerly?
+- **C.** `pickupNearbyItems` creates Movements per loop iteration (line ~723). Could potentially create once before the loop. Needs verification: does the bot's position change between iterations in a way that invalidates a cached Movements?
+- **D.** `_isDangerous` rebuilds an array + `.includes()` on every call (line ~2628). Called in tight loops during safeToss direction validation. Could be a module-level Set. Needs verification: is this actually a measurable perf concern or just cosmetic?
+- **E.** `scanForCaverns` allocates `rockTypes` Set every call (line ~3902). Could be a module-level constant. Same verification question as D.
+- **F.** Duplicate yaw-to-cardinal direction snapping in `digDown` and `digUp`. Identical code. Could extract to a shared helper. Pure cleanup — low risk but needs blast-radius check.
+- **I.** `moveAway` creates Movements twice (lines ~3317-3321) — first for `setMovements`, second inside the cheat-mode branch. First could potentially be reused. Needs verification: does the cheat-mode branch need different config?
+
+**Do not implement any of these without first completing a full codebase read per Sam's Binding Rule 2.**
+
+---
+
 ### 7d. Block-update watcher for runtime-placed structures
 
 **Status:** ⏳ not started • **Priority:** low (complements 7c — catches live placements as they happen)
@@ -256,6 +293,7 @@ Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and c
 **Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
 
 Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
+
 
 ---
 
