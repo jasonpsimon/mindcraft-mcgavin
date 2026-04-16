@@ -715,6 +715,29 @@ export class Agent {
             return false;
         }
 
+        // ChunkWait perimeter (Rule 7): if chunks haven't loaded, pause
+        // LLM calls + command execution. Players get a polite reply
+        // (throttled per player); self-prompts / system / other-bot
+        // messages are silently deferred until chunks come back. The
+        // self_prompter naturally resumes once the held state exits.
+        if (this.chunk_wait?.isHeld()) {
+            const isPlayerMsg = source && source !== 'system'
+                && source !== this.name
+                && !convoManager.isOtherAgent(source);
+            if (isPlayerMsg) {
+                if (this.chunk_wait.shouldGate(message)) {
+                    // Non-whitelisted command / chat while held.
+                    this.chunk_wait.notifyPlayerMessage(source);
+                    return false;
+                }
+                // Whitelisted (!stop, !goal, !setMode, …) — fall through
+                // so the player can still abort or retarget while paused.
+            } else {
+                // Self, system, and other-bot messages deferred silently.
+                return false;
+            }
+        }
+
         let used_command = false;
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
@@ -839,8 +862,11 @@ export class Agent {
                 if (!commandExists(command_name)) {
                     this.history.add('system', `Command ${command_name} does not exist.`);
                     console.warn('Agent hallucinated command:', command_name)
-                    // Record failure if this was a bypass
-                    if (confidenceResult?.contextHash) {
+                    // Record failure if this was a bypass, unless ChunkWait
+                    // is held — procedural memory should not be written
+                    // during an unstable chunk-load window (fixes #16.1
+                    // false-positive class at source, not by keywords).
+                    if (confidenceResult?.contextHash && !this.chunk_wait?.isHeld()) {
                         this.confidence_engine.recordOutcome(confidenceResult.contextHash, res, false, wasBypassed);
                     }
                     continue;
@@ -876,7 +902,12 @@ export class Agent {
                 used_command = true;
 
                 // --- Record outcome for procedural learning ---
-                if (confidenceResult?.contextHash) {
+                // Skip entirely while ChunkWait is held — the bot may
+                // report guard-message "successes" that don't contain
+                // failure keywords, and we don't want those polluting
+                // procedural memory (fixes the #16.1 false-positive class
+                // at source; see chunk_wait.js module docstring).
+                if (confidenceResult?.contextHash && !this.chunk_wait?.isHeld()) {
                     const exec_lower = (execute_res || '').toLowerCase();
                     const success = !!execute_res && !exec_lower.includes('failed') && !exec_lower.includes('error') && !exec_lower.includes('invalid') && !exec_lower.includes('do not have the resources') && !exec_lower.includes('not a command') && !exec_lower.includes('was given') && !exec_lower.includes('does not exist') && !exec_lower.includes('exception');
                     this.confidence_engine.recordOutcome(confidenceResult.contextHash, res, success, wasBypassed, {
