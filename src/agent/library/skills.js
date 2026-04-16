@@ -3523,11 +3523,17 @@ export async function digDown(bot, distance = 10) {
     // Guard: bot.entity.position is sometimes (NaN, Y, NaN) during chunk-load or
     // respawn windows — observed 2026-04-15 in live play. The cavern-scan and
     // staircase loop below propagate NaN into blockAt lookups, waitForChunksToLoad
-    // spins, and the skill silently aborts with confusing logs. Bail early with a
-    // directive message instead.
+    // spins, and the skill silently aborts with confusing logs.
+    //
+    // Delegate user-facing messaging to ChunkWait (whiteboard #22). Calling
+    // chunk_wait.enter() sets the held state so agent.js gates further LLM
+    // calls and recordOutcome writes — this fixes the #16.1 false-positive
+    // class at source (guard messages were evading the keyword list and
+    // polluting procedural memory as successes). The silent bail keeps the
+    // Rule 5 defense against propagating NaN into the rest of this skill.
     if (!bot.entity?.position || !isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) {
         console.warn('[Skills] digDown: bot.entity.position not finite, aborting');
-        log(bot, 'Could not start digDown — my position is not loaded yet. Wait a moment and try again.');
+        bot.agent?.chunk_wait?.enter('digDown: bot.entity.position NaN');
         return false;
     }
     const prevMovements = bot.pathfinder.movements;
@@ -3744,11 +3750,12 @@ export async function digUp(bot, distance = 10) {
      **/
 
     // Guard: bot.entity.position can be (NaN, Y, NaN) during chunk-load or respawn
-    // windows (same class as the digDown guard). Bail with a directive message
-    // rather than propagating NaN into the staircase loop.
+    // windows (same class as the digDown guard). Delegate user-facing
+    // messaging to ChunkWait (whiteboard #22); silent bail here prevents NaN
+    // from propagating into the staircase loop (Rule 5 defense-in-depth).
     if (!bot.entity?.position || !isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) {
         console.warn('[Skills] digUp: bot.entity.position not finite, aborting');
-        log(bot, 'Could not start digUp — my position is not loaded yet. Wait a moment and try again.');
+        bot.agent?.chunk_wait?.enter('digUp: bot.entity.position NaN');
         return false;
     }
 

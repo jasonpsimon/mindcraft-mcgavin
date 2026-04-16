@@ -118,6 +118,10 @@ export class Agent {
 
         console.log(this.name, 'logging into minecraft...');
         this.bot = initBot(this.name);
+        // Backref so skills.js (and any other bot-scoped code) can reach
+        // Agent-level subsystems like chunk_wait. Refreshed on every
+        // reconnect because this.bot is recreated by initBot().
+        this.bot.agent = this;
         if (!this.auto_recovery) {
             // AutoRecoveryEngine holds agent-level state (cycle counters,
             // recovery history) that must persist across reconnects. Create
