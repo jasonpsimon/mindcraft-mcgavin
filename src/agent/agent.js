@@ -82,9 +82,31 @@ export class Agent {
         this.blocked_actions = settings.blocked_actions.concat(this.task.blocked_actions || []);
         blacklistCommands(this.blocked_actions);
 
+        await this._connectBot(save_data, init_message, count_id, load_mem);
+    }
+
+    /**
+     * Create and wire a mineflayer client for this Agent. Called once from
+     * start() for the first connect, and again from reconnect() for each
+     * subsequent soft-reconnect. The Agent itself (memory systems, task,
+     * AutoRecovery, ConfidenceEngine, prompter, history) is NOT re-initialized
+     * — only the mineflayer client + plugins + event bindings + bot-tied
+     * post-spawn setup (pathfinder defaults, protected zones, village scanner,
+     * spawn escape, chat listeners).
+     *
+     * Extracted from start() as a pure refactor in commit B1 (whiteboard #22).
+     * B2 adds the soft-reconnect flag + onDisconnect gating; B3 adds the
+     * chunk_wait module that drives reconnect() calls.
+     */
+    async _connectBot(save_data, init_message, count_id, load_mem) {
         console.log(this.name, 'logging into minecraft...');
         this.bot = initBot(this.name);
-        this.auto_recovery = new AutoRecoveryEngine(this);
+        if (!this.auto_recovery) {
+            // AutoRecoveryEngine holds agent-level state (cycle counters,
+            // recovery history) that must persist across reconnects. Create
+            // it once on the first connect; leave it alone afterward.
+            this.auto_recovery = new AutoRecoveryEngine(this);
+        }
 
         // Connection Handler
         const onDisconnect = (event, reason) => {
@@ -94,10 +116,10 @@ export class Agent {
             // Log and Analyze
             // handleDisconnection handles logging to console and server
             const { type } = handleDisconnection(this.name, reason);
-     
+
             process.exit(1);
         };
-        
+
         // Bind events
         this.bot.once('kicked', (reason) => onDisconnect('Kicked', reason));
         this.bot.once('end', (reason) => onDisconnect('Disconnected', reason));
@@ -109,12 +131,17 @@ export class Agent {
             }
         });
 
-        initModes(this);
+        if (!this._modesInitialized) {
+            // initModes attaches mode handlers to the Agent (not the bot);
+            // safe to run only once across the Agent's lifetime.
+            initModes(this);
+            this._modesInitialized = true;
+        }
 
         this.bot.on('login', () => {
             console.log(this.name, 'logged in!');
             serverProxy.login();
-            
+
             // Set skin for profile, requires Fabric Tailor. (https://modrinth.com/mod/fabrictailor)
             if (this.prompter.profile.skin)
                 this.bot.chat(`/skin set URL ${this.prompter.profile.skin.model} ${this.prompter.profile.skin.path}`);
@@ -136,7 +163,7 @@ export class Agent {
 
                 // wait for a bit so stats are not undefined
                 await new Promise((resolve) => setTimeout(resolve, 1000));
-                
+
                 console.log(`${this.name} spawned.`);
                 this.clearBotLogs();
 
@@ -166,6 +193,12 @@ export class Agent {
                 // Adds zones to bot.protectedZones with type='village' and dedups
                 // against existing entries, so re-scans are idempotent.
                 try {
+                    // Clear any prior interval from a previous connection before
+                    // starting a new one, so reconnects don't leak timers.
+                    if (this._villageScanInterval) {
+                        clearInterval(this._villageScanInterval);
+                        this._villageScanInterval = null;
+                    }
                     this._villageScanInterval = skills.startVillageScanner(this.bot);
                 } catch (scanErr) {
                     console.warn('[VillageDetect] startVillageScanner threw:', scanErr.message);
@@ -183,7 +216,7 @@ export class Agent {
 
                 this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
-              
+
                 if (!load_mem) {
                     if (settings.task) {
                         this.task.initBotTask();
