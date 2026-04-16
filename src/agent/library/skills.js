@@ -3520,6 +3520,16 @@ export async function digDown(bot, distance = 10) {
      * await skills.digDown(bot, 10);
      **/
     return await withBotLock('digDown', async () => {
+    // Guard: bot.entity.position is sometimes (NaN, Y, NaN) during chunk-load or
+    // respawn windows — observed 2026-04-15 in live play. The cavern-scan and
+    // staircase loop below propagate NaN into blockAt lookups, waitForChunksToLoad
+    // spins, and the skill silently aborts with confusing logs. Bail early with a
+    // directive message instead.
+    if (!bot.entity?.position || !isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) {
+        console.warn('[Skills] digDown: bot.entity.position not finite, aborting');
+        log(bot, 'Could not start digDown — my position is not loaded yet. Wait a moment and try again.');
+        return false;
+    }
     const prevMovements = bot.pathfinder.movements;
     try {
 
@@ -3732,6 +3742,15 @@ export async function digUp(bot, distance = 10) {
      * @example
      * await skills.digUp(bot, 12);
      **/
+
+    // Guard: bot.entity.position can be (NaN, Y, NaN) during chunk-load or respawn
+    // windows (same class as the digDown guard). Bail with a directive message
+    // rather than propagating NaN into the staircase loop.
+    if (!bot.entity?.position || !isFinite(bot.entity.position.x) || !isFinite(bot.entity.position.z)) {
+        console.warn('[Skills] digUp: bot.entity.position not finite, aborting');
+        log(bot, 'Could not start digUp — my position is not loaded yet. Wait a moment and try again.');
+        return false;
+    }
 
     // Get the bot's facing direction (snapped to nearest cardinal)
     const yaw = bot.entity.yaw;
