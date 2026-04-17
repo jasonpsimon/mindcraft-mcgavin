@@ -1093,14 +1093,23 @@ export class Agent {
     startEvents() {
         // Custom events
         this.bot.on('time', () => {
-            if (this.bot.time.timeOfDay == 0)
-            this.bot.emit('sunrise');
-            else if (this.bot.time.timeOfDay == 6000)
-            this.bot.emit('noon');
-            else if (this.bot.time.timeOfDay == 12000)
-            this.bot.emit('sunset');
-            else if (this.bot.time.timeOfDay == 18000)
-            this.bot.emit('midnight');
+            if (this.bot.time.timeOfDay == 0) {
+                this.bot.emit('sunrise');
+                // BT-9: structured log for tail visibility
+                console.log(`[World] event=time_phase phase=sunrise tick=0`);
+            }
+            else if (this.bot.time.timeOfDay == 6000) {
+                this.bot.emit('noon');
+                console.log(`[World] event=time_phase phase=noon tick=6000`);
+            }
+            else if (this.bot.time.timeOfDay == 12000) {
+                this.bot.emit('sunset');
+                console.log(`[World] event=time_phase phase=sunset tick=12000`);
+            }
+            else if (this.bot.time.timeOfDay == 18000) {
+                this.bot.emit('midnight');
+                console.log(`[World] event=time_phase phase=midnight tick=18000`);
+            }
         });
 
         let prev_health = this.bot.health;

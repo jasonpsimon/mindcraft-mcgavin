@@ -99,6 +99,8 @@ export class EventPipeline {
                 }
                 const weatherState = bot.isRaining ? 'started raining' : 'stopped raining';
                 this.agent.history?.episodic?.addEvent(`Weather: ${weatherState}`);
+                // BT-9: structured log for tail visibility
+                console.log(`[World] event=weather_change state=${bot.isRaining ? 'raining' : 'stopped_raining'}`);
             });
         });
 
@@ -108,6 +110,8 @@ export class EventPipeline {
                 if (this.agent.prompter?.deltaState) {
                     this.agent.prompter.deltaState.invalidate();
                 }
+                // BT-9: structured log for tail visibility
+                console.log(`[World] event=respawn dim=${bot.game?.dimension || 'unknown'}`);
             });
         });
 
