@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-12 startup-window ordering fix shipped — observability now captures the 45-60s zone-escape window; 7 BT-N items remain in ⏳)_
+_Last updated: 2026-04-17 (whiteboard hygiene sweep — PAUSED marker stripped, Observability header + HEAD refreshed; 7 BT-N items remain in ⏳)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17 (BT-12 startup-window ordering fix shipped — observa
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), and startup-window ordering fix (BT-12) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `3292de3`. BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry, BT-2 DamageStream, and BT-12 startup-window ordering fix all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
+- Branch: `develop` — HEAD `4de3b85`. Five observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, and BT-12 startup-window ordering fix. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -45,7 +45,7 @@ _Last updated: 2026-04-17 (BT-12 startup-window ordering fix shipped — observa
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
-**Observability (BT-1 + BT-8 live):**
+**Observability (5 modules live — BT-1, BT-2, BT-3, BT-8, BT-12):**
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
@@ -62,8 +62,6 @@ _Last updated: 2026-04-17 (BT-12 startup-window ordering fix shipped — observa
 ---
 
 ## In-progress
-
-***PAUSED TO WORK ON BETTER TOOLING.***
 
 ## Shipped — awaiting live verification
 
