@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-9 World/time event emission to log shipped `4433b1b` — three `[World]` inline log points landed in `src/agent/event_pipeline.js` (weather_change + respawn) and `src/agent/agent.js` (time_phase ×4 branches). Zero new listeners, zero polling — pure console.log alongside the already-wired event handlers and synthetic emits. Synthetic-verified all 8 code paths emit the expected format (4 phases + 2 weather states + dim-present / dim-missing fallback). Live post-restart on `4433b1b`: existing `[StateTicker]` / `[Boot]` / `[LLM]` lines unchanged, natural `[World]` emissions await next cross of tick 0/6000/12000/18000 + next rain transition + next respawn. BT-10 Entity delta stream pair-ship coming next.)_
+_Last updated: 2026-04-17 (BT-10 Entity delta stream — move-to-in-progress. Scope confirmed: three `[Entity]` log points — `spawn` inside the existing 16-block hostile/mob filter in `event_pipeline.js:68`, new `bot.on('entityGone')` and `bot.on('entityDead')` listeners gated by an `id → {name, kind}` Map populated on filtered spawn so only previously-flagged entities emit gone/died. Targeting check deferred to BT-10b. All edits in `src/agent/event_pipeline.js`. Paired with BT-9 World/time events shipped `4433b1b`.)_
 
 ---
 
@@ -66,7 +66,30 @@ _Last updated: 2026-04-17 (BT-9 World/time event emission to log shipped `4433b1
 
 ## In-progress
 
-_(empty — BT-9 World/time event emission shipped `4433b1b` and live-deployed 2026-04-17. See Recently completed. BT-10 Entity delta stream is the paired ship coming next.)_
+### BT-10. Entity delta stream — **IN PROGRESS**
+
+**Entered in-progress:** 2026-04-17 (paired with BT-9 World/time events shipped `4433b1b` earlier same session)
+
+**Shipped shape (planned):** three `[Entity]` inline log points in `src/agent/event_pipeline.js`, gated by an `id → {name, kind}` Map so ambient passives and distant hostiles stay silent.
+
+```
+[Entity] event=spawn type=<name> dist=<n.n> kind=<hostile|mob>
+[Entity] event=gone type=<name>
+[Entity] event=died type=<name>
+```
+
+**Mount points:**
+- Existing `bot.on('entitySpawn')` handler in `event_pipeline.js:68` — the 16-block hostile/mob filter already exists; add `console.log` + `Map.set(entity.id, {name, kind})` inside the filter so we only log entities that already qualified for urgent-modes-update.
+- New `bot.on('entityGone')` listener — lookup `entity.id` in the Map; emit `[Entity] event=gone type=<name>` only if hit; `Map.delete(entity.id)` on emit. Quiet for entities we never logged on spawn.
+- New `bot.on('entityDead')` listener — same Map-gated emit pattern; emit `[Entity] event=died type=<name>`; `Map.delete` on emit.
+
+**Intentional exclusions (Rule 9):** no new `observability/` module — entire BT-10 is ~30 lines of inline logic in `event_pipeline.js`. No `entityMoved` / `entitySwingArm` (20 Hz spam machines). No targeting check (would require polling `hostile.target === bot.entity` in the main loop) — deferred to BT-10b; whiteboard flagged it as a stretch. No JSONL sink (same reasoning as BT-9 — low-rate events, redundant with StateTicker `nearby_threats`).
+
+**Map bookkeeping:** keyed by `entity.id`, populated only on filtered spawn, cleared on `gone` / `died` emit. Natural bound — size ≤ number of hostiles/mobs within 16 blocks at any moment. No TTL needed; mineflayer emits `entityGone` when entities leave tracking range (this is what populates despawn in the first place).
+
+**Verification plan:** hostile mob within 16 blocks during daytime is uncommon but not impossible (creepers, zombies in caves). Night should reliably produce at least one spawn log. Gone/died depend on bot combat or entities wandering out of range. Synthetic-verify the Map gating + log format; live-verify opportunistically — document as deferred-to-natural-trigger if nothing surfaces in a reasonable window (same precedent as BT-6, BT-9).
+
+**Next in the logging roadmap:** BT-bundle remainder (mutex wait duration, file-I/O silent-swallow audit, process exit reasons). BT-3b + BT-7b remain trigger-gated.
 
 ## Shipped — awaiting live verification
 
@@ -278,24 +301,6 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 **Effort.** Moderate-mechanical — ~3–4 hours, ~72 rename-impl edits + 20-ish ad-hoc `[Skills]` line removals.
 
 **Files.** `src/agent/library/skills.js` only.
-
-### BT-10. Entity delta stream
-
-**Status:** ⏳ not started • **Priority:** medium (currently only `entitySpawn` half-handled; despawn silent; targeting silent)
-
-**Problem.** `event_pipeline.js:68` listens for `entitySpawn` but only uses it to trigger urgent modes update — no structured log. Mineflayer also emits `entityGone`, `entityMoved`, `entitySwingArm` — none handled. Bot's relationship to nearby entities (mob started targeting me, mob left range, mob died) is invisible except via periodic prompt snapshots.
-
-**Proposed solution.** Handlers for `entityGone`, a targeting check (when any hostile's `target` becomes `bot.entity`), entity death via `bot.on('entityDead', ...)` if exposed. Emit `[Entity]` log lines:
-
-```
-[Entity] event=acquired type=zombie dist=14.2 pos={...}
-[Entity] event=targeting type=zombie dist=8.1
-[Entity] event=died type=zombie killed_by=bot
-```
-
-**Blast radius.** Additive in `event_pipeline.js`.
-
-**Effort.** Small — ~60 lines.
 
 ### BT-bundle. Observability minor items
 
