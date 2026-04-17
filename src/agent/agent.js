@@ -26,6 +26,7 @@ import { AutoRecoveryEngine } from './auto_recovery.js';
 import { ChunkWait } from './chunk_wait.js';
 import { StateTicker } from '../observability/state_ticker.js';
 import { captureBootSnapshot } from '../observability/boot_snapshot.js';
+import { DamageStream } from '../observability/damage_stream.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -1075,10 +1076,21 @@ export class Agent {
         let prev_health = this.bot.health;
         this.bot.lastDamageTime = 0;
         this.bot.lastDamageTaken = 0;
+        // DamageStream (BT-2): per-hit telemetry. Attached to the Agent
+        // (not the bot) so it persists across soft reconnects; reads
+        // agent.bot only. Purely additive — the existing handler below
+        // keeps updating lastDamageTime / lastDamageTaken exactly as
+        // before; we just hand off the (prev, new) pair to the stream.
+        if (!this.damage_stream) {
+            this.damage_stream = new DamageStream(this);
+        }
         this.bot.on('health', () => {
             if (this.bot.health < prev_health) {
                 this.bot.lastDamageTime = Date.now();
                 this.bot.lastDamageTaken = prev_health - this.bot.health;
+                // BT-2: emit structured damage record. Safe to call on
+                // every decrease; the stream no-ops on non-decreases.
+                this.damage_stream?.recordDamage(prev_health, this.bot.health);
             }
             prev_health = this.bot.health;
         });
@@ -1113,6 +1125,26 @@ export class Agent {
                     const posText = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
                     this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
                     await this.long_term_memory.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                    // BT-2: attach inferred damage source to LTM so the
+                    // bot starts next session knowing what killed it,
+                    // not just where. `getLastDamage()` returns the most
+                    // recent damage record (or null if the death came
+                    // with no preceding health-decrease — rare, but
+                    // possible on a direct fatal hit). On null we still
+                    // write a place-only death entry (above) and skip
+                    // the source-carrying one.
+                    try {
+                        const lastDmg = this.damage_stream?.getLastDamage?.();
+                        if (lastDmg?.source) {
+                            await this.long_term_memory.store(
+                                `Died from ${lastDmg.source} (${lastDmg.source_category}) at ${posText} in ${dimension}`,
+                                'death',
+                                { source: lastDmg.source, source_category: lastDmg.source_category, coords: [death_pos.x, death_pos.y, death_pos.z], dimension }
+                            );
+                        }
+                    } catch (ltmErr) {
+                        console.warn('[Damage] LTM death record failed:', ltmErr.message);
+                    }
                     await this.history.episodic.addEvent(`Died: ${message} at ${posText}`);
                     this.handleMessage('system', `You died at position ${posText} in the ${dimension} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
                 } else {
