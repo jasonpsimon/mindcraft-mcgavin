@@ -213,13 +213,18 @@ export async function withLLMMetrics(context, fn) {
         const elapsedMs = Date.now() - startedAt;
         try {
             const usage = extractUsage(result) || {};
-            // tok_per_s — only meaningful when we have a token count AND
-            // non-zero elapsed. Prefer completion_tokens (decode rate);
-            // fall back to total_tokens when completion isn't exposed.
+            // tok_per_s — only meaningful when we have a POSITIVE token
+            // count AND non-zero elapsed. Prefer completion_tokens (decode
+            // rate); fall back to total_tokens when completion isn't
+            // exposed. LM Studio reports {prompt_tokens:0, total_tokens:0}
+            // for embedding calls, which would otherwise surface as
+            // tok_per_s=0 — a misleading value that implies something,
+            // when nothing is actually being measured. Treat 0 as "no
+            // rate signal" and emit `?`.
             const tokForRate = typeof usage.completion_tokens === 'number'
                 ? usage.completion_tokens
                 : usage.total_tokens;
-            const tokPerSec = (typeof tokForRate === 'number' && elapsedMs > 0)
+            const tokPerSec = (typeof tokForRate === 'number' && tokForRate > 0 && elapsedMs > 0)
                 ? Number((tokForRate / (elapsedMs / 1000)).toFixed(2))
                 : null;
             console.log(
