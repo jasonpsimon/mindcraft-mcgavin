@@ -2,17 +2,17 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-8 BootSnapshot shipped — observability foundation now covers startup config)_
+_Last updated: 2026-04-17 (full-refresh pass after BT-1 + BT-8 ship — Current state reflects observability layer + live HEAD)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b-it` via LM Studio. Bot is **running** — #22 ChunkWait verified live 2026-04-16.
-- Branch: `develop` — HEAD `f2f53aa`. #22 ChunkWait sequence landed and verified (watchdog start → ENTER on NaN → EXIT after 1.5s on position finite). Pushed to `origin/develop` 2026-04-16.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1) + BootSnapshot (BT-8) verified live 2026-04-17.
+- Branch: `develop` — HEAD `1b75c2a`. BT-1 StateTicker (1Hz structured pulse to `data/state-stream.jsonl`) and BT-8 BootSnapshot (structured `[Boot]` log line + `data/boot-snapshot.json`) both shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
-- Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules including Rule 7 "Complete the perimeter" added today), `WHITEBOARD.md` (this file).
+- Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
 **Stability:**
 - ViaBackwards holding (0 disconnects across multi-hour windows). Mutex balanced; all bot-mutating paths serialized via `withBotLock`.
@@ -45,8 +45,14 @@ _Last updated: 2026-04-17 (BT-8 BootSnapshot shipped — observability foundatio
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
+**Observability (BT-1 + BT-8 live):**
+- `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
+- **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
+- **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
+- Both modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches in either file.
+
 **Open behaviors / active monitoring:**
-- Bot currently self-prompting toward diamond tools. Spawn zone protection filters out buried ores inside the zone; AutoRecovery walks bot out and retries.
+- Bot completed its self-prompt goal cycle (JP confirmed 2026-04-17) and is currently idle at roughly (-301, 62, -38) post-spawn with a diamond + coal + stick stack. Awaiting next goal or re-kick.
 - No known crashes, no silent failures, all error paths log with structured prefixes.
 - Known issues section on the whiteboard is **empty** (self_preservation mutex stale entry audited out; memory compression closed by D1; Cannot-smelt closed by handler; mob-combat-ranged folded into #10 Layer 2).
 
