@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions shipped `0791276` — seven inline `[ContextBuilder] dropped=<section> (budget=<N>)` / `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` / `[ContextBuilder] truncated=conversation dropped=<N> turns (budget)` log points landed in `src/memory/context_builder.js`. Drops + truncations only — mode-based skips + reduced-priority inclusions intentionally excluded. Synthetic-verified 5 of 7 points (D1 commands-drop, D2 memory-drop, T1 commands-truncate, T2 conversation turn-drop, T4 examples-truncate); remaining two structurally identical. Live post-restart: existing summary line unchanged (no regression), drop/truncate emissions await natural budget pressure at runtime.)_
+_Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-progress. Scope confirmed: three `[World]` log points riding existing handlers — `weather_change` in `bot.on('rain')` block (`event_pipeline.js:95`), `respawn` in `bot.on('respawn')` block (`event_pipeline.js:106`), `time_phase` on the four synthetic emits already in `bot.on('time')` block (`agent.js:1095`). All three reuse existing fires — no new listeners, no polling. Paired ship with BT-10 Entity delta stream coming next.)_
 
 ---
 
@@ -65,7 +65,28 @@ _Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions shipped `07
 
 ## In-progress
 
-_(empty — BT-11 ContextBuilder truncation decisions shipped `0791276` and live-deployed 2026-04-17. See Recently completed.)_
+### BT-9. World/time event emission to log — **IN PROGRESS**
+
+**Entered in-progress:** 2026-04-17 (paired ship with BT-10 Entity delta stream next)
+
+**Shipped shape (planned):** three `[World]` inline log points riding existing event handlers — zero new listeners, zero polling.
+
+```
+[World] event=weather_change state=raining|stopped_raining
+[World] event=respawn dim=<overworld|nether|end>
+[World] event=time_phase phase=<sunrise|noon|sunset|midnight> tick=<timeOfDay>
+```
+
+**Mount points:**
+- `src/agent/event_pipeline.js:95` — add console.log inside existing `bot.on('rain')` handler alongside the episodic `addEvent` write.
+- `src/agent/event_pipeline.js:106` — add console.log inside existing `bot.on('respawn')` handler; read dimension from `bot.game?.dimension`.
+- `src/agent/agent.js:1095` — add one console.log per branch in the existing `bot.on('time')` block (sunrise/noon/sunset/midnight), alongside the synthetic re-emit.
+
+**Intentional exclusions (Rule 9):** no new `observability/` module — BT-9 is pure inline logging on three already-wired handlers. No polling loop for time transitions — the synthetic `sunrise`/`noon`/`sunset`/`midnight` emits at `agent.js:1095` already cover the four transitions the whiteboard entry called out.
+
+**Verification plan:** `time_phase` log lines will fire within one Minecraft day cycle (~20 real-time minutes); weather_change fires on the next rain transition; respawn fires on the next bot death/dimension change. Restart bot post-ship, tail tmux, capture at least `time_phase` naturally; document weather/respawn as deferred-to-natural-trigger if they don't surface during the verify window.
+
+**Next in the logging roadmap:** BT-10 Entity delta stream (paired ship), then BT-bundle remainder (mutex wait, file-I/O silent-swallow audit, process exit reasons).
 
 ## Shipped — awaiting live verification
 
@@ -277,16 +298,6 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 **Effort.** Moderate-mechanical — ~3–4 hours, ~72 rename-impl edits + 20-ish ad-hoc `[Skills]` line removals.
 
 **Files.** `src/agent/library/skills.js` only.
-
-### BT-9. World/time event emission to log
-
-**Status:** ⏳ not started • **Priority:** medium (already tracked internally — just needs to surface)
-
-**Problem.** `full_state.js` already reads weather, `timeOfDay`, dimension (`:47-51, :117`). `event_pipeline.js:96` handles weather change, but the only sink is `agent.history.episodic.addEvent` (text for episodic memory). Nothing goes to console log. A log tailer sees no weather transitions, no dawn/dusk, no dimension changes.
-
-**Proposed solution.** EventPipeline weather/respawn/dimension handlers already fire — add a `console.log('[World] ...')` alongside the episodic write. Time-of-day transitions (dawn/dusk) need a polled check — do it in state ticker (BT-1) or a dedicated sub-module.
-
-**Effort.** Trivial — ~10 lines in `event_pipeline.js` + ~20 lines for time transitions.
 
 ### BT-10. Entity delta stream
 
