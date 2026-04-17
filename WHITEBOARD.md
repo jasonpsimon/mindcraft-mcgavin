@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — moved to Recently completed; 4 new incident-driven items filed in To-do: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state, #24 self-prompter doesn't interrupt for player chat, #25 !addRule has no armor/durability pattern)_
+_Last updated: 2026-04-17 (BT-7 Skill lifecycle + Goal lifecycle from BT-bundle moved to In-progress — shipping as a pair per agreed logging-roadmap ordering; uniform `[Skill]` + `[Goal]` lines at top of call graph)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), and MemoryRecall (BT-4) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `ad2d639`. Six observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, and BT-4 MemoryRecall. Pushed to `origin/develop` 2026-04-17. **BT-5 AutoRecovery stats is next — currently in-progress per agreed logging-roadmap ordering.**
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), and AutoRecovery stats (BT-5) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `8897324`. Seven observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, and BT-5 AutoRecovery stats. Pushed to `origin/develop` 2026-04-17. **BT-7 Skill lifecycle + Goal lifecycle (from BT-bundle) are in-progress per agreed logging-roadmap ordering — shipping together as the lifecycle layer underneath BT-5's measurement layer.**
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -53,7 +53,7 @@ _Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — m
 - **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
 - **MemoryRecall** (BT-4): one `[MemoryRecall]` structured log line per memory retrieval (episodic + long-term + confidence/procedural) + append to `data/recall-stream.jsonl`. Fields: `subsystem, query, k, returned, backend, top_score, top_text` plus subsystem-specific extras (`category_top` for LTM; `tier, threshold_high, threshold_med, context_hash, record_count, trigger` for confidence). Backend values: `vectra`, `word-overlap`, `map`, `none`. Procedural lookups collapsed into confidence per Principle 5 (single caller — no duplicate log).
 - **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
-- All five observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, `recall_log.js`, and `retry.js`.
+- All seven observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, `recall_log.js`, `auto_recovery_stats.js`, and `retry.js`. (BT-12 is an ordering fix in `agent.js`, no new module.)
 
 **Open behaviors / active monitoring:**
 - Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
@@ -64,7 +64,53 @@ _Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — m
 
 ## In-progress
 
-_(nothing in-progress — BT-5 shipped and live-verified 2026-04-17; pick the next item from the To-do queue)_
+### BT-7. Skill lifecycle standardization
+
+**Status:** 🟡 in-progress 2026-04-17 • **Priority:** medium-high • **Ships paired with:** Goal lifecycle (below)
+
+Lifts the "what skill just ran, with what args, for how long, and did it work" question out of grep archaeology. BT-5 is the measurement layer; BT-7 is the lifecycle layer that produces what BT-5 measures against.
+
+**Plan (agreed with JP 2026-04-17):**
+- New `src/observability/skill_lifecycle.js` exports `wrapSkill(name, fn, argSelector?)`.
+- Emit format: `[Skill] name=<name> args=<json> ms=<int> outcome=<success|error|abort> notes=<optional>` + append to `data/skill-stream.jsonl`.
+- Outcome taxonomy: `success` (returns truthy/undefined), `error` (throws — includes `err_class`), `abort` (returns `false` — mineflayer "I couldn't" convention).
+- Per-skill `argSelector` allowlist so we stringify `{itemName, num}` not `bot`/entity/metadata objects (~80-char cap).
+- Apply to 10 hottest: `collectBlocks`, `searchForBlock`, `goToNearestBlock`, `pickupNearbyItems`, `smeltItem`, `craftRecipe`, `digDown`, `digUp`, `placeBlock`, `safeToss` (+ `safeTossBatch` since batch is the live disposal path).
+- BT-7b will be filed post-ship for remaining 72 skills (Principle 5 — finish migrations).
+
+**Files.** New `src/observability/skill_lifecycle.js`; targeted `export async function X = wrapSkill(...)` shim at the top of each of the 11 wrapped functions in `src/agent/library/skills.js`.
+
+**Blast radius.** Additive wrapper. No destructive ops added inside `skill_lifecycle.js` (Rule 7 self-check: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack)` in the new module returns zero). Existing `[Skills]` ad-hoc logs inside wrapped functions stay for now — Principle 5 cleanup in a follow-up once uniform `[Skill]` lines are live.
+
+**Success signal.**
+- `[Skill]` fires on at least one of the 11 wrapped skills within the first minute of live play after restart.
+- `outcome` is correctly classified on success + error + abort paths (at least one of each captured in `data/skill-stream.jsonl`).
+- No `node --check` regressions on touched files.
+- State ticker's `last_command` field unaffected.
+
+### Goal lifecycle (lifted from BT-bundle)
+
+**Status:** 🟡 in-progress 2026-04-17 • **Priority:** medium • **Ships paired with:** BT-7 above
+
+Retires ad-hoc `[GoalQueue]` logs (and the no-log paths in `start()` / `setPromptPaused()` / `stop()`) in favor of a unified `[Goal]` prefix with event semantics and duration.
+
+**Plan:**
+- `src/agent/self_prompter.js`:
+  - `start(prompt)` → `[Goal] event=set prompt="..." source=<fresh|resume>` (+ capture `this.goalStartedAt = Date.now()`).
+  - `setPromptPaused(prompt)` → `[Goal] event=set_paused prompt="..."`.
+  - `addGoal(goalText)` → `[Goal] event=queued prompt="..." queue_depth=N` (replaces existing `[GoalQueue] Added goal:` line).
+  - `advanceGoal()` → `[Goal] event=advanced from="..." to="..." queue_depth=N` (replaces existing `[GoalQueue] Advancing to next goal:` line; resets `goalStartedAt`).
+  - `stop()` loop-exit → `[Goal] event=stopped reason=<auto|manual|interrupt> prompt="..." duration_ms=<elapsed>`.
+- `src/agent/commands/actions.js` `!endGoal.perform` → `[Goal] event=completed prompt="..." duration_ms=<elapsed>` before `advanceGoal()`.
+- `this.goalStartedAt` is in-process only — no memory.json serialization change.
+
+**Blast radius.** Six logging touch points, all in `self_prompter.js` + `actions.js`. No existing callers read the `[GoalQueue]` prefix. StateTicker's `goal` field reads `self_prompter.prompt` — unaffected. Persistence (`self_prompt` / `self_prompting_state` in memory.json) unaffected.
+
+**Success signal.**
+- `[Goal] event=set` fires on `!goal` chat command and on restart-resume.
+- `[Goal] event=queued` fires on `!addGoal`.
+- `[Goal] event=completed duration_ms=<int>` fires on `!endGoal`, with duration plausibly matching wall-clock time since goal-set.
+- `grep '\[GoalQueue\]' src/` returns zero matches (prefix retired cleanly).
 
 ## Shipped — awaiting live verification
 
@@ -266,25 +312,6 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 
 **Deferred.** Path visualization (top-down 2D) — separate work, consumes this stream.
 
-### BT-7. Skill lifecycle standardization
-
-**Status:** ⏳ not started • **Priority:** medium-high (makes every skill trivially analyzable; success-rate queries without grep archaeology)
-
-**Problem.** `skills.js` has 19 `[Skill]`/`[Skills]` prefixed lines across 82 exported skill functions (~4500 lines). Some skills are verbosely instrumented (`SpawnEscape`, `SafeToss`), others near-silent. No uniform "skill X was called with args Y, took Z ms, returned outcome W."
-
-**Proposed solution.** A `wrapSkill(name, fn)` decorator that piggybacks on the existing `ProceduralMemory.recordOutcome` pattern. Every wrapped call emits:
-
-```
-[Skill] name=collectBlocks args={type:iron_ore,count:5} ms=8420 outcome=success notes=collected:5
-```
-
-Apply progressively — don't retrofit all 82 skills in one PR. Start with the 10 hottest: `collectBlocks`, `searchForBlock`, `goToNearestBlock`, `pickupNearbyItems`, `smeltItem`, `craftRecipe`, `digDown`, `digUp`, `placeBlock`, `safeToss`.
-
-**Blast radius.** Additive wrapper per skill. Existing ad-hoc logs can stay or be trimmed as standardization progresses.
-
-**Effort.** Medium — ~30 lines wrapper + ~5 min per skill to apply (10 skills ≈ 1 hour).
-
-
 ### BT-9. World/time event emission to log
 
 **Status:** ⏳ not started • **Priority:** medium (already tracked internally — just needs to surface)
@@ -327,10 +354,9 @@ Apply progressively — don't retrofit all 82 skills in one PR. Start with the 1
 
 **Status:** ⏳ not started • **Priority:** mixed (small, standalone; ship any/all as convenient) • **Source:** 2026-04-16 observability audit
 
-Grouped because each is small and standalone:
+_Goal lifecycle bullet lifted out 2026-04-17 — shipping paired with BT-7 (see In-progress). Remainder:_
 
 - **Mutex wait duration.** `bot_mutex.js:82` logs queue depth on acquire; add elapsed-wait-ms when acquire follows a queued wait. ~3 lines.
-- **Goal lifecycle.** Goal-set and goal-complete emit effectively nothing today (`prompter.js:586` only logs failures). Add `[Goal] set=mine_iron` / `[Goal] completed=mine_iron ms=...`. ~20 lines.
 - **File I/O silent-swallow scan.** 27 `readFileSync` + 8 async `fs.readFile/writeFile` calls. Audit each `catch` branch for "logged or swallowed." Already noted in L3 audit (April 15). Risk: silent memory-save failures. Extends #15 (`full_state.js` sweep, shipped) to the whole codebase.
 - **Process exit reasons.** `agent.js cleanKill` + `process.on('exit', ...)` — log the exit reason as a structured line so session replay sees the end clearly.
 
