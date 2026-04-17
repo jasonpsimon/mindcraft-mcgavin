@@ -11,6 +11,7 @@
  */
 
 import { ProceduralMemory } from './procedural_memory.js';
+import { logRecall } from '../observability/recall_log.js';
 
 // Decision levels
 export const CONFIDENCE_HIGH = 'HIGH';
@@ -67,54 +68,90 @@ export class ConfidenceEngine {
         const contextHash = this.procedural.buildContextKey(goal, triggerMessage, stateSnapshot);
         const entry = this.procedural.lookup(contextHash);
 
-        // No memory of this context
+        // BT-4 (option A): single-exit restructure so one [MemoryRecall]
+        // line fires per evaluate() call. Each branch still bumps exactly
+        // one stats counter and populates a {level, action, confidence,
+        // contextHash} result — shape is consumed by agent.js:856 and by
+        // buildSuggestionFromResult(). Checked by diff: every
+        // stats.X++ / return pair in the 4-return original maps 1:1
+        // to a stats.X++ / result = assignment below, branch order
+        // preserved. Post-deploy invariant:
+        //   stats.totalDecisions === bypassed + suggested + fullReasoning
+        let result;
         if (!entry) {
+            // No memory of this context
             this.stats.fullReasoning++;
-            return {
+            result = {
                 level: CONFIDENCE_LOW,
                 action: null,
                 confidence: 0,
                 contextHash
             };
+        } else {
+            const confidence = entry._effectiveConfidence;
+            const isReliable = this.procedural.isReliable(entry);
+
+            // Check if the cached command is in the never-bypass list
+            const commandName = this._extractCommandName(entry.command);
+            const canBypass = commandName && !this.neverBypass.has(commandName);
+
+            if (confidence >= this.highThreshold && isReliable && canBypass) {
+                // HIGH confidence + reliable + safe to bypass
+                this.stats.bypassed++;
+                result = {
+                    level: CONFIDENCE_HIGH,
+                    action: entry.command,
+                    confidence,
+                    contextHash
+                };
+            } else if (confidence >= this.mediumThreshold && isReliable) {
+                // MEDIUM confidence — suggest but still call LLM
+                this.stats.suggested++;
+                result = {
+                    level: CONFIDENCE_MEDIUM,
+                    action: entry.command,
+                    confidence,
+                    contextHash
+                };
+            } else {
+                // LOW confidence — full LLM reasoning
+                this.stats.fullReasoning++;
+                result = {
+                    level: CONFIDENCE_LOW,
+                    action: entry.command, // still available for reference, but not used
+                    confidence,
+                    contextHash
+                };
+            }
         }
 
-        const confidence = entry._effectiveConfidence;
-        const isReliable = this.procedural.isReliable(entry);
-
-        // Check if the cached command is in the never-bypass list
-        const commandName = this._extractCommandName(entry.command);
-        const canBypass = commandName && !this.neverBypass.has(commandName);
-
-        // HIGH confidence + reliable + safe to bypass
-        if (confidence >= this.highThreshold && isReliable && canBypass) {
-            this.stats.bypassed++;
-            return {
-                level: CONFIDENCE_HIGH,
-                action: entry.command,
-                confidence,
-                contextHash
-            };
+        // BT-4: one [MemoryRecall] line per evaluate() call. try/catch
+        // is defense-in-depth — logRecall is already non-throwing, but
+        // a future refactor breaking that contract must not propagate
+        // into the agent hot path.
+        try {
+            logRecall({
+                subsystem: 'confidence',
+                query: goal || '',
+                k: 1,                     // procedural lookup is exact-match, not top-K
+                returned: entry ? 1 : 0,
+                backend: 'map',           // procedural memory is a hash map, not a vector index
+                top_score: result.confidence,
+                top_text: entry?.command,
+                extras: {
+                    trigger: triggerMessage || '',
+                    tier: result.level,
+                    threshold_high: this.highThreshold,
+                    threshold_med: this.mediumThreshold,
+                    context_hash: (contextHash || '').slice(0, 12),
+                    record_count: this.procedural.entries.size,
+                },
+            });
+        } catch (err) {
+            console.warn('[ConfidenceEngine] recall log failed:', err?.message ?? err);
         }
 
-        // MEDIUM confidence — suggest but still call LLM
-        if (confidence >= this.mediumThreshold && isReliable) {
-            this.stats.suggested++;
-            return {
-                level: CONFIDENCE_MEDIUM,
-                action: entry.command,
-                confidence,
-                contextHash
-            };
-        }
-
-        // LOW confidence — full LLM reasoning
-        this.stats.fullReasoning++;
-        return {
-            level: CONFIDENCE_LOW,
-            action: entry.command, // still available for reference, but not used
-            confidence,
-            contextHash
-        };
+        return result;
     }
 
     /**

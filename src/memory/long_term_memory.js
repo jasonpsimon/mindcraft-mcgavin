@@ -22,6 +22,7 @@
  */
 
 import { formatAge, wordOverlapScore, initVectraIndex } from './memory_utils.js';
+import { logRecall } from '../observability/recall_log.js';
 
 const VALID_CATEGORIES = ['place', 'resource', 'player', 'strategy', 'fact'];
 
@@ -189,9 +190,16 @@ export class LongTermMemory {
      */
     async recall(query, k = null, category = null) {
         k = k || this.topK;
-        if (this.facts.size === 0) return [];
+        if (this.facts.size === 0) {
+            // BT-4: empty corpus is a distinct retrieval outcome.
+            logRecall({ subsystem: 'long_term', query, k, returned: 0, backend: 'none', extras: { category: category || null } });
+            return [];
+        }
 
-        // Try Vectra semantic search
+        // Try Vectra semantic search. BT-4: hoist the filtered result
+        // out of the try block so logRecall fires outside the catch
+        // (symmetric with episodic retrieve).
+        let vectraFiltered = null;
         if (this.embeddingModel && this._indexReady && this.index) {
             try {
                 const queryVector = await this.embeddingModel.embed(query);
@@ -209,14 +217,39 @@ export class LongTermMemory {
                     filtered = filtered.filter(r => r.category === category);
                 }
 
-                return filtered.slice(0, k);
+                vectraFiltered = filtered.slice(0, k);
             } catch (err) {
                 console.warn('[LongTermMemory] Vectra query failed, using word overlap:', err.message);
             }
         }
 
+        if (vectraFiltered) {
+            logRecall({
+                subsystem: 'long_term', query, k,
+                returned: vectraFiltered.length, backend: 'vectra',
+                top_score: vectraFiltered[0]?.score,
+                top_text: vectraFiltered[0]?.text,
+                extras: {
+                    category: category || null,
+                    category_top: vectraFiltered[0]?.category || null,
+                },
+            });
+            return vectraFiltered;
+        }
+
         // Fallback: word overlap on cache
-        return this._wordOverlapRecall(query, k, category);
+        const fallback = this._wordOverlapRecall(query, k, category);
+        logRecall({
+            subsystem: 'long_term', query, k,
+            returned: fallback.length, backend: 'word-overlap',
+            top_score: fallback[0]?.score,
+            top_text: fallback[0]?.text,
+            extras: {
+                category: category || null,
+                category_top: fallback[0]?.category || null,
+            },
+        });
+        return fallback;
     }
 
     /**

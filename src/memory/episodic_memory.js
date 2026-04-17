@@ -17,6 +17,7 @@
  */
 
 import { formatAge, wordOverlapScore, initVectraIndex } from './memory_utils.js';
+import { logRecall } from '../observability/recall_log.js';
 
 export class EpisodicMemory {
     constructor(agentName, embeddingModel = null, options = {}) {
@@ -136,16 +137,26 @@ export class EpisodicMemory {
      */
     async retrieve(query, k = null) {
         k = k || this.topK;
-        if (this.episodeCache.length === 0) return [];
+        if (this.episodeCache.length === 0) {
+            // BT-4: empty cache is a distinct retrieval outcome. Log it
+            // so a silent empty retrieve doesn't look like no retrieve
+            // happened at all.
+            logRecall({ subsystem: 'episodic', query, k, returned: 0, backend: 'none' });
+            return [];
+        }
 
-        // Try Vectra semantic search first
+        // Try Vectra semantic search first. BT-4: hoist the mapped
+        // result out of the try block so logRecall fires outside the
+        // catch — keeps the log call defensively outside any path that
+        // might be misclassified as "Vectra query failed."
+        let vectraMapped = null;
         if (this.embeddingModel && this._indexReady && this.index) {
             try {
                 const queryVector = await this.embeddingModel.embed(query);
                 const results = await this.index.queryItems(queryVector, k);
 
                 if (results && results.length > 0) {
-                    return results.map(r => ({
+                    vectraMapped = results.map(r => ({
                         id: r.item.id,
                         text: r.item.metadata.text,
                         timestamp: r.item.metadata.timestamp,
@@ -158,8 +169,25 @@ export class EpisodicMemory {
             }
         }
 
+        if (vectraMapped) {
+            logRecall({
+                subsystem: 'episodic', query, k,
+                returned: vectraMapped.length, backend: 'vectra',
+                top_score: vectraMapped[0]?.score,
+                top_text: vectraMapped[0]?.text,
+            });
+            return vectraMapped;
+        }
+
         // Fallback: word-overlap scoring on cache
-        return this._wordOverlapRetrieval(query, k);
+        const fallback = this._wordOverlapRetrieval(query, k);
+        logRecall({
+            subsystem: 'episodic', query, k,
+            returned: fallback.length, backend: 'word-overlap',
+            top_score: fallback[0]?.score,
+            top_text: fallback[0]?.text,
+        });
+        return fallback;
     }
 
     /**
