@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (whiteboard hygiene sweep — PAUSED marker stripped, Observability header + HEAD refreshed; 7 BT-N items remain in ⏳)_
+_Last updated: 2026-04-17 (BT-4 picked up — moved to in-progress; 6 BT-N items remain in ⏳)_
 
 ---
 
@@ -63,6 +63,47 @@ _Last updated: 2026-04-17 (whiteboard hygiene sweep — PAUSED marker stripped, 
 
 ## In-progress
 
+### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
+
+**Status:** 🟡 in-progress (picked up 2026-04-17) • **Priority:** high (currently impossible to verify Principle 2 — "memory is cognition" — is actually firing)
+
+**Absorbs G step 1 (ConfidenceEngine.evaluate instrumentation).** G's audit step 1 proposed identical `ConfidenceEngine.evaluate()` logging. Covered here as a subset of the general retrieval-visibility work; G becomes a pure threshold-tuning item that depends on BT-4 shipping.
+
+**Problem.** All three memory subsystems log *writes* but retrievals are silent unless they error. For a successful retrieval call, we see nothing: no query, no top-K results, no similarity scores. We cannot tell whether memory contributed to the current response.
+
+**Approach (post-recon refinement).**
+
+1. **New module:** `src/observability/recall_log.js` — module-level `logRecall({subsystem, query, k, returned, backend, top_score, top_text, ...extras})` function (stateless, matches `captureBootSnapshot`'s shape). One `[MemoryRecall]` log line + append to `data/recall-stream.jsonl`. Error-throttled file sink (10s window, BT-2 pattern). `query` and `top_text` truncated to 80 chars each. Settings flag `settings.recall_log.enabled` (default true) kills it globally if needed.
+
+2. **Three instrumentation sites (not four — procedural collapses into confidence):**
+   - `src/memory/episodic_memory.js:retrieve` — log at both exit paths (Vectra success, word-overlap fallback), emitting `backend=vectra` or `backend=word-overlap`.
+   - `src/memory/long_term_memory.js:recall` — same, 2 exits, plus `category_top` extra.
+   - `src/memory/confidence_engine.js:evaluate` — **option A restructure** to single exit, emit one `[MemoryRecall] subsystem=confidence tier=... confidence=... context_hash=... record_count=...` per decision.
+
+3. **Procedural rationale (Principle 5 / Rule 9).** `ProceduralMemory.lookup()` has exactly one caller (`confidence_engine.js:68`). Instrumenting `evaluate()` captures 100% of procedural lookups with the richer decision context (tier, thresholds). A separate procedural log line would duplicate once per LLM turn.
+
+**Perimeter (Rule 7) — retrieval callsite map:**
+- Episodic retrieve: `episodic_memory.js:137` (2 exits) + internal via `getFormattedMemories` (prompter.js:257, 377).
+- LTM recall: `long_term_memory.js:190` (2 exits) + internal via `getFormattedKnowledge` (prompter.js:385).
+- Procedural lookup: `procedural_memory.js:126` — single caller at `confidence_engine.js:68`.
+- Confidence evaluate: `confidence_engine.js:63` — single caller at `agent.js:856`. Return fields consumed by caller: `.level, .confidence, .action, .contextHash` (verified by grep) + `buildSuggestionFromResult` reads `.action, .confidence`.
+- `coder.js:197 .evaluate()` is unrelated (`compartment.evaluate(src)` — vm sandbox, not ConfidenceEngine).
+
+**Option A verification homework (baked into per-BT loop):**
+1. Stats equality check post-deploy: `totalDecisions === bypassed + suggested + fullReasoning` after 5+ turns.
+2. Result shape preservation: every branch still sets `{level, action, confidence, contextHash}`.
+3. Throw-safety: `logRecall` calls wrapped in try/catch so failures can't break agent per-turn flow.
+4. Rule 7 sweep: new module + confidence_engine.js have zero bot-mutation verbs.
+5. Diff hygiene: 4-return → 1-return, branch order preserved, variable names preserved.
+
+**Blast radius.** Additive read-side instrumentation + one confined control-flow restructure in `evaluate()`. No behavior change in any of the three subsystems.
+
+**Success signal.** Log shows interleaved `[MemoryRecall] subsystem={episodic,long_term,confidence}` lines. Memory → prompt → response is traceable. `data/recall-stream.jsonl` populates. Unblocks G's threshold-tuning with real distribution data.
+
+**Philosophy alignment.** Principle 2 (observability of cognition layer). Principle 8 (fail informatively).
+
+**Effort.** ~120 lines across 4 files.
+
 ## Shipped — awaiting live verification
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
@@ -116,38 +157,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 **Blast radius (per adapter).** Localized to that one file. `withLLMMetrics` is already shipped and proven by lmstudio.
 
 **Effort.** Small-per-adapter (~15 min each) × 19 = ~4 hours once credentials exist.
-
-### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
-
-**Status:** ⏳ not started • **Priority:** high (currently impossible to verify Principle 2 — "memory is cognition" — is actually firing)
-
-**Absorbs G step 1 (ConfidenceEngine.evaluate instrumentation).** G's audit step 1 proposed identical `ConfidenceEngine.evaluate()` logging. Moved here as a subset of the general retrieval-visibility work; G becomes a pure threshold-tuning item that depends on BT-4 shipping.
-
-**Problem.** All three memory subsystems log *writes* (`[EpisodicMemory] Stored episode`, `[ProceduralMemory] Recorded outcome`, `[SeedMemory] Loaded N facts`). Retrievals are silent unless they error (`episodic_memory.js:157` and `long_term_memory.js:214` only log on Vectra fallback to word overlap). For a successful retrieval call, we see nothing: no query, no top-K results, no similarity scores. We cannot tell whether memory contributed to the current response.
-
-**Root cause.** Retrieval treated as transparent (embed → query → splice into prompt). Nobody instrumented the decision path.
-
-**Proposed solution.** Add `[MemoryRecall]` log line + JSONL record at each retrieval exit:
-
-```
-[MemoryRecall] subsystem=episodic query="mine iron ore" k=3 returned=2 backend=vectra top_score=0.82 top_text="Found iron at -253 prev session..."
-```
-
-Truncate `top_text` to 80 chars. Always log subsystem + k + backend (vectra vs word-overlap fallback) to see which path fired. Four instrumentation sites: `episodic_memory.js:137` (`retrieve`), `long_term_memory.js:retrieve`, `procedural_memory` lookup, and `confidence_engine.js evaluate()` (HIGH/MED/LOW decision + score + context key + threshold in effect).
-
-**Implementation plan.**
-1. Helper `src/observability/recall_log.js` to standardize format + JSONL output.
-2. Add `log_recall({subsystem, query, k, results})` before `return` in each retrieval function.
-3. Add `log_evaluation({context_key, confidence, tier, threshold, record_count})` in `ConfidenceEngine.evaluate()`.
-4. Output: log line + append to `data/recall-stream.jsonl`.
-
-**Blast radius.** One edit each in four functions. Pure read-side instrumentation, no behavior change.
-
-**Success signal.** Log shows `[MemoryRecall]` lines interleaved with `[ContextBuilder]`. Memory → prompt → response is traceable. Unblocks G's threshold-tuning with real distribution data.
-
-**Philosophy alignment.** Principle 2 (observability of cognition layer). Principle 8.
-
-**Effort.** Small — ~50 lines across four files.
 
 ### BT-5. AutoRecovery match/miss rate
 
