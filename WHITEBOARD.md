@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-progress. Scope confirmed: three `[World]` log points riding existing handlers — `weather_change` in `bot.on('rain')` block (`event_pipeline.js:95`), `respawn` in `bot.on('respawn')` block (`event_pipeline.js:106`), `time_phase` on the four synthetic emits already in `bot.on('time')` block (`agent.js:1095`). All three reuse existing fires — no new listeners, no polling. Paired ship with BT-10 Entity delta stream coming next.)_
+_Last updated: 2026-04-17 (BT-9 World/time event emission to log shipped `4433b1b` — three `[World]` inline log points landed in `src/agent/event_pipeline.js` (weather_change + respawn) and `src/agent/agent.js` (time_phase ×4 branches). Zero new listeners, zero polling — pure console.log alongside the already-wired event handlers and synthetic emits. Synthetic-verified all 8 code paths emit the expected format (4 phases + 2 weather states + dim-present / dim-missing fallback). Live post-restart on `4433b1b`: existing `[StateTicker]` / `[Boot]` / `[LLM]` lines unchanged, natural `[World]` emissions await next cross of tick 0/6000/12000/18000 + next rain transition + next respawn. BT-10 Entity delta stream pair-ship coming next.)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `0791276`. Eleven observability items shipped on `develop` today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), Goal lifecycle, BT-6 Pathfinder telemetry, and BT-11 ContextBuilder truncation decisions. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 skills + Goal + BT-6 paths) sits underneath the measurement layer (BT-5) as the two-tier observability story, with BT-11 closing the prompt-construction counterpart alongside BT-4.**
+- Branch: `develop` — HEAD `4433b1b`. Twelve observability items shipped on `develop` today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), Goal lifecycle, BT-6 Pathfinder telemetry, BT-11 ContextBuilder truncation decisions, and BT-9 World/time events. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 skills + Goal + BT-6 paths) sits underneath the measurement layer (BT-5) as the two-tier observability story, with BT-11 closing the prompt-construction counterpart alongside BT-4. BT-9 surfaces the ambient world state (weather / time / dimension) that was previously invisible to log tailers.**
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -45,7 +45,7 @@ _Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
-**Observability (7 modules + 4 inline-logging shipments live — BT-1, BT-2, BT-3, BT-4, BT-5, BT-6, BT-7, BT-8, BT-11, BT-12, Goal):**
+**Observability (7 modules + 5 inline-logging shipments live — BT-1, BT-2, BT-3, BT-4, BT-5, BT-6, BT-7, BT-8, BT-9, BT-11, BT-12, Goal):**
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
@@ -54,7 +54,8 @@ _Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-
 - **MemoryRecall** (BT-4): one `[MemoryRecall]` structured log line per memory retrieval (episodic + long-term + confidence/procedural) + append to `data/recall-stream.jsonl`. Fields: `subsystem, query, k, returned, backend, top_score, top_text` plus subsystem-specific extras (`category_top` for LTM; `tier, threshold_high, threshold_med, context_hash, record_count, trigger` for confidence). Backend values: `vectra`, `word-overlap`, `map`, `none`. Procedural lookups collapsed into confidence per Principle 5 (single caller — no duplicate log).
 - **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
 - **ContextBuilder truncation decisions (BT-11):** seven inline log points in `src/memory/context_builder.js` — three drops (`dropped=commands|memory|examples (budget=<N>)`) and four truncations (`truncated=commands|memory|examples <from>→<to> chars (budget)` + `truncated=conversation dropped=<N> turns (budget)`). Fires only under budget pressure, which preserves signal-to-noise. Pairs with BT-4 MemoryRecall to close the prompt-construction loop: BT-4 shows what memory was retrieved; BT-11 shows what the budget kept vs. cut.
-- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/observability/path_telemetry.js`, `src/agent/auto_recovery.js` (BT-5 stats), `src/utils/retry.js` (BT-3 `withLLMMetrics`), and `src/memory/context_builder.js` (BT-11 inline decision logging). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation.
+- **World/time events (BT-9):** three inline `[World]` log points — `event=weather_change state=raining|stopped_raining` in `event_pipeline.js` (`bot.on('rain')` block), `event=respawn dim=<dimension>` in `event_pipeline.js` (`bot.on('respawn')` block), `event=time_phase phase=sunrise|noon|sunset|midnight tick=<0|6000|12000|18000>` in `agent.js` `startEvents()` (`bot.on('time')` block, one line per synthetic emit branch). Reuses existing fires — no new listeners, no polling, no new observability module.
+- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/observability/path_telemetry.js`, `src/agent/auto_recovery.js` (BT-5 stats), `src/utils/retry.js` (BT-3 `withLLMMetrics`), `src/memory/context_builder.js` (BT-11 inline decision logging), and `src/agent/event_pipeline.js` (BT-9 inline world events — new console.log calls sit alongside existing reads, zero bot mutation added). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation. BT-9 time_phase logging is inline in `agent.js` `startEvents()`, alongside existing synthetic event re-emits; the four branches add console.log only.
 
 **Open behaviors / active monitoring:**
 - Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
@@ -65,28 +66,7 @@ _Last updated: 2026-04-17 (BT-9 World/time event emission to log — move-to-in-
 
 ## In-progress
 
-### BT-9. World/time event emission to log — **IN PROGRESS**
-
-**Entered in-progress:** 2026-04-17 (paired ship with BT-10 Entity delta stream next)
-
-**Shipped shape (planned):** three `[World]` inline log points riding existing event handlers — zero new listeners, zero polling.
-
-```
-[World] event=weather_change state=raining|stopped_raining
-[World] event=respawn dim=<overworld|nether|end>
-[World] event=time_phase phase=<sunrise|noon|sunset|midnight> tick=<timeOfDay>
-```
-
-**Mount points:**
-- `src/agent/event_pipeline.js:95` — add console.log inside existing `bot.on('rain')` handler alongside the episodic `addEvent` write.
-- `src/agent/event_pipeline.js:106` — add console.log inside existing `bot.on('respawn')` handler; read dimension from `bot.game?.dimension`.
-- `src/agent/agent.js:1095` — add one console.log per branch in the existing `bot.on('time')` block (sunrise/noon/sunset/midnight), alongside the synthetic re-emit.
-
-**Intentional exclusions (Rule 9):** no new `observability/` module — BT-9 is pure inline logging on three already-wired handlers. No polling loop for time transitions — the synthetic `sunrise`/`noon`/`sunset`/`midnight` emits at `agent.js:1095` already cover the four transitions the whiteboard entry called out.
-
-**Verification plan:** `time_phase` log lines will fire within one Minecraft day cycle (~20 real-time minutes); weather_change fires on the next rain transition; respawn fires on the next bot death/dimension change. Restart bot post-ship, tail tmux, capture at least `time_phase` naturally; document weather/respawn as deferred-to-natural-trigger if they don't surface during the verify window.
-
-**Next in the logging roadmap:** BT-10 Entity delta stream (paired ship), then BT-bundle remainder (mutex wait, file-I/O silent-swallow audit, process exit reasons).
+_(empty — BT-9 World/time event emission shipped `4433b1b` and live-deployed 2026-04-17. See Recently completed. BT-10 Entity delta stream is the paired ship coming next.)_
 
 ## Shipped — awaiting live verification
 
@@ -633,6 +613,48 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-9 World/time event emission to log: three inline `[World]` lines shipped ✅
+
+Shipped `4433b1b` same day on top of BT-11. Before BT-9, a log tailer watching the bot was blind to three categories of ambient world state: weather transitions (existing `bot.on('rain')` handler only wrote to episodic memory), dimension/respawn transitions (existing `bot.on('respawn')` handler only invalidated caches), and time-of-day phase transitions (existing `bot.on('time')` handler only re-emitted synthetic `sunrise`/`noon`/`sunset`/`midnight` events with nothing reading them). The underlying detection was already correct in each case — the only missing piece was `console.log`. BT-9 adds exactly that, inline, with zero new listeners and zero polling.
+
+**Shipped shape — three log-point groups:**
+
+```
+[World] event=weather_change state=raining|stopped_raining
+[World] event=respawn dim=<overworld|nether|end>
+[World] event=time_phase phase=<sunrise|noon|sunset|midnight> tick=<0|6000|12000|18000>
+```
+
+**Mount points (where each line lives):**
+- `src/agent/event_pipeline.js` `bot.on('rain')` block — `console.log` for `weather_change` placed after the existing `episodic.addEvent` call, reading `bot.isRaining` for the state.
+- `src/agent/event_pipeline.js` `bot.on('respawn')` block — `console.log` for `respawn` placed after the existing `deltaState.invalidate()`, reading `bot.game?.dimension` with `'unknown'` fallback for the pre-spawn window.
+- `src/agent/agent.js` `startEvents()` `bot.on('time')` block — one `console.log` per branch (sunrise/noon/sunset/midnight), placed after each synthetic `bot.emit(...)`. The four branches got brace-wrapped from one-line `if` form to multi-line so the second statement sits cleanly inside each branch.
+
+**Intentional exclusions (Rule 9 simplicity):**
+- **No new `observability/` module.** The gap was literally `console.log` calls alongside already-correct detection. A new module with singleton state, configure hooks, throttled error paths, etc. would have been overbuilt for three one-liner emissions.
+- **No polling loop for time transitions.** The whiteboard entry originally said "Time-of-day transitions (dawn/dusk) need a polled check — do it in state ticker (BT-1) or a dedicated sub-module." — but `agent.js` `startEvents()` already had the four synthetic `bot.emit('sunrise'|'noon'|'sunset'|'midnight')` calls wired on `bot.on('time')`. Reusing them was strictly simpler than adding a second detection path, and the event-driven approach avoids the 1 Hz polling cost. Acknowledged trade-off: the existing equality check (`timeOfDay == 0|6000|12000|18000`) only fires if the server's time update lands exactly on those values; it can miss transitions if the tick increment skips the boundary. That fragility pre-dates BT-9 and is not ours to fix in this ship — filing a note under BT-bundle for a later pass if the gap proves noticeable in practice.
+- **No `[World]` JSONL sink.** Other observability modules ship a paired `data/*-stream.jsonl` for structured ingestion; BT-9 emits console-only. World events are low-rate (weather changes rarely, respawns rarely, 4 time phases per ~20-minute MC day) and the episodic memory + StateTicker already capture dimension/weather in structured form. A third sink would be redundant. If later needed, it's additive to add.
+- **No `entityMoved` / `entitySwingArm` handlers.** Those are BT-10 territory — ship coming next as the paired partner.
+
+**Verification — synthetic-proven, live-deferred to natural trigger (same precedent as BT-6):**
+- **Synthetic:** a 16-line Node script mirroring all four time branches + both weather states + dim-present / dim-missing fallback exercised every code path. All 8 emitted the expected `[World] event=<x> ...` format.
+- **Live post-restart:** bot relaunched on HEAD `4433b1b` via `start.sh` (the detached-tmux pattern that works). `[StateTicker]` 1 Hz pulses, `[Boot]` line, `[LLM]` lines all still emit unchanged — zero regression on the existing observability stream. Natural `[World]` emissions await the next cross of tick 0/6000/12000/18000 (within ~20 real-time minutes of a MC day cycle), next rain transition, and next bot death/dimension change. BT-6 set the precedent for accepting "proven synthetically, awaiting natural trigger" as shipped verification.
+
+**Rule alignment.**
+- Rule 5 — plan presented and approved before any edit (reusable fires, no polling, no new module).
+- Rule 7 — grep on `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` against `src/agent/event_pipeline.js` returns zero matches; the three new `console.log` calls add zero bot mutation. `src/agent/agent.js` `startEvents()` adds four `console.log` calls alongside existing `bot.emit` calls — emits are re-emits of the bot's own events, not mutations of game state.
+- Rule 9 — the ship is 4 insertions in `event_pipeline.js` (one per handler + 2 comments) and a brace-wrap refactor in `agent.js` `startEvents()` adding 4 `console.log` calls across 4 branches. 21 insertions / 8 deletions total across 2 files. No new module, no new listener, no new polling. Could not be simpler without also being silent.
+
+**Philosophy alignment.** Principle 8 (fail / emit loudly — three previously-invisible transition classes now leave greppable structured lines). Principle 5 (finish the migration — the handlers already existed; BT-9 finishes them by adding the log sink that was missing). Principle 1 (reduce LLM reliance — a human-facing log tailer or session-replay reader can now answer "was it raining?", "did it just turn midnight?", "did it hit the nether?" without loading the JSON stream).
+
+**Downstream unblock.** BT-9 is half of the BT-9+BT-10 logging pair. BT-10 (Entity delta stream) ships next — same session. Together they complete the "ambient awareness" logging tier that sits alongside the existing per-action lifecycle tier (BT-7 skills, Goal, BT-6 paths).
+
+**Files shipped (`4433b1b`, 21 insertions / 8 deletions, 2 files):**
+- `src/agent/event_pipeline.js` — 4 insertions (2 comments + `console.log` for weather, `console.log` for respawn).
+- `src/agent/agent.js` — 17 insertions / 8 deletions (4 brace-wraps + 4 `console.log` for time_phase + 1 comment). Diff is larger than strictly required for 4 log lines because the original one-line `if` format only permitted one statement per branch; brace-wrapping each branch adds newlines and braces to accommodate the second statement. Rule 10 surgical — each changed line traces directly to adding `time_phase` logging.
+
+**Next in the logging roadmap:** BT-10 Entity delta stream (paired ship, same session). Then BT-bundle remainder (mutex wait duration, file-I/O silent-swallow audit, process exit reasons). BT-3b (19 adapter sweep) and BT-7b (~72 remaining skill wraps) remain trigger-gated.
 
 ### 2026-04-17 — BT-11 ContextBuilder truncation decisions: inline drop/truncate log points shipped ✅
 
