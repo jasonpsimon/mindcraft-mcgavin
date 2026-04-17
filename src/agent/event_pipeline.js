@@ -42,6 +42,13 @@ export class EventPipeline {
             pollCycles: 0,
             eventTypes: {}
         };
+
+        // BT-10: track entities we logged on spawn so gone/died only emit
+        // for entities previously flagged as relevant (hostile/mob within
+        // 16 blocks). Keyed by entity.id. Naturally bounded; cleared on
+        // gone/died emit. No TTL — mineflayer emits entityGone when an
+        // entity leaves tracking range, which is what clears the Map.
+        this._trackedEntities = new Map();
     }
 
     /**
@@ -72,9 +79,31 @@ export class EventPipeline {
                     const dist = entity.position?.distanceTo(bot.entity?.position);
                     if (dist && dist < 16) {
                         this._urgentModesUpdate();
+                        // BT-10: structured log + track for gone/died correlation
+                        const name = entity.name || entity.displayName || 'unknown';
+                        console.log(`[Entity] event=spawn type=${name} dist=${dist.toFixed(1)} kind=${entity.type}`);
+                        this._trackedEntities.set(entity.id, { name, kind: entity.type });
                     }
                 }
             });
+        });
+
+        // BT-10: entity leaves tracking range — log only if we flagged it on spawn
+        bot.on('entityGone', (entity) => {
+            const tracked = this._trackedEntities.get(entity.id);
+            if (tracked) {
+                console.log(`[Entity] event=gone type=${tracked.name}`);
+                this._trackedEntities.delete(entity.id);
+            }
+        });
+
+        // BT-10: entity death — log only if we flagged it on spawn
+        bot.on('entityDead', (entity) => {
+            const tracked = this._trackedEntities.get(entity.id);
+            if (tracked) {
+                console.log(`[Entity] event=died type=${tracked.name}`);
+                this._trackedEntities.delete(entity.id);
+            }
         });
 
         // Block update at player position: lava, water, sand falling
