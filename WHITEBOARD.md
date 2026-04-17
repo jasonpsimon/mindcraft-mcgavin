@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-6 Pathfinder telemetry shipped `1f4b2f2` — `path_telemetry.js` singleton hooks `goal_updated` / `path_update` / `path_reset` / `path_stop` / `goal_reached`, writes `data/path-stream.jsonl`, and attaches a compact `path:` field to every StateTicker pulse. StateTicker payload now shows `"path":{"started":0,"completed":0,"no_path":0,"timeout":0,"stuck_resets":0,...}` — verified live on running bot; live `[Path]` emission awaits a pathfinding skill call from the LLM. Synthetic end-to-end test hit all five events with correct counters, console format, and JSONL sink.)_
+_Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In-progress — logging drops + truncations ONLY, seven decision points planned in `src/memory/context_builder.js` with `[ContextBuilder] dropped=<section> (budget=<N>)` and `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` shapes. Scope explicitly excludes mode-based skips + reduced-priority inclusions to keep signal-to-noise high.)_
 
 ---
 
@@ -64,7 +64,22 @@ _Last updated: 2026-04-17 (BT-6 Pathfinder telemetry shipped `1f4b2f2` — `path
 
 ## In-progress
 
-_(empty — BT-7 Skill lifecycle and Goal lifecycle shipped `40c04f3` and live-verified 2026-04-17. See Recently completed.)_
+### BT-11. ContextBuilder truncation decisions
+
+**Status:** 🟡 in-progress 2026-04-17 • **Priority:** medium (ContextBuilder is load-bearing; its decisions should be auditable)
+
+**Scope confirmed.** Drops + truncations ONLY (no "included at reduced priority" signal — that would fire every prompt and drown the honest signal). Excluded: mode-based examples-skip during self-prompting (fires every turn, not budget-related).
+
+**Seven log points planned** in `src/memory/context_builder.js`:
+- **D1** commands dropped — `cmdBudget <= 200` (line ~103)
+- **D2** memory dropped — `memBudget <= 100` (line ~125)
+- **D3** examples dropped — `exBudget <= 200` (line ~148)
+- **T1** commands truncated via `_trimToFit` (line ~104)
+- **T2** conversation oldest-turn drops inside `_buildConversation`
+- **T3** memory truncated via `_trimToFit` (line ~133)
+- **T4** examples truncated via `_trimToFit` (line ~149)
+
+**Log shapes.** `[ContextBuilder] dropped=<section> (budget=<N>)` / `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` / `[ContextBuilder] truncated=conversation dropped=<N> turns (budget)`.
 
 ## Shipped — awaiting live verification
 
