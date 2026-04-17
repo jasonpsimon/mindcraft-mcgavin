@@ -67,7 +67,10 @@ class BotActionMutex {
         }
 
         // Wait our turn
+        const enterT = Date.now();
+        let queued = false;
         while (this._holderToken !== null) {
+            queued = true;
             await new Promise((resolve) => {
                 this._queue.push(resolve);
             });
@@ -79,7 +82,8 @@ class BotActionMutex {
         this._holderLabel = label;
         const id = ++this._acquireCount;
         const qd = this._queue.length;
-        console.log(`[BotMutex] #${id} acquired: ${label}${qd > 0 ? ` (queue: ${qd})` : ''}`);
+        const waitMs = queued ? Date.now() - enterT : 0;
+        console.log(`[BotMutex] #${id} acquired: ${label}${qd > 0 ? ` (queue: ${qd})` : ''}${queued ? ` wait=${waitMs}ms` : ''}`);
 
         try {
             return await als.run({ token, label }, fn);
