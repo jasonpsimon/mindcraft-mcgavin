@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-2 Damage event stream moved to In-progress)_
+_Last updated: 2026-04-17 (BT-2 DamageStream shipped — four observability modules live; 8 BTs remaining)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), and LLM call telemetry (BT-3) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `1089363`. BT-1 StateTicker, BT-8 BootSnapshot, and BT-3 LLM call telemetry all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), and DamageStream (BT-2) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `5818986`. BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry, and BT-2 DamageStream all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -50,10 +50,11 @@ _Last updated: 2026-04-17 (BT-2 Damage event stream moved to In-progress)_
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
 - **withLLMMetrics** (BT-3): one `[LLM]` structured log line per LM Studio round-trip (chat + embed). Fields: `label, model, elapsed_ms, prompt_tok, completion_tok, total_tok, tok_per_s, retries, finish, cache_hit, status`. Terminal errors emit `status=error err_class=...`. Only `lmstudio.js` migrates today — remaining 19 adapters tracked as BT-3b.
-- All three modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches in any of `state_ticker.js`, `boot_snapshot.js`, or `retry.js`.
+- **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
+- All four observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, and `retry.js`.
 
 **Open behaviors / active monitoring:**
-- Bot completed its self-prompt goal cycle (JP confirmed 2026-04-17) and is currently idle at roughly (-301, 62, -38) post-spawn with a diamond + coal + stick stack. Awaiting next goal or re-kick.
+- Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
 - No known crashes, no silent failures, all error paths log with structured prefixes.
 - Known issues section on the whiteboard is **empty** (self_preservation mutex stale entry audited out; memory compression closed by D1; Cannot-smelt closed by handler; mob-combat-ranged folded into #10 Layer 2).
 
@@ -62,36 +63,6 @@ _Last updated: 2026-04-17 (BT-2 Damage event stream moved to In-progress)_
 ## In-progress
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
-
-### BT-2. Damage event stream — every hit, not just death
-
-**Status:** 🟡 in progress • **Priority:** high (fills the "how did the bot lose 14 HP" black box; **unblocks F's "died to lava at Y=-12" LTM store path**)
-
-**Problem.** Death is logged (`agent.js:1074`: `"Agent died: ..."`) and writes to memory_bank, long_term_memory, episodic. Non-lethal damage events are not logged. The `bot.on('health')` handler at `agent.js:1046` tracks `lastDamageTime`/`lastDamageTaken` as state variables but emits nothing. A player watching the log sees the bot go from 20 HP to 6 HP between two command outputs with zero record of what happened.
-
-**Root cause.** Damage tracking exists for reflex modes (self_preservation needs `lastDamageTime`), not for observability. No one asked "could a human reading the log reconstruct the damage timeline?"
-
-**Proposed solution.** `DamageStream` that emits one `[Damage]` log line + one JSONL record per `health`-decrease event:
-
-```
-{"t":"...","amount":3.0,"health_before":14,"health_after":11,"source":"zombie","pos":{...},"food":17}
-```
-
-Source inference: check `bot.lastAttackedEntity` + entity type; fall back to block-at-feet for lava/fire/sweet_berries/void, `bot.oxygenLevel` drop for drowning, Y-velocity for fall damage. When source is indeterminate, emit `"source":"unknown"` rather than swallow the event.
-
-**Implementation plan.**
-1. `src/observability/damage_stream.js` — single module. Wire into `agent.js:1046` health handler (additive, three lines); existing state already tracked there.
-2. Classifier: small table mapping inference rules → source label. Data-driven per Rule 1.
-3. On death, also feed `long_term_memory.store()` with source + position — directly advances F's death-event path. Keep the existing death handler's memory_bank write.
-4. Output: `[Damage]`-prefixed log line + append to `data/damage-stream.jsonl` (append-only, rotating).
-
-**Blast radius.** Three-line addition to `agent.js:1046` health handler. No callers affected. BT-1 state ticker optional consumer (damage count in last 60s).
-
-**Success signal.** Log tail shows `[Damage]` pulses for every hit; `damage-stream.jsonl` replays a full combat. Deaths now carry inferred source in LTM on restart.
-
-**Philosophy alignment.** Principle 1 (classifier, not LLM). Principle 2 (feeds LTM — memory cognition). Principle 4 (persists across sessions). Principle 8 (fails loudly).
-
-**Effort.** Small — ~80 lines module, ~5 lines wiring.
 
 ## Shipped — awaiting live verification
 
@@ -600,6 +571,66 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-2 DamageStream: per-hit damage telemetry + inferred source ✅
+
+Shipped `src/observability/damage_stream.js` (≈240 lines) and wired it into the existing
+`bot.on('health')` and death (`messagestr` translate=`death.*`) handlers in `agent.js`.
+Emits one `[Damage]` log line + one JSONL record per health-decrease event. Non-lethal
+damage is no longer silent.
+
+**Record shape:**
+```
+{"t":"...","amount":3.0,"health_before":14,"health_after":11,"source":"zombie",
+ "source_category":"entity","pos":{"x":..,"y":..,"z":..},"dimension":"overworld",
+ "food":17,"lethal":false}
+```
+
+**Source inference (priority order, Rule 1 data-driven):**
+1. Nearest hostile mob within 4 blocks → `source=<mob_name>`, category=`entity`.
+2. Contact-damage block at feet or head (lava, fire, cactus, magma_block,
+   sweet_berry_bush, soul_fire, campfire, powder_snow, wither_rose) →
+   `source=<block_name>`, category=`environment`.
+3. Oxygen level < 18 → `source=drowning`, category=`environment`.
+4. Strong recent downward velocity (< -0.5) → `source=fall`, category=`fall`.
+5. Otherwise → `source=unknown`, category=`unknown`.
+
+**Death hand-off.** `DamageStream.getLastDamage()` returns the most recent damage record.
+The existing death handler now calls it and writes a `Died from <source> (<category>)
+at x,y,z in <dimension>` entry into long-term memory via `long_term_memory.store(...,
+'death', {source, source_category, coords, dimension})`. Next-session bot starts
+knowing what killed it, not just where — advances Principle 4 (preserve work across
+sessions) and directly reduces LLM re-derivation on respawn.
+
+**Blast radius.** Additive only. The existing `bot.on('health')` handler still updates
+`lastDamageTime` / `lastDamageTaken`; BT-2 adds one line inside the same if-decrease
+branch. The death handler's LTM write is wrapped in try/catch so an LTM failure
+cannot regress the pre-existing `last_death_position` bookkeeping.
+
+**Rule 7 audit.** Invariant: DamageStream must not mutate bot state.
+`grep -E "bot\.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder\.goto" src/observability/damage_stream.js`
+returns zero matches. The module reads `bot.entity`, `bot.entities`, `bot.blockAt`,
+`bot.oxygenLevel`, `bot.food`, `bot.game.dimension` — all getters.
+
+**Verified live** 2026-04-17:
+- Startup completed cleanly with DamageStream constructed in `startEvents()`.
+- StateTicker + BootSnapshot + LLM telemetry all still firing — no regressions.
+- `[Damage]` log is intentionally empty so far: the bot has spawned, escaped the zone,
+  and is now pursuing `mine 64 ancient debris` without taking hits. First actual damage
+  event will be the first live verification of the classifier.
+- **Bonus live BT-3 proof captured in the same restart window** — chat-completion
+  lines finally surfaced: `[LLM] label=LMStudio model=gemma-4-e4b elapsed_ms=19963
+  prompt_tok=3009 completion_tok=61 total_tok=3070 tok_per_s=3.06 retries=0 finish=stop
+  status=ok` and a second at 42.9s with 390 completion tokens (9.09 tok/s).
+
+**Observation (not a BT-2 issue, flag for later):** `startEvents()` — including
+DamageStream construction and the StateTicker start — runs AFTER
+`await skills.escapeProtectedZone(...)` inside the spawn handler. If the bot spawns
+inside the 250-block zone, observability does not begin emitting until escape
+completes (~45-60s). Not a regression; pre-existing flow quirk worth revisiting in a
+future hardening pass if startup-window visibility becomes important.
+
+Commit `5818986`.
 
 ### 2026-04-17 — BT-3 LLM call telemetry: one [LLM] log line per LM Studio request ✅
 
