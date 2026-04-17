@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-3 LLM call telemetry moved to In-progress)_
+_Last updated: 2026-04-17 (BT-3 LLM call telemetry shipped — lmstudio now emits [LLM] per call; BT-3b files the 19-adapter migration follow-up)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1) + BootSnapshot (BT-8) verified live 2026-04-17.
-- Branch: `develop` — HEAD `1b75c2a`. BT-1 StateTicker (1Hz structured pulse to `data/state-stream.jsonl`) and BT-8 BootSnapshot (structured `[Boot]` log line + `data/boot-snapshot.json`) both shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), and LLM call telemetry (BT-3) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `1089363`. BT-1 StateTicker, BT-8 BootSnapshot, and BT-3 LLM call telemetry all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -49,7 +49,8 @@ _Last updated: 2026-04-17 (BT-3 LLM call telemetry moved to In-progress)_
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
-- Both modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches in either file.
+- **withLLMMetrics** (BT-3): one `[LLM]` structured log line per LM Studio round-trip (chat + embed). Fields: `label, model, elapsed_ms, prompt_tok, completion_tok, total_tok, tok_per_s, retries, finish, cache_hit, status`. Terminal errors emit `status=error err_class=...`. Only `lmstudio.js` migrates today — remaining 19 adapters tracked as BT-3b.
+- All three modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches in any of `state_ticker.js`, `boot_snapshot.js`, or `retry.js`.
 
 **Open behaviors / active monitoring:**
 - Bot completed its self-prompt goal cycle (JP confirmed 2026-04-17) and is currently idle at roughly (-301, 62, -38) post-spawn with a diamond + coal + stick stack. Awaiting next goal or re-kick.
@@ -61,38 +62,6 @@ _Last updated: 2026-04-17 (BT-3 LLM call telemetry moved to In-progress)_
 ## In-progress
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
-
-### BT-3. LLM call telemetry — latency, tokens, retries
-
-**Status:** 🟡 in progress • **Priority:** high (you can't tune what you can't measure; tonight's model-switch to `-obliterated` is untuned blind)
-
-**Absorbs #18 (model-provider server-side logging sweep).** #18 scoped error-case logging in 17 model-adapter `catch` blocks. BT-3 instruments every call (success + error) at the `retry()` wrapper level, covering #18's scope as a subset. #18 removed from queue.
-
-**Problem.** `models/lmstudio.js:22` logs `"Awaiting LM Studio response from model X"` and `:35` logs `"Received."` — no elapsed time, no token counts, no prompt cache hit info. `utils/retry.js:101` logs retry attempts and backoff but not cumulative elapsed. We have zero visibility into: how long did the call take, tokens in/out, retries used, whether LM Studio hit its prompt cache. LM Studio's own log has this data (we saw it tonight in `2026-04-16.3.log`) but the bot side is blind.
-
-**Root cause.** `sendRequest` in each model adapter wraps the OpenAI SDK call with no timing instrumentation. It's a function that awaits and returns.
-
-**Proposed solution.** Extract `withLLMMetrics(label, fn)` helper in `utils/retry.js` (already wraps with retry). Emit one `[LLM]` log line per call:
-
-```
-[LLM] model=gemma-4-e4b-it-obliterated elapsed_ms=8420 prompt_tok=3435 completion_tok=14 tok_per_s=1.66 retries=0 cache_hit=? status=ok
-```
-
-`cache_hit` from `stats`/`usage` in response if LM Studio returns it; otherwise null. Error case logs same shape with `status=error err_class=...`.
-
-**Implementation plan.**
-1. Extend `retry()` to capture `startTime` and the response `usage`/`stats`.
-2. Emit `[LLM]` structured line in one call site (`retry.js`). Applies to every model routing through it.
-3. Audit the 17 model adapters — migrate any not using `retry()` through it. Satisfies #18 scope.
-4. JSONL optional — log-only first pass; add `data/llm-stream.jsonl` later if analytics wanted.
-
-**Blast radius.** One touch in `utils/retry.js`. All 17 model adapters benefit. Adapter audit (~15 min) to confirm each routes through `retry`.
-
-**Success signal.** Every LLM call surface-logs timing + tokens. Tuning loops (temperature, truncation, model choice) become observable.
-
-**Philosophy alignment.** Principle 1 (measurement enables LLM-reliance reduction). Principle 8.
-
-**Effort.** Small — ~30 lines in `retry.js` + adapter audit.
 
 ## Shipped — awaiting live verification
 
@@ -152,6 +121,31 @@ Source inference: check `bot.lastAttackedEntity` + entity type; fall back to blo
 
 **Effort.** Small — ~80 lines module, ~5 lines wiring.
 
+
+### BT-3b. LLM telemetry — migrate remaining 19 model adapters through withLLMMetrics
+
+**Status:** ⏳ not started • **Priority:** low (no user-facing impact today; touches dormant code paths)
+
+**Scope.** BT-3 shipped `withLLMMetrics` and migrated `src/models/lmstudio.js`. The other 19 adapters (`azure, cerebras, claude, deepseek, gemini, glhf, gpt, grok, groq, huggingface, hyperbolic, mercury, mistral, novita, ollama, openrouter, qwen, replicate, vllm`) retain their original per-adapter error handling and do NOT emit `[LLM]` lines. This entry tracks the remaining sweep so Principle 5 (Finish migrations, kill redundancy) is explicitly satisfied when a new provider becomes active.
+
+**Why deferred.** Each adapter has a distinct response shape (`Anthropic` uses `resp.content.find(...)`, `gpt.js` branches between `responses` and `chat.completions`, `ollama` streams, etc.). Migrating all 19 without real credentials to test each risks shipping broken error paths to code JP does not exercise. The honest state is: we have not done this yet, and we know it.
+
+**Trigger.** Ship BT-3b when any of the following is true:
+- JP configures a second active provider in a profile (`chat_model`, `fast_model`, `code_model`, `vision_model`, or `embedding` referencing a non-lmstudio adapter).
+- A credible credential set becomes available for at least one other adapter, enabling live verification.
+- A reader of this whiteboard decides the dormant-code migration is worth the risk regardless.
+
+**Implementation sketch (per adapter).**
+1. `import { withLLMMetrics } from '../utils/retry.js';`
+2. Identify the single API-call site inside `sendRequest` (and `embed` if present).
+3. Wrap it in `withLLMMetrics({ label: 'AdapterName', model }, () => ...)`.
+4. For non-OpenAI-shaped responses, write an `extractUsage` callback that maps the adapter's `usage` block into `{prompt_tokens, completion_tokens, total_tokens, finish_reason, cache_hit}`.
+5. Remove now-redundant per-adapter retry logic if present, or leave it in if it carries adapter-specific policy.
+6. Manual smoke test against the adapter's API.
+
+**Blast radius (per adapter).** Localized to that one file. `withLLMMetrics` is already shipped and proven by lmstudio.
+
+**Effort.** Small-per-adapter (~15 min each) × 19 = ~4 hours once credentials exist.
 
 ### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
 
@@ -606,6 +600,50 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-3 LLM call telemetry: one [LLM] log line per LM Studio request ✅
+
+Shipped `withLLMMetrics({label, model, extractUsage?, retryOptions?}, fn)` in `src/utils/retry.js`.
+Wraps the existing `withRetry` and emits exactly one `[LLM]` structured log line per call —
+success OR terminal failure after retries. Default usage extractor reads OpenAI-compatible
+`response.usage.{prompt_tokens, completion_tokens, total_tokens}`, `prompt_tokens_details.cached_tokens`
+(LM Studio cache-hit signal), and `response.choices[0].finish_reason`. Telemetry emission is
+itself try/caught — a malformed response cannot crash the caller.
+
+**Migration:** `src/models/lmstudio.js` now routes both call sites (`sendRequest` + `embed`) through
+`withLLMMetrics` instead of `withLLMRetry`. Retry semantics are identical; the only user-visible
+change is one extra `[LLM]` log line per call.
+
+**Log line shape (success):**
+```
+[LLM] label=LMStudio model=gemma-4-e4b elapsed_ms=8420 prompt_tok=3435 completion_tok=14
+      total_tok=3449 tok_per_s=1.66 retries=0 finish=stop cache_hit=true status=ok
+```
+**Terminal failure:**
+```
+[LLM] label=LMStudio model=gemma-4-e4b elapsed_ms=250 retries=3 status=error err_class=FetchError
+```
+
+**Principle 5 honesty.** Only `lmstudio.js` migrates today. The other 19 adapters (`gpt, claude,
+ollama, gemini, ...`) retain their original per-adapter error handling and do NOT emit `[LLM]`
+lines. This deferral is explicit and tracked as **BT-3b** — it is NOT a partial migration being
+silently left unfinished.
+
+**Absorbs** #18 (model-provider server-side logging sweep — the per-adapter catch-block logging
+concern) for the active provider. BT-3b picks up #18's residual scope for dormant adapters.
+
+**Rule 7 audit.** Invariant: LLM telemetry must not mutate bot state.
+`grep -E "bot\.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder\.goto" src/utils/retry.js`
+returns zero matches. The module has zero bot references at all.
+
+**Verified live** 2026-04-17. Eight `[LLM] label=LMStudio-Embed ...` lines fired during
+`seedMemory` / `initExamples` at startup — e.g.
+`elapsed_ms=244 prompt_tok=0 completion_tok=? total_tok=0 tok_per_s=? retries=0 finish=? cache_hit=? status=ok`.
+(LM Studio reports `prompt_tokens:0` for embeddings — an LM Studio quirk, not a bug in the wrapper.
+`tok_per_s=?` correctly reflects no rate signal.) Chat-completion lines will surface
+`prompt_tok`, `completion_tok`, `tok_per_s` once JP kicks a goal.
+
+Commits `2fd2030` (ship) + `1089363` (fix: `tok_per_s=?` instead of `0` when tokForRate is 0 — honest "no signal" mark).
 
 ### 2026-04-17 — BT-8 BootSnapshot: structured boot log line + data/boot-snapshot.json ✅
 
