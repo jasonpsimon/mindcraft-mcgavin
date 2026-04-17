@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In-progress — logging drops + truncations ONLY, seven decision points planned in `src/memory/context_builder.js` with `[ContextBuilder] dropped=<section> (budget=<N>)` and `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` shapes. Scope explicitly excludes mode-based skips + reduced-priority inclusions to keep signal-to-noise high.)_
+_Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions shipped `0791276` — seven inline `[ContextBuilder] dropped=<section> (budget=<N>)` / `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` / `[ContextBuilder] truncated=conversation dropped=<N> turns (budget)` log points landed in `src/memory/context_builder.js`. Drops + truncations only — mode-based skips + reduced-priority inclusions intentionally excluded. Synthetic-verified 5 of 7 points (D1 commands-drop, D2 memory-drop, T1 commands-truncate, T2 conversation turn-drop, T4 examples-truncate); remaining two structurally identical. Live post-restart: existing summary line unchanged (no regression), drop/truncate emissions await natural budget pressure at runtime.)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `1f4b2f2`. Ten observability items shipped on `develop` today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), Goal lifecycle, and BT-6 Pathfinder telemetry. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 skills + Goal + BT-6 paths) sits underneath the measurement layer (BT-5) as the two-tier observability story.**
+- Branch: `develop` — HEAD `0791276`. Eleven observability items shipped on `develop` today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), Goal lifecycle, BT-6 Pathfinder telemetry, and BT-11 ContextBuilder truncation decisions. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 skills + Goal + BT-6 paths) sits underneath the measurement layer (BT-5) as the two-tier observability story, with BT-11 closing the prompt-construction counterpart alongside BT-4.**
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -45,7 +45,7 @@ _Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
-**Observability (7 modules live — BT-1, BT-2, BT-3, BT-4, BT-5, BT-8, BT-12):**
+**Observability (7 modules + 4 inline-logging shipments live — BT-1, BT-2, BT-3, BT-4, BT-5, BT-6, BT-7, BT-8, BT-11, BT-12, Goal):**
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
@@ -53,7 +53,8 @@ _Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In
 - **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
 - **MemoryRecall** (BT-4): one `[MemoryRecall]` structured log line per memory retrieval (episodic + long-term + confidence/procedural) + append to `data/recall-stream.jsonl`. Fields: `subsystem, query, k, returned, backend, top_score, top_text` plus subsystem-specific extras (`category_top` for LTM; `tier, threshold_high, threshold_med, context_hash, record_count, trigger` for confidence). Backend values: `vectra`, `word-overlap`, `map`, `none`. Procedural lookups collapsed into confidence per Principle 5 (single caller — no duplicate log).
 - **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
-- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/observability/path_telemetry.js`, `src/agent/auto_recovery.js` (BT-5 stats), and `src/utils/retry.js` (BT-3 `withLLMMetrics`). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation.
+- **ContextBuilder truncation decisions (BT-11):** seven inline log points in `src/memory/context_builder.js` — three drops (`dropped=commands|memory|examples (budget=<N>)`) and four truncations (`truncated=commands|memory|examples <from>→<to> chars (budget)` + `truncated=conversation dropped=<N> turns (budget)`). Fires only under budget pressure, which preserves signal-to-noise. Pairs with BT-4 MemoryRecall to close the prompt-construction loop: BT-4 shows what memory was retrieved; BT-11 shows what the budget kept vs. cut.
+- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/observability/path_telemetry.js`, `src/agent/auto_recovery.js` (BT-5 stats), `src/utils/retry.js` (BT-3 `withLLMMetrics`), and `src/memory/context_builder.js` (BT-11 inline decision logging). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation.
 
 **Open behaviors / active monitoring:**
 - Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
@@ -64,22 +65,7 @@ _Last updated: 2026-04-17 (BT-11 ContextBuilder truncation decisions moved to In
 
 ## In-progress
 
-### BT-11. ContextBuilder truncation decisions
-
-**Status:** 🟡 in-progress 2026-04-17 • **Priority:** medium (ContextBuilder is load-bearing; its decisions should be auditable)
-
-**Scope confirmed.** Drops + truncations ONLY (no "included at reduced priority" signal — that would fire every prompt and drown the honest signal). Excluded: mode-based examples-skip during self-prompting (fires every turn, not budget-related).
-
-**Seven log points planned** in `src/memory/context_builder.js`:
-- **D1** commands dropped — `cmdBudget <= 200` (line ~103)
-- **D2** memory dropped — `memBudget <= 100` (line ~125)
-- **D3** examples dropped — `exBudget <= 200` (line ~148)
-- **T1** commands truncated via `_trimToFit` (line ~104)
-- **T2** conversation oldest-turn drops inside `_buildConversation`
-- **T3** memory truncated via `_trimToFit` (line ~133)
-- **T4** examples truncated via `_trimToFit` (line ~149)
-
-**Log shapes.** `[ContextBuilder] dropped=<section> (budget=<N>)` / `[ContextBuilder] truncated=<section> <from>→<to> chars (budget)` / `[ContextBuilder] truncated=conversation dropped=<N> turns (budget)`.
+_(empty — BT-11 ContextBuilder truncation decisions shipped `0791276` and live-deployed 2026-04-17. See Recently completed.)_
 
 ## Shipped — awaiting live verification
 
@@ -319,16 +305,6 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 **Blast radius.** Additive in `event_pipeline.js`.
 
 **Effort.** Small — ~60 lines.
-
-### BT-11. ContextBuilder truncation decisions
-
-**Status:** ⏳ not started • **Priority:** medium (ContextBuilder is load-bearing; its decisions should be auditable)
-
-**Problem.** ContextBuilder emits a stats line with totals (`prompter.js`: `[ContextBuilder] 2478/6908 tokens | conv:... mem:... ex:... nb:...`) — good summary. Drop/truncate decisions are not logged. When the token budget forces a section to be shortened or skipped, we see only the post-truncation counts, not the decision process. For a small-context model, this is where "why didn't the bot know about X" answers live.
-
-**Proposed solution.** Inside ContextBuilder's budget-enforcement code path, log one `[ContextBuilder] dropped=examples (budget=0)` or `[ContextBuilder] truncated=memory 2400→1916 tokens (budget)` line per decision.
-
-**Effort.** Small — ~20 lines in `prompter.js`.
 
 ### BT-bundle. Observability minor items
 
@@ -646,6 +622,51 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-11 ContextBuilder truncation decisions: inline drop/truncate log points shipped ✅
+
+Shipped `0791276` same day on top of BT-6. ContextBuilder's existing `[ContextBuilder] 2478/6908 tokens | conv:... mem:... ex:... nb:...` summary line captured final section sizes but not the decisions that produced them. Under budget pressure, a section could be entirely dropped or substantially shrunk with no trace — the "why didn't the bot know about X" question was unanswerable from the log. BT-11 closes that gap with one log line per drop/truncate decision inside the budget-enforcement path.
+
+**Seven log points added** in `src/memory/context_builder.js` (inline `console.log`, no new module):
+
+- **D1** commands dropped — fires when `cmdBudget <= 200` and `params.commandDocs` was provided.
+- **T1** commands truncated — fires when `_trimToFit` shrank the input under `cmdBudget`.
+- **T2** conversation turn-drops — fires inside `_buildConversation` when the backward walk breaks out on budget; reports the count of older turns that didn't fit.
+- **D2** memory dropped — fires when `memBudget <= 100` and episodic or long-term memory was provided.
+- **T3** memory truncated — fires when `_trimToFit` shrank the combined episodic+long-term payload.
+- **D3** examples dropped — fires when `exBudget <= 200` in the player-conversation path (self-prompt mode skips examples by design, not logged).
+- **T4** examples truncated — fires when `_trimToFit` shrank the examples block.
+
+**Log shapes:**
+
+```
+[ContextBuilder] dropped=commands (budget=-233)
+[ContextBuilder] truncated=commands 2010→1782 chars (budget)
+[ContextBuilder] truncated=conversation dropped=6 turns (budget)
+[ContextBuilder] dropped=memory (budget=-192)
+[ContextBuilder] truncated=memory 2400→1916 chars (budget)
+[ContextBuilder] dropped=examples (budget=150)
+[ContextBuilder] truncated=examples 4010→2163 chars (budget)
+```
+
+All seven share the `[ContextBuilder]` prefix (joining `[StateTicker]`, `[Boot]`, `[LLM]`, `[Damage]`, `[MemoryRecall]`, `[AutoRecovery]`, `[Skill]`, `[Goal]`, `[Path]` in the structured-prefix family) so a tailer can `grep '\[ContextBuilder\] dropped\|\[ContextBuilder\] truncated'` for budget incidents specifically.
+
+**Intentionally excluded from scope (keeps signal-to-noise high):**
+
+- **Mode-based examples skip** during self-prompting (`includeExamples=false` via `!isSP && ...`). This fires every single self-prompt turn — logging it would drown the actual budget incidents we care about.
+- **Empty-section skips** for `state`, `action`, and `nearbyBlocks` (empty input, not budget pressure).
+- **Reduced-priority inclusions.** The existing summary line already shows final section sizes; adding per-section inclusion logs would spam every prompt assembly. Rule 9 — simplicity first — prefer deferring the signal until we find it missing in practice rather than shipping it speculatively.
+
+**Verification:**
+
+- Synthetic smoke tests exercised 5 of 7 paths (D1 commands-drop, D2 memory-drop, T1 commands-truncate, T2 conversation turn-drop, T4 examples-truncate) — all produced the expected log shape. T3 memory-truncate and D3 examples-drop are structurally identical to their verified siblings in the same code blocks (same `_trimToFit` / same `else`-branch pattern); no divergent logic to test independently.
+- Live post-restart (bot `0791276`, 2026-04-17 16:25:05): existing `[ContextBuilder] N/M tokens | conv:... cmd:... mem:... ex:... nb:...` summary line continues to fire on every prompt assembly — no regression. Drop/truncate emissions await natural budget pressure at runtime (usage currently hovers ~2000/6908 tokens with no pressure).
+
+**Rule alignment.** Rule 5 (clean diff — 35 insertions, 1 deletion; existing logic untouched; `_trimToFit` and `_buildConversation` signatures unchanged). Rule 7 (grep on `src/memory/context_builder.js` for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches — no mutation surface added; also confirmed `_trimToFit` has exactly 3 callsites and `_buildConversation` has exactly 1 callsite, all logged). Rule 9 (drops + truncations only — mode-based skips and reduced-priority inclusions explicitly excluded). Principle 8 (fail loudly — structured prefix + actionable `from→to` / `budget=N` fields directly tell an operator what got cut and by how much).
+
+**Downstream unblock.** BT-4 MemoryRecall told us what memory was retrieved for a prompt; BT-11 now tells us what the budget kept vs. cut. Together they close the prompt-construction loop: a log tailer can now answer both "what did memory return?" and "what did the budget drop?" for any given turn.
+
+**Next in the logging roadmap:** BT-9 (World/time events) + BT-10 (Entity delta stream) — ship as a pair per agreed 2026-04-17 ordering. Then BT-bundle remainder (mutex wait, file-I/O silent-swallow audit, process exit reasons). BT-3b (adapter sweep) and BT-7b (remaining ~72 skill wraps) remain trigger-gated.
 
 ### 2026-04-17 — BT-6 Pathfinder telemetry: `[Path]` event stream shipped ✅
 
