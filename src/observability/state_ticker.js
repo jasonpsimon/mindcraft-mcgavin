@@ -248,6 +248,28 @@ export class StateTicker {
             queue: botMutex?.queueDepth ?? 0,
         };
 
+        // BT-5: AutoRecovery dispatcher stats (read-only getter). Compact
+        // summary — invocation/match counts, match rate, recovered count,
+        // and the last invocation's pattern+outcome. Full per-pattern
+        // breakdown is available via `!recovery-stats` debug command.
+        let auto_recovery = null;
+        try {
+            const ar = agent?.auto_recovery;
+            if (ar && typeof ar.getStats === 'function') {
+                const s = ar.getStats();
+                auto_recovery = {
+                    invocations: s.invocations,
+                    matched: s.matched,
+                    match_rate: s.match_rate,
+                    recovered: s.recovered,
+                    last: s.last,
+                };
+            }
+        } catch (_) {
+            // Any stats-read failure degrades to null — ticker never throws.
+            auto_recovery = null;
+        }
+
         return {
             t,
             pos: {
@@ -270,6 +292,7 @@ export class StateTicker {
             inventory: { count: items.length, top: topItems },
             nearby_entities: nearby.slice(0, 3),
             nearby_threats: threats,
+            auto_recovery,
             // v1 placeholders — downstream BTs will wire these:
             //   BT-3 (LLM telemetry) exposes last prompter token count →
             //         context_tokens can cache prompter.lastContextTokens.

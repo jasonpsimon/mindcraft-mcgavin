@@ -227,6 +227,29 @@ export class AutoRecoveryEngine {
         this._cachedItems = null;   // inventory snapshot for current recovery pass
         // Instance copy of patterns — extensible at runtime via addPattern/removePattern
         this.patterns = [...FAILURE_PATTERNS];
+        // BT-5: dispatcher-level stats for match/miss rate measurement.
+        // Populated by _updateStatsAndLog() on every checkAndRecover() exit.
+        this._initStats();
+    }
+
+    /**
+     * BT-5: initialize dispatcher stats. Called from constructor; also callable
+     * externally to zero counters mid-session (e.g., for a debug reset).
+     * Keeps the public shape stable so StateTicker + !recovery-stats readers
+     * never hit an undefined field on the first tick.
+     */
+    _initStats() {
+        this.stats = {
+            invocations: 0,
+            matched: 0,
+            passthrough: 0,
+            recovered: 0,
+            unresolved: 0,
+            gaveUp: 0,
+            error: 0,
+            byPattern: {},
+            last: null,
+        };
     }
 
     /**
@@ -287,6 +310,99 @@ export class AutoRecoveryEngine {
     }
 
     /**
+     * BT-5: emit the per-invocation `[AutoRecovery]` summary line and update
+     * dispatcher stats. Called at every `checkAndRecover()` exit — match
+     * branches (recovered / unresolved / gave_up / error) and the passthrough
+     * tail. The summary is the Principle 1 measurement surface: exactly one
+     * line per failure-checked tells you what fraction the scaffolding caught
+     * vs. what fell through to the LLM.
+     *
+     * @param {string} inputSnippet   First 80 chars of the failing result string.
+     * @param {number} tested         Number of patterns evaluated before exit
+     *                                (position of first match, or all patterns
+     *                                on passthrough).
+     * @param {string|null} matchedName  Matched pattern name, or null on passthrough.
+     * @param {'recovered'|'unresolved'|'gave_up'|'error'|'passthrough'} outcome
+     * @param {object} [extra]        Optional extras: {count} for gave_up repetitions,
+     *                                {err} for error messages.
+     */
+    _updateStatsAndLog(inputSnippet, tested, matchedName, outcome, extra = {}) {
+        this.stats.invocations++;
+        if (matchedName) {
+            this.stats.matched++;
+            // Lazy-init per-pattern bucket so new runtime-added patterns
+            // (via addPattern) get tracked automatically without a separate
+            // registration step. Rule 1 — flexible via data, not branches.
+            if (!this.stats.byPattern[matchedName]) {
+                this.stats.byPattern[matchedName] = {
+                    hits: 0, recovered: 0, unresolved: 0, gaveUp: 0, error: 0,
+                };
+            }
+            const ps = this.stats.byPattern[matchedName];
+            ps.hits++;
+            if (outcome === 'recovered') ps.recovered++;
+            else if (outcome === 'unresolved') ps.unresolved++;
+            else if (outcome === 'gave_up') ps.gaveUp++;
+            else if (outcome === 'error') ps.error++;
+        } else {
+            this.stats.passthrough++;
+        }
+
+        if (outcome === 'recovered') this.stats.recovered++;
+        else if (outcome === 'unresolved') this.stats.unresolved++;
+        else if (outcome === 'gave_up') this.stats.gaveUp++;
+        else if (outcome === 'error') this.stats.error++;
+
+        this.stats.last = {
+            pattern: matchedName,
+            outcome,
+            t: new Date().toISOString(),
+        };
+
+        // Structured log line — quote-escape input/err to keep the line
+        // parseable (downstream tooling may regex on key=value pairs).
+        const esc = (s) => String(s).replace(/"/g, '\\"');
+        const parts = [
+            `input="${esc(inputSnippet)}"`,
+            `tried=${tested}`,
+            `matched=${matchedName ?? 'none'}`,
+            `outcome=${outcome}`,
+        ];
+        if (extra.count !== undefined) parts.push(`count=${extra.count}`);
+        if (extra.err) parts.push(`err="${esc(String(extra.err).substring(0, 80))}"`);
+        console.log(`[AutoRecovery] ${parts.join(' ')}`);
+    }
+
+    /**
+     * BT-5: snapshot of cumulative recovery stats for this bot session.
+     * Consumed by StateTicker (per-tick summary field) and the
+     * `!recovery-stats` debug command. Returns a shallow clone so callers
+     * cannot mutate the engine's internal state.
+     *
+     * `match_rate` is null when invocations=0 so StateTicker can render
+     * "no data yet" without dividing by zero.
+     */
+    getStats() {
+        const s = this.stats;
+        const byPatternClone = {};
+        for (const [k, v] of Object.entries(s.byPattern)) {
+            byPatternClone[k] = { ...v };
+        }
+        return {
+            invocations: s.invocations,
+            matched: s.matched,
+            passthrough: s.passthrough,
+            recovered: s.recovered,
+            unresolved: s.unresolved,
+            gaveUp: s.gaveUp,
+            error: s.error,
+            match_rate: s.invocations > 0 ? s.matched / s.invocations : null,
+            byPattern: byPatternClone,
+            last: s.last ? { ...s.last } : null,
+        };
+    }
+
+    /**
      * Main entry point: check a command result for failures and auto-recover.
      * @param {string} commandName - The command that was executed (e.g., '!collectBlocks')
      * @param {string} result - The result/output string from command execution
@@ -298,13 +414,22 @@ export class AutoRecoveryEngine {
             return { recovered: false, result };
         }
 
-        // Don't nest recovery — if we're already recovering, let it fail through
+        // Don't nest recovery — if we're already recovering, let it fail through.
+        // Intentionally unlogged: the outer invocation already accounts for this
+        // failure; a nested line would double-count.
         if (this._recovering) {
             return { recovered: false, result };
         }
 
+        // BT-5: snapshot input + iteration counter for the per-invocation summary.
+        // `inputSnippet` is the same 80-char prefix used in failureKey — keeps
+        // log lines stable for grep/replay consumers.
+        const inputSnippet = result.substring(0, 80);
+        let tested = 0;
+
         // Match against failure patterns (instance copy — extensible at runtime)
         for (const pattern of this.patterns) {
+            tested++;
             const matched = pattern.test instanceof RegExp
                 ? pattern.test.test(result)
                 : pattern.test(result);
@@ -320,6 +445,7 @@ export class AutoRecoveryEngine {
                 if (repeatedCount >= this.maxRepeatedFailures && !pattern.skipRetryLimit) {
                     console.log(`[AutoRecovery] Command ${commandName} has failed ${repeatedCount} times with same error — giving up`);
                     this.recentFailures = this.recentFailures.filter(f => f.key !== failureKey);
+                    this._updateStatsAndLog(inputSnippet, tested, pattern.name, 'gave_up', { count: repeatedCount });
                     return {
                         recovered: false,
                         result: result + `\n[AUTO-RECOVERY] This action has failed ${repeatedCount} times. Try a completely different approach.`
@@ -337,9 +463,15 @@ export class AutoRecoveryEngine {
                         `autoRecovery:${pattern.name}`,
                         () => this.executeRecovery(pattern.recovery, commandName, result, originalCommand)
                     );
+                    // BT-5: recovery ran to completion. `recovered:true` → the fix
+                    // worked; `recovered:false` → pattern matched but the handler
+                    // couldn't fix (e.g., SEARCH_WIDER hands back a hint for the LLM).
+                    const outcome = recoveryResult?.recovered ? 'recovered' : 'unresolved';
+                    this._updateStatsAndLog(inputSnippet, tested, pattern.name, outcome);
                     return recoveryResult;
                 } catch (e) {
                     console.warn(`[AutoRecovery] Recovery failed: ${e.message}`);
+                    this._updateStatsAndLog(inputSnippet, tested, pattern.name, 'error', { err: e.message });
                     return { recovered: false, result: result + `\n[AUTO-RECOVERY] Attempted fix but failed: ${e.message}` };
                 } finally {
                     this._recovering = false;
@@ -349,6 +481,10 @@ export class AutoRecoveryEngine {
             }
         }
 
+        // No pattern matched — the failure falls through to the LLM. BT-5's
+        // passthrough line is the measurement signal for "what fraction of
+        // failures did scaffolding NOT catch."
+        this._updateStatsAndLog(inputSnippet, tested, null, 'passthrough');
         return { recovered: false, result };
     }
 

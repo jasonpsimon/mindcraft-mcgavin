@@ -64,6 +64,44 @@ export const queryList = [
         }
     },
     {
+        name: "!recovery-stats",
+        description: "Show AutoRecovery dispatcher stats: invocations, match rate, outcomes, and per-pattern breakdown.",
+        perform: function (agent) {
+            const ar = agent?.auto_recovery;
+            if (!ar || typeof ar.getStats !== 'function') {
+                return pad('AUTO_RECOVERY_STATS: unavailable (no dispatcher attached)');
+            }
+            const s = ar.getStats();
+            let res = 'AUTO_RECOVERY_STATS';
+            const rate = s.match_rate == null
+                ? 'n/a'
+                : (s.match_rate * 100).toFixed(1) + '%';
+            res += `\n- Invocations: ${s.invocations}`;
+            res += `\n- Matched: ${s.matched} (${rate})`;
+            res += `\n- Passthrough: ${s.passthrough}`;
+            res += `\n- Recovered: ${s.recovered}`;
+            res += `\n- Unresolved: ${s.unresolved}`;
+            res += `\n- Gave up: ${s.gaveUp}`;
+            res += `\n- Error: ${s.error}`;
+            if (s.last) {
+                res += `\n- Last: ${s.last.pattern ?? 'none'} \u2192 ${s.last.outcome} @ ${s.last.t}`;
+            } else {
+                res += '\n- Last: (none yet)';
+            }
+            const patternEntries = Object.entries(s.byPattern);
+            if (patternEntries.length > 0) {
+                res += '\n\nPer-pattern:';
+                patternEntries.sort((a, b) => (b[1].hits ?? 0) - (a[1].hits ?? 0));
+                for (const [name, ps] of patternEntries) {
+                    res += `\n- ${name}: hits=${ps.hits}, recovered=${ps.recovered}, unresolved=${ps.unresolved}, gave_up=${ps.gaveUp}, error=${ps.error}`;
+                }
+            } else {
+                res += '\n\nPer-pattern: (no matches yet)';
+            }
+            return pad(res);
+        }
+    },
+    {
         name: "!inventory",
         description: "Get your bot's inventory.",
         perform: function (agent) {

@@ -16,7 +16,7 @@ export function getCommand(name) {
 }
 
 export function blacklistCommands(commands) {
-    const unblockable = ['!stop', '!stats', '!inventory', '!goal'];
+    const unblockable = ['!stop', '!stats', '!inventory', '!goal', '!recovery-stats'];
     for (let command_name of commands) {
         if (unblockable.includes(command_name)){
             console.warn(`Command ${command_name} is unblockable`);
