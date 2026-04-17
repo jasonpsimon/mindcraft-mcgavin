@@ -54,7 +54,7 @@ _Last updated: 2026-04-16 (optimization audit findings added to to-do queue)_
 
 ## In-progress
 
-_Empty._
+***PAUSED TO WORK ON BETTER TOOLING.***
 
 ---
 
