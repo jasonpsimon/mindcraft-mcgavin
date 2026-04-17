@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-12 filed + in-progress — startup-window observability fix)_
+_Last updated: 2026-04-17 (BT-12 startup-window ordering fix shipped — observability now captures the 45-60s zone-escape window; 7 BT-N items remain in ⏳)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), and DamageStream (BT-2) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `5818986`. BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry, and BT-2 DamageStream all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), and startup-window ordering fix (BT-12) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `3292de3`. BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry, BT-2 DamageStream, and BT-12 startup-window ordering fix all shipped and verified live today. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -51,6 +51,7 @@ _Last updated: 2026-04-17 (BT-12 filed + in-progress — startup-window observab
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
 - **withLLMMetrics** (BT-3): one `[LLM]` structured log line per LM Studio round-trip (chat + embed). Fields: `label, model, elapsed_ms, prompt_tok, completion_tok, total_tok, tok_per_s, retries, finish, cache_hit, status`. Terminal errors emit `status=error err_class=...`. Only `lmstudio.js` migrates today — remaining 19 adapters tracked as BT-3b.
 - **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
+- **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
 - All four observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, and `retry.js`.
 
 **Open behaviors / active monitoring:**
@@ -63,41 +64,6 @@ _Last updated: 2026-04-17 (BT-12 filed + in-progress — startup-window observab
 ## In-progress
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
-
-### BT-12. Observability startup-window visibility
-
-**Status:** 🟡 in progress • **Priority:** medium (fixes a blind spot JP spotted during BT-2 verification today — any damage, path decisions, or state during spawn-escape are currently invisible)
-
-**Problem.** In `Agent.bot.once('spawn', ...)` the ordering is:
-
-```
-await escapeProtectedZone(this.bot)   // blocks ~45-60s on in-zone spawn
-this._setupEventHandlers(...)
-this.startEvents()                    // wires health / damage / death / etc.
-StateTicker.start()                   // 1Hz pulse
-```
-
-StateTicker and DamageStream do not exist until after the escape `await` completes. Any damage the bot takes during escape (hostile inside the zone, path-assisted fall, lava pocket) is lost: the `[Damage]` line never fires and the death handler's LTM source-write has nothing to read. `[StateTicker]` pulses also do not start until post-escape, so the full zone-escape window is invisible to the observability layer.
-
-**Root cause.** Original ordering grouped all post-spawn setup together. The observability wiring has no actual dependency on escape having completed — `startEvents()` just attaches listeners to `this.bot` (which has existed since login) and `StateTicker.start()` reads `bot.entity.*` getters (guarded by a NaN/ChunkWait `{held:true}` fallback). The grouping is convenience, not correctness.
-
-**Proposed solution.** Move two things BEFORE `await skills.escapeProtectedZone(this.bot)`:
-- `this.startEvents()` — wires `bot.on('health'|'error'|'end'|'death'|'kicked'|'messagestr'|'time')` and constructs `DamageStream`.
-- The StateTicker construction + `start()` block.
-
-Leave `_setupEventHandlers(save_data, init_message)` in its current position. That module wires chat/whisper handling and kicks the initial prompt; gating it until after escape keeps the bot from mid-hop chat-processing.
-
-**Blast radius.** Surgical. ~20 lines moved in `src/agent/agent.js` (no net additions). `startEvents()` re-call safety is already covered by the existing per-field `if (!this.damage_stream)` guard + `StateTicker.start()` idempotence. Mineflayer listener attachment before spawn is standard (mineflayer docs: attach before-spawn is the idiomatic pattern, events simply fire when they fire).
-
-**Rule 7 audit.** No new code; just ordering. The observability modules already satisfied Rule 7 in their own commits — moving when they are constructed does not introduce new bot mutations.
-
-**How to verify.**
-- [ ] Restart bot with a spawn that lands INSIDE the 250-block protection zone.
-- [ ] `[StateTicker]` pulses interleave with `[SpawnEscape] -X hop N` lines (not only after escape).
-- [ ] If the bot takes damage during the escape hops, a `[Damage]` line fires.
-
-**Estimated effort.** Tiny. One file touched, one commit.
-
 
 ## Shipped — awaiting live verification
 
@@ -606,6 +572,53 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-12 observability wiring before spawn-escape await ✅
+
+Moved `this.startEvents()` and the `StateTicker.start()` block in the spawn handler
+to BEFORE `await skills.escapeProtectedZone(this.bot)`. Surgical ordering fix —
+~20 lines relocated in `src/agent/agent.js`, zero net additions.
+
+**Problem.** Pre-BT-12 ordering placed both observability-wiring steps AFTER the
+spawn-escape `await`. On in-zone spawn, that `await` blocks for ~45-60s of
+`-X hop N` pathing. During that window DamageStream did not exist yet, `[Damage]`
+lines never fired, the death handler's LTM source-write had nothing to read, and
+`[StateTicker]` pulses did not begin. The entire zone-escape window — frequently
+the only interesting thing happening immediately post-spawn — was dark to the
+observability layer.
+
+**Root cause.** Original ordering grouped all post-spawn setup together.
+`startEvents()` just attaches `bot.on('health'|'error'|'end'|'death'|'kicked'|
+'messagestr'|'time')` listeners to `this.bot` (which has existed since login)
+and constructs DamageStream; `StateTicker.start()` reads `bot.entity.*` getters
+guarded by a NaN/ChunkWait held-state fallback. Neither depends on escape
+having completed. The grouping was convenience, not correctness.
+
+**Fix.** Move `startEvents()` + the StateTicker start block BEFORE the escape
+`await`. Leave `_setupEventHandlers(save_data, init_message)` AFTER escape —
+that wires chat/whisper handling and kicks the init message; gating
+player-interaction processing until post-escape is desirable.
+
+**Blast radius.** Single file, 24 insertions / 11 deletions (mostly comment
+reshuffling to explain the new order). `startEvents()` is idempotent across
+reconnects (new bot = old listeners die). DamageStream and StateTicker
+create-once guards (`if (!this.damage_stream)`, `if (!this.state_ticker)`) +
+idempotent `start()` already handle re-calls correctly.
+
+**Rule 7.** No new code; just reordering. The observability modules already
+passed Rule 7 in their own commits.
+
+**Verified live** 2026-04-17. After restart:
+- Line 168 of the bot log: `ThatCoolGuyDude spawned.`
+- Line 172: `[StateTicker] started: interval=1000ms console=true file=data/state-stream.jsonl`
+- 4 lines between — StateTicker begins immediately after the initial post-spawn
+  setup and before the escape `await`, exactly as designed.
+- 37 `[StateTicker]` pulses captured in the first ~20s post-spawn. No regressions
+  to StateTicker, BootSnapshot, LLM telemetry, or DamageStream.
+- No `[Damage]` lines in this run (bot either spawned outside the zone or
+  completed escape without hits); the dark-window gap is closed either way.
+
+Commit `3292de3`.
 
 ### 2026-04-17 — BT-2 DamageStream: per-hit damage telemetry + inferred source ✅
 
