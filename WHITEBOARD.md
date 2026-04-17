@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-progress; 2 new incident-driven items filed from goal-loss forensics: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state)_
+_Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — moved to Recently completed; 2 new incident-driven items filed in To-do: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state)_
 
 ---
 
@@ -45,7 +45,7 @@ _Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-pro
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
-**Observability (6 modules live — BT-1, BT-2, BT-3, BT-4, BT-8, BT-12):**
+**Observability (7 modules live — BT-1, BT-2, BT-3, BT-4, BT-5, BT-8, BT-12):**
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
@@ -64,36 +64,7 @@ _Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-pro
 
 ## In-progress
 
-### BT-5. AutoRecovery match/miss rate
-
-**Status:** 🚧 in-progress (picked up 2026-04-17) • **Priority:** high (exact measurement needed to judge Principle 1 progress)
-
-**Problem.** AutoRecovery logs extensively **when it matches** (`auto_recovery.js:442, 451, 460, 469, 485, 507, 527` — 35 `console.log` in that file, mostly in match branches). When it's consulted and no pattern matches, effectively no log — the loop at `auto_recovery.js:307` `for (const pattern of this.patterns)` just falls through. One branch logs `"passing through"` for a specific `cannot_smelt` case; the general "we looked at N patterns and none matched" never surfaces. No way to measure: fraction of failures AutoRecovery caught vs. passed through to LLM, which patterns are hot, which are dead.
-
-**Root cause.** Instrumentation written from the pattern-author's perspective (each pattern logs its own hit), not from the dispatcher's perspective.
-
-**Solution (scope expanded from original ticket).** Three ships under one commit:
-
-1. **Per-invocation summary line.** One `[AutoRecovery]` line per `checkAndRecover` call, regardless of match. Format:
-   ```
-   [AutoRecovery] input="Cannot smelt coal_ore..." tried=7 matched=cannot_smelt outcome=recovered
-   [AutoRecovery] input="Unknown error..." tried=8 matched=none outcome=passthrough
-   ```
-   Outcomes: `recovered | unresolved | gave_up | error | passthrough`. Input truncated to 80 chars.
-
-2. **StateTicker integration.** New `auto_recovery: {invocations, matched, match_rate, recovered, last}` field in per-tick snapshot — gives live dashboards (and any future tooling) the scaffolding-leverage number without grep archaeology.
-
-3. **`!recovery-stats` debug command.** Queryable table: totals, match rate, per-pattern breakdown, last invocation.
-
-**Files touched.**
-- `src/agent/auto_recovery.js` — stats instance state + `_logInvocation()` + `getStats()`. No per-pattern log changes.
-- `src/observability/state_ticker.js` — one new field in `_snapshot()`.
-- `src/agent/commands/queries.js` — new `!recovery-stats` entry.
-- `src/agent/commands/index.js` — add `!recovery-stats` to unblockable list.
-
-**Success signal.** Every failure seen by AutoRecovery produces exactly one summary line. Stats directly answer "what fraction of failures did scaffolding catch." `!recovery-stats` dumps a readable table on demand.
-
-**Philosophy alignment.** Principle 1 (this is the measurement). Principle 8.
+_(nothing in-progress — BT-5 shipped and live-verified 2026-04-17; pick the next item from the To-do queue)_
 
 ## Shipped — awaiting live verification
 
@@ -588,6 +559,37 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-5 AutoRecovery match/miss rate: three surfaces shipped + live-verified ✅
+
+Shipped `baab2bd` (code) and live-verified same day. AutoRecovery dispatcher is now fully observable: every `checkAndRecover` call produces exactly one summary log line regardless of match, StateTicker exposes running stats, and `!recovery-stats` dumps the per-pattern table on demand. Principle 1 (the fraction of failures scaffolding caught) now has hard numbers.
+
+**Three surfaces, all verified live 2026-04-17:**
+
+- **Per-invocation summary line** — example captured from live session:
+  ```
+  [AutoRecovery] input="\nINVENTORY\n- oak_log: 120\n- diamond: 64..." tried=9 matched=none outcome=passthrough
+  ```
+  Outcomes: `recovered | unresolved | gave_up | error | passthrough`. Input truncated to 80 chars. Confirms the previously-invisible passthrough case is now surfaced — turned up a mystery invocation where something routed a raw inventory dump into the dispatcher (filed for a future look).
+
+- **StateTicker integration** — per-tick snapshot includes:
+  ```json
+  "auto_recovery": {"invocations": 1, "matched": 0, "match_rate": 0, "recovered": 0,
+                    "last": {"pattern": null, "outcome": "passthrough", "t": "2026-04-17T18:52:27.966Z"}}
+  ```
+  Verified on live `data/state-stream.jsonl` tick at 19:00:22Z. Field is `null` when stats are unavailable (graceful), otherwise populated every 1 Hz.
+
+- **`!recovery-stats` debug command** — registered (`CommandDocs` count went from 62 → 63 on startup), added to the unblockable list alongside `!stop/!stats/!inventory/!goal`. Not in `ALWAYS_INCLUDE` for prompt docs — it's human-facing, and keeping it out of every LLM prompt saves tokens.
+
+**Files shipped (`baab2bd`, 199 insertions / 2 deletions):**
+- `src/agent/auto_recovery.js` — instance stats (`invocations`, `matched`, `recovered`, `unresolved`, `gaveUp`, `error`, `passthrough`, per-pattern Map, `last`), `_logInvocation()` emits the summary line, `getStats()` returns a read-only snapshot.
+- `src/observability/state_ticker.js` — one new field in `_snapshot()`, try/catch around the getter so StateTicker never breaks if the agent wiring isn't there yet.
+- `src/agent/commands/queries.js` — `!recovery-stats` entry with totals, match rate, per-pattern breakdown, last-invocation block.
+- `src/agent/commands/index.js` — `!recovery-stats` added only to unblockable list (Rule 10 — surgical).
+
+**Root-cause statement (why this needed to exist).** Instrumentation was written from the pattern-author's perspective (each pattern logs its own hit), not the dispatcher's. When no pattern matched, the loop just fell through silently. BT-5 flips the perspective — one line per invocation, always.
+
+**Philosophy alignment.** Principle 1 (the scaffolding-leverage measurement). Principle 8 (observability drives decisions, not vibes).
 
 ### 2026-04-17 — BT-4 MemoryRecall: [MemoryRecall] log line per memory retrieval ✅
 
