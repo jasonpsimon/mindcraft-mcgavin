@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-4 memory retrieval visibility shipped + live-verified; 6 BT-N items remain in ⏳)_
+_Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-progress; 6 BT-N items remain in ⏳)_
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17 (BT-4 memory retrieval visibility shipped + live-verif
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), and MemoryRecall (BT-4) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `1bcbbb6`. Six observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, and BT-4 MemoryRecall. Pushed to `origin/develop` 2026-04-17.
+- Branch: `develop` — HEAD `ad2d639`. Six observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, and BT-4 MemoryRecall. Pushed to `origin/develop` 2026-04-17. **BT-5 AutoRecovery stats is next — currently in-progress per agreed logging-roadmap ordering.**
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,7 +64,36 @@ _Last updated: 2026-04-17 (BT-4 memory retrieval visibility shipped + live-verif
 
 ## In-progress
 
-_Empty — pick the next BT-N item from the ⏳ queue._
+### BT-5. AutoRecovery match/miss rate
+
+**Status:** 🚧 in-progress (picked up 2026-04-17) • **Priority:** high (exact measurement needed to judge Principle 1 progress)
+
+**Problem.** AutoRecovery logs extensively **when it matches** (`auto_recovery.js:442, 451, 460, 469, 485, 507, 527` — 35 `console.log` in that file, mostly in match branches). When it's consulted and no pattern matches, effectively no log — the loop at `auto_recovery.js:307` `for (const pattern of this.patterns)` just falls through. One branch logs `"passing through"` for a specific `cannot_smelt` case; the general "we looked at N patterns and none matched" never surfaces. No way to measure: fraction of failures AutoRecovery caught vs. passed through to LLM, which patterns are hot, which are dead.
+
+**Root cause.** Instrumentation written from the pattern-author's perspective (each pattern logs its own hit), not from the dispatcher's perspective.
+
+**Solution (scope expanded from original ticket).** Three ships under one commit:
+
+1. **Per-invocation summary line.** One `[AutoRecovery]` line per `checkAndRecover` call, regardless of match. Format:
+   ```
+   [AutoRecovery] input="Cannot smelt coal_ore..." tried=7 matched=cannot_smelt outcome=recovered
+   [AutoRecovery] input="Unknown error..." tried=8 matched=none outcome=passthrough
+   ```
+   Outcomes: `recovered | unresolved | gave_up | error | passthrough`. Input truncated to 80 chars.
+
+2. **StateTicker integration.** New `auto_recovery: {invocations, matched, match_rate, recovered, last}` field in per-tick snapshot — gives live dashboards (and any future tooling) the scaffolding-leverage number without grep archaeology.
+
+3. **`!recovery-stats` debug command.** Queryable table: totals, match rate, per-pattern breakdown, last invocation.
+
+**Files touched.**
+- `src/agent/auto_recovery.js` — stats instance state + `_logInvocation()` + `getStats()`. No per-pattern log changes.
+- `src/observability/state_ticker.js` — one new field in `_snapshot()`.
+- `src/agent/commands/queries.js` — new `!recovery-stats` entry.
+- `src/agent/commands/index.js` — add `!recovery-stats` to unblockable list.
+
+**Success signal.** Every failure seen by AutoRecovery produces exactly one summary line. Stats directly answer "what fraction of failures did scaffolding catch." `!recovery-stats` dumps a readable table on demand.
+
+**Philosophy alignment.** Principle 1 (this is the measurement). Principle 8.
 
 ## Shipped — awaiting live verification
 
@@ -119,37 +148,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 **Blast radius (per adapter).** Localized to that one file. `withLLMMetrics` is already shipped and proven by lmstudio.
 
 **Effort.** Small-per-adapter (~15 min each) × 19 = ~4 hours once credentials exist.
-
-### BT-5. AutoRecovery match/miss rate
-
-**Status:** ⏳ not started • **Priority:** high (exact measurement needed to judge Principle 1 progress)
-
-**Problem.** AutoRecovery logs extensively **when it matches** (`auto_recovery.js:442, 451, 460, 469, 485, 507, 527` — 35 `console.log` in that file, mostly in match branches). When it's consulted and no pattern matches, effectively no log — the loop at `auto_recovery.js:307` `for (const pattern of this.patterns)` just falls through. One branch logs `"passing through"` for a specific `cannot_smelt` case; the general "we looked at N patterns and none matched" never surfaces. No way to measure: fraction of failures AutoRecovery caught vs. passed through to LLM, which patterns are hot, which are dead.
-
-**Root cause.** Instrumentation written from the pattern-author's perspective (each pattern logs its own hit), not from the dispatcher's perspective.
-
-**Proposed solution.** One `[AutoRecovery]` summary line per invocation, regardless of match:
-
-```
-[AutoRecovery] input="Cannot smelt coal_ore..." tried=7 matched=cannot_smelt outcome=recovered fallback=false
-[AutoRecovery] input="Unknown error: ..." tried=7 matched=none passthrough_to=llm
-```
-
-Plus per-pattern rolling hit counter via `getStats()` — consumable by state ticker or a `!recovery-stats` debug command.
-
-**Implementation plan.**
-1. `_logInvocation(input, result)` at dispatcher exit after the for-loop resolves.
-2. Each pattern returns `{matched, recovered, handler}` so the dispatcher assembles the summary.
-3. `stats.byPattern = {cannot_smelt: {hit: 12, miss: 0}, ...}` — aggregates over session.
-4. Optional: `!recovery-stats` debug command dumps the table.
-
-**Blast radius.** Dispatcher entry/exit only; existing per-pattern logs stay as detail. No behavior change.
-
-**Success signal.** Every failure seen by AutoRecovery produces exactly one summary line. Stats directly answer "what fraction of failures did scaffolding catch."
-
-**Philosophy alignment.** Principle 1 (this is the measurement). Principle 8.
-
-**Effort.** Small — ~60 lines in `auto_recovery.js`.
 
 ### BT-6. Pathfinder telemetry
 
