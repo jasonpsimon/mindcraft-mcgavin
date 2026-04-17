@@ -102,3 +102,152 @@ export async function withLLMRetry(fn, label = 'LLM') {
         }
     });
 }
+
+// ---------------------------------------------------------------------------
+// LLM call telemetry (BT-3)
+// ---------------------------------------------------------------------------
+//
+// withLLMMetrics() wraps a single LLM round-trip with timing + token-usage
+// logging on top of the same retry semantics as withLLMRetry. Emits exactly
+// one [LLM] structured log line per invocation — on success OR on terminal
+// failure after retries are exhausted.
+//
+// Philosophy alignment:
+//   - Principle 1 (reduce LLM reliance): measurement is the prerequisite
+//     to tuning. You can't tune what you can't measure.
+//   - Principle 8 (fail loudly, informatively): [LLM] lines surface
+//     latency, tokens, retries, and error class in a single scannable
+//     prefix — no grep archaeology required.
+//
+// Rule alignment:
+//   - Rule 1 (flexible): `extractUsage` is an optional callback so
+//     non-OpenAI-shaped responses (Anthropic, Replicate, etc.) can opt
+//     in without touching this file. Default covers OpenAI-compatible
+//     (LM Studio, GPT, OpenRouter, etc.).
+//   - Rule 5 (no adverse effects): the telemetry wrapper returns the
+//     raw response from fn unchanged — callers see no behavior shift.
+//     A failure to extract usage / emit the log is caught and logged
+//     with its own prefix; it never propagates to the caller.
+//
+// Scope note (Principle 5 — Finish migrations, kill redundancy):
+// Today only lmstudio.js routes through this helper. The other 19
+// model adapters (gpt, claude, ollama, gemini, etc.) retain their
+// original error handling and do NOT emit [LLM] lines. That migration
+// is tracked as whiteboard entry BT-3b. The deferral is intentional:
+// JP's only active LLM provider is LM Studio, and migrating 19
+// untested adapters would add risk without value today.
+
+/**
+ * Default usage extractor for OpenAI-compatible responses.
+ * Returns a normalized object with nullable fields where the response
+ * doesn't carry the information.
+ */
+function _defaultExtractUsage(response) {
+    if (!response || typeof response !== 'object') {
+        return { prompt_tokens: null, completion_tokens: null, total_tokens: null, finish_reason: null, cache_hit: null };
+    }
+    const usage = response.usage || {};
+    const firstChoice = Array.isArray(response.choices) ? response.choices[0] : null;
+    // LM Studio sometimes returns prompt_tokens_details.cached_tokens when
+    // the prompt cache was hit. Normalize to a single `cache_hit` boolean
+    // when any cached tokens are reported.
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+    return {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+        finish_reason: firstChoice?.finish_reason ?? null,
+        cache_hit: typeof cachedTokens === 'number' ? (cachedTokens > 0) : null,
+    };
+}
+
+/** Safely classify an error for the [LLM] status=error log line. */
+function _errorClass(err) {
+    if (!err) return 'unknown';
+    return err.name || err.code || 'Error';
+}
+
+/**
+ * Wrap an async LLM call with retry + one [LLM] structured log line.
+ *
+ * @param {object} context
+ * @param {string} context.label            Short adapter label, e.g. "LMStudio".
+ * @param {string} context.model            Model name being called.
+ * @param {Function} [context.extractUsage] Optional response -> usage extractor.
+ *                                          Defaults to OpenAI-compatible shape.
+ * @param {object} [context.retryOptions]   Overrides for withRetry (maxRetries, etc.).
+ * @param {Function} fn                     Async function performing the API call.
+ * @returns {Promise<*>}                    Raw response from fn() (unchanged).
+ */
+export async function withLLMMetrics(context, fn) {
+    const {
+        label = 'LLM',
+        model = '?',
+        extractUsage = _defaultExtractUsage,
+        retryOptions = {},
+    } = context || {};
+
+    const startedAt = Date.now();
+    let retries = 0;
+
+    // Build retry options. Count retries via onRetry; keep the same
+    // user-visible warn log shape so behavior doesn't change for callers.
+    const mergedRetryOptions = {
+        maxRetries: 3,
+        baseDelay: 2000,
+        maxDelay: 15000,
+        jitter: true,
+        ...retryOptions,
+        onRetry: (err, attempt, delay) => {
+            retries = attempt; // final value = total retries executed
+            if (typeof retryOptions.onRetry === 'function') {
+                retryOptions.onRetry(err, attempt, delay);
+            } else {
+                console.warn(`[${label}] Request failed (attempt ${attempt}/3): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+            }
+        },
+    };
+
+    try {
+        const result = await withRetry(fn, mergedRetryOptions);
+        const elapsedMs = Date.now() - startedAt;
+        try {
+            const usage = extractUsage(result) || {};
+            // tok_per_s — only meaningful when we have a token count AND
+            // non-zero elapsed. Prefer completion_tokens (decode rate);
+            // fall back to total_tokens when completion isn't exposed.
+            const tokForRate = typeof usage.completion_tokens === 'number'
+                ? usage.completion_tokens
+                : usage.total_tokens;
+            const tokPerSec = (typeof tokForRate === 'number' && elapsedMs > 0)
+                ? Number((tokForRate / (elapsedMs / 1000)).toFixed(2))
+                : null;
+            console.log(
+                `[LLM] label=${label} model=${model} elapsed_ms=${elapsedMs} ` +
+                `prompt_tok=${usage.prompt_tokens ?? '?'} ` +
+                `completion_tok=${usage.completion_tokens ?? '?'} ` +
+                `total_tok=${usage.total_tokens ?? '?'} ` +
+                `tok_per_s=${tokPerSec ?? '?'} ` +
+                `retries=${retries} ` +
+                `finish=${usage.finish_reason ?? '?'} ` +
+                `cache_hit=${usage.cache_hit ?? '?'} ` +
+                `status=ok`
+            );
+        } catch (logErr) {
+            // Never let telemetry failure poison the return path.
+            console.warn(`[LLM] telemetry extract failed (label=${label} model=${model}): ${logErr.message}`);
+        }
+        return result;
+    } catch (err) {
+        const elapsedMs = Date.now() - startedAt;
+        try {
+            console.log(
+                `[LLM] label=${label} model=${model} elapsed_ms=${elapsedMs} ` +
+                `retries=${retries} status=error err_class=${_errorClass(err)}`
+            );
+        } catch (_) {
+            // log emit should itself never throw, but guard anyway
+        }
+        throw err;
+    }
+}

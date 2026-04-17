@@ -1,6 +1,6 @@
 import OpenAIApi from 'openai';
 import { strictFormat, stripThinkTags } from '../utils/text.js';
-import { withLLMRetry } from '../utils/retry.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -26,9 +26,9 @@ export class LMStudio {
                 stop: stop_seq,
                 ...(this.params || {})
             };
-            const completion = await withLLMRetry(
+            const completion = await withLLMMetrics(
+                { label: 'LMStudio', model },
                 () => this.openai.chat.completions.create(pack),
-                'LMStudio'
             );
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
@@ -64,13 +64,14 @@ export class LMStudio {
     async embed(text) {
         if (text.length > 8191)
             text = text.slice(0, 8191);
-        const embedding = await withLLMRetry(
+        const embedModel = this.model_name || 'text-embedding-nomic-embed-text-v1.5';
+        const embedding = await withLLMMetrics(
+            { label: 'LMStudio-Embed', model: embedModel },
             () => this.openai.embeddings.create({
-                model: this.model_name || 'text-embedding-nomic-embed-text-v1.5',
+                model: embedModel,
                 input: text,
                 encoding_format: 'float',
             }),
-            'LMStudio-Embed'
         );
         return embedding.data[0].embedding;
     }
