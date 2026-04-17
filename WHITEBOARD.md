@@ -56,6 +56,22 @@ _Last updated: 2026-04-17 (BT-1 StateTicker shipped — observability foundation
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
 
+### BT-8. Boot config snapshot
+
+**Status:** 🟡 in progress • **Priority:** medium-high (cheapest big-win item — one structured line at startup)
+
+**Problem.** `process/init_agent.js:42-50` logs `"Connecting to MindServer"`, `"Starting agent"`, and errors. Nowhere does it emit which profile is loaded, which model is active, which embedding model, which mineflayer/prismarine versions, which Node version, or what settings are in effect. Bug reports and session logs have to infer all this from filesystem state or tribal knowledge.
+
+**Proposed solution.** One `[Boot]` structured log line at agent init:
+
+```
+[Boot] profile=ThatCoolGuyDude model=lmstudio/gemma-4-e4b-it-obliterated embed=lmstudio/text-embedding-nomic-embed-text-v1.5 node=20.11 mineflayer=4.x mc_version=1.21.4 host=192.168.1.198 port=55916 settings_hash=abc123 features={state_ticker:on,chunk_wait:on,...}
+```
+
+Also dump full resolved config to `data/boot-snapshot.json` (overwritten per boot) — one file, full reproducibility for any bug report.
+
+**Effort.** Trivial — ~40 lines in `init_agent.js`.
+
 ## Shipped — awaiting live verification
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
@@ -243,21 +259,6 @@ Apply progressively — don't retrofit all 82 skills in one PR. Start with the 1
 
 **Effort.** Medium — ~30 lines wrapper + ~5 min per skill to apply (10 skills ≈ 1 hour).
 
-### BT-8. Boot config snapshot
-
-**Status:** ⏳ not started • **Priority:** medium-high (cheapest big-win item — one structured line at startup)
-
-**Problem.** `process/init_agent.js:42-50` logs `"Connecting to MindServer"`, `"Starting agent"`, and errors. Nowhere does it emit which profile is loaded, which model is active, which embedding model, which mineflayer/prismarine versions, which Node version, or what settings are in effect. Bug reports and session logs have to infer all this from filesystem state or tribal knowledge.
-
-**Proposed solution.** One `[Boot]` structured log line at agent init:
-
-```
-[Boot] profile=ThatCoolGuyDude model=lmstudio/gemma-4-e4b-it-obliterated embed=lmstudio/text-embedding-nomic-embed-text-v1.5 node=20.11 mineflayer=4.x mc_version=1.21.4 host=192.168.1.198 port=55916 settings_hash=abc123 features={state_ticker:on,chunk_wait:on,...}
-```
-
-Also dump full resolved config to `data/boot-snapshot.json` (overwritten per boot) — one file, full reproducibility for any bug report.
-
-**Effort.** Trivial — ~40 lines in `init_agent.js`.
 
 ### BT-9. World/time event emission to log
 
