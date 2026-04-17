@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-3 LLM call telemetry shipped — lmstudio now emits [LLM] per call; BT-3b files the 19-adapter migration follow-up)_
+_Last updated: 2026-04-17 (BT-2 Damage event stream moved to In-progress)_
 
 ---
 
@@ -63,6 +63,36 @@ _Last updated: 2026-04-17 (BT-3 LLM call telemetry shipped — lmstudio now emit
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
 
+### BT-2. Damage event stream — every hit, not just death
+
+**Status:** 🟡 in progress • **Priority:** high (fills the "how did the bot lose 14 HP" black box; **unblocks F's "died to lava at Y=-12" LTM store path**)
+
+**Problem.** Death is logged (`agent.js:1074`: `"Agent died: ..."`) and writes to memory_bank, long_term_memory, episodic. Non-lethal damage events are not logged. The `bot.on('health')` handler at `agent.js:1046` tracks `lastDamageTime`/`lastDamageTaken` as state variables but emits nothing. A player watching the log sees the bot go from 20 HP to 6 HP between two command outputs with zero record of what happened.
+
+**Root cause.** Damage tracking exists for reflex modes (self_preservation needs `lastDamageTime`), not for observability. No one asked "could a human reading the log reconstruct the damage timeline?"
+
+**Proposed solution.** `DamageStream` that emits one `[Damage]` log line + one JSONL record per `health`-decrease event:
+
+```
+{"t":"...","amount":3.0,"health_before":14,"health_after":11,"source":"zombie","pos":{...},"food":17}
+```
+
+Source inference: check `bot.lastAttackedEntity` + entity type; fall back to block-at-feet for lava/fire/sweet_berries/void, `bot.oxygenLevel` drop for drowning, Y-velocity for fall damage. When source is indeterminate, emit `"source":"unknown"` rather than swallow the event.
+
+**Implementation plan.**
+1. `src/observability/damage_stream.js` — single module. Wire into `agent.js:1046` health handler (additive, three lines); existing state already tracked there.
+2. Classifier: small table mapping inference rules → source label. Data-driven per Rule 1.
+3. On death, also feed `long_term_memory.store()` with source + position — directly advances F's death-event path. Keep the existing death handler's memory_bank write.
+4. Output: `[Damage]`-prefixed log line + append to `data/damage-stream.jsonl` (append-only, rotating).
+
+**Blast radius.** Three-line addition to `agent.js:1046` health handler. No callers affected. BT-1 state ticker optional consumer (damage count in last 60s).
+
+**Success signal.** Log tail shows `[Damage]` pulses for every hit; `damage-stream.jsonl` replays a full combat. Deaths now carry inferred source in LTM on restart.
+
+**Philosophy alignment.** Principle 1 (classifier, not LLM). Principle 2 (feeds LTM — memory cognition). Principle 4 (persists across sessions). Principle 8 (fails loudly).
+
+**Effort.** Small — ~80 lines module, ~5 lines wiring.
+
 ## Shipped — awaiting live verification
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
@@ -90,36 +120,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-### BT-2. Damage event stream — every hit, not just death
-
-**Status:** ⏳ not started • **Priority:** high (fills the "how did the bot lose 14 HP" black box; **unblocks F's "died to lava at Y=-12" LTM store path**)
-
-**Problem.** Death is logged (`agent.js:1074`: `"Agent died: ..."`) and writes to memory_bank, long_term_memory, episodic. Non-lethal damage events are not logged. The `bot.on('health')` handler at `agent.js:1046` tracks `lastDamageTime`/`lastDamageTaken` as state variables but emits nothing. A player watching the log sees the bot go from 20 HP to 6 HP between two command outputs with zero record of what happened.
-
-**Root cause.** Damage tracking exists for reflex modes (self_preservation needs `lastDamageTime`), not for observability. No one asked "could a human reading the log reconstruct the damage timeline?"
-
-**Proposed solution.** `DamageStream` that emits one `[Damage]` log line + one JSONL record per `health`-decrease event:
-
-```
-{"t":"...","amount":3.0,"health_before":14,"health_after":11,"source":"zombie","pos":{...},"food":17}
-```
-
-Source inference: check `bot.lastAttackedEntity` + entity type; fall back to block-at-feet for lava/fire/sweet_berries/void, `bot.oxygenLevel` drop for drowning, Y-velocity for fall damage. When source is indeterminate, emit `"source":"unknown"` rather than swallow the event.
-
-**Implementation plan.**
-1. `src/observability/damage_stream.js` — single module. Wire into `agent.js:1046` health handler (additive, three lines); existing state already tracked there.
-2. Classifier: small table mapping inference rules → source label. Data-driven per Rule 1.
-3. On death, also feed `long_term_memory.store()` with source + position — directly advances F's death-event path. Keep the existing death handler's memory_bank write.
-4. Output: `[Damage]`-prefixed log line + append to `data/damage-stream.jsonl` (append-only, rotating).
-
-**Blast radius.** Three-line addition to `agent.js:1046` health handler. No callers affected. BT-1 state ticker optional consumer (damage count in last 60s).
-
-**Success signal.** Log tail shows `[Damage]` pulses for every hit; `damage-stream.jsonl` replays a full combat. Deaths now carry inferred source in LTM on restart.
-
-**Philosophy alignment.** Principle 1 (classifier, not LLM). Principle 2 (feeds LTM — memory cognition). Principle 4 (persists across sessions). Principle 8 (fails loudly).
-
-**Effort.** Small — ~80 lines module, ~5 lines wiring.
 
 
 ### BT-3b. LLM telemetry — migrate remaining 19 model adapters through withLLMMetrics
