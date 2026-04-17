@@ -263,17 +263,18 @@ export class Agent {
                     console.warn('[VillageDetect] startVillageScanner threw:', scanErr.message);
                 }
 
-                // Vacate any protected zone before anything else happens.
-                // If the bot spawns inside the zone, no destructive action can succeed;
-                // the LLM can't reliably reason its way out of a 250-block exclusion zone,
-                // so this is a pure mechanical pre-game move. Handles spawn, village, and structure zones.
-                try {
-                    await skills.escapeProtectedZone(this.bot);
-                } catch (escapeErr) {
-                    console.warn('[ProtectedZoneEscape] Error during spawn escape:', escapeErr.message);
-                }
-
-                this._setupEventHandlers(save_data, init_message);
+                // BT-12: wire observability BEFORE the spawn-escape await so
+                // any damage taken during escape, path decisions, mutex
+                // contention, and general bot state during the 45-60s
+                // zone-escape window are captured. startEvents() attaches
+                // bot.on('health'|'error'|'end'|'death'|'kicked'|'messagestr'|'time')
+                // listeners and constructs DamageStream; StateTicker begins
+                // its 1Hz pulse. Neither requires escape to have completed —
+                // listeners fire when events fire; StateTicker reads
+                // bot.entity.* getters guarded by a NaN/ChunkWait held-state
+                // fallback. _setupEventHandlers stays AFTER escape because
+                // it wires chat/whisper handling and kicks the init message;
+                // gating player interaction until post-escape is desirable.
                 this.startEvents();
 
                 // Start the StateTicker (BT-1): 1Hz structured pulse stream
@@ -293,6 +294,18 @@ export class Agent {
                 } catch (stErr) {
                     console.warn('[StateTicker] failed to start:', stErr.message);
                 }
+
+                // Vacate any protected zone before anything else happens.
+                // If the bot spawns inside the zone, no destructive action can succeed;
+                // the LLM can't reliably reason its way out of a 250-block exclusion zone,
+                // so this is a pure mechanical pre-game move. Handles spawn, village, and structure zones.
+                try {
+                    await skills.escapeProtectedZone(this.bot);
+                } catch (escapeErr) {
+                    console.warn('[ProtectedZoneEscape] Error during spawn escape:', escapeErr.message);
+                }
+
+                this._setupEventHandlers(save_data, init_message);
 
                 if (!load_mem) {
                     if (settings.task) {
