@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-progress; 6 BT-N items remain in ⏳)_
+_Last updated: 2026-04-17 (BT-5 AutoRecovery stats picked up — moved to in-progress; 2 new incident-driven items filed from goal-loss forensics: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state)_
 
 ---
 
@@ -122,7 +122,56 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
+### 22. `escapeProtectedZone` suffocation trap
 
+**Status:** ⏳ not started • **Priority:** high (direct death cause — 2026-04-17 forensic incident)
+
+**Problem.** On 2026-04-17 at ~16:40:44Z, `escapeProtectedZone` recovery pathed the bot into a non-air block and the bot suffocated out over ~60 s. `data/damage-stream.jsonl` shows the signature clearly: repeated 1.18 damage/tick from `source=unknown`, `position=null`, `food=17` (not starvation), culminating in a lethal event at 16:41:45.040Z. StateTicker's last good position (16:40:44.075Z) has pathfinder active and `mutex=autoRecovery:inside_protected_zone` — one tick later, NaN position + ChunkWait hold. The escape goal itself succeeded in the "bot is no longer in the protected zone" sense, but the chosen step landed the bot's hitbox inside terrain.
+
+**Root cause.** `escapeProtectedZone` picks directional hops to walk the bot away from the zone center but does not validate that the target block at feet/head level is air before committing the pathfinder goal. No pre-move collision check. Bot happily steps into a block, its head is in solid material, suffocation fires every tick, and because the damage source is "inside a block" there's no hostile for `self_defense` to flee from.
+
+**Solution sketch.** In `escapeProtectedZone` (and the helper that picks the directional hop), before calling `pathfinder.setGoal` on the candidate target, read the two blocks at `(x, y, z)` and `(x, y+1, z)` via `bot.blockAt(...)`. If either is non-passable, reject the candidate and try the next direction. Secondary guard: if `self_preservation`'s head-in-block detector (#10 suffocation-escape, currently in the Partial bucket) ships first, it would also save us here — these two fixes are redundant in a good way.
+
+**Files.**
+- `src/agent/library/skills.js` — `escapeProtectedZone` and its phase-2 directional-hop helper.
+- Possibly `self_preservation.js` if we take the secondary-guard route.
+
+**Blast radius.** Localized to `escapeProtectedZone` and its call site in the spawn-event hook / AutoRecovery `inside_protected_zone` handler. Additive collision check; no change to existing success paths.
+
+**Success signal.** A replay of the 2026-04-17 scenario (bot entering the same chunk from the same approach angle) either (a) picks a different direction or (b) skips the unsafe step, and the bot does not take suffocation damage during escape. Look for a new `[SkillGuard]` / `[EscapeZone]` log line showing the rejected-candidate reason.
+
+**Philosophy alignment.** Rule 7 (complete the perimeter — every pathfinder commit point needs the same safety invariant). Principle 1 (mechanical decision; don't ask the LLM to notice it's suffocating).
+
+### 23. Self-prompter ignores held state during ChunkWait/NaN windows
+
+**Status:** ⏳ not started • **Priority:** high (goal-loss + wasted LLM calls + spurious auto-stop)
+
+**Problem.** On 2026-04-17, during the 60 s ChunkWait hold triggered by the suffocation incident, `SelfPrompter.startLoop` (src/agent/self_prompter.js:141+) kept inviting LLM responses. The bot was dying, position was NaN, state-stream was emitting `{held: true, reason}` stubs, but the prompt loop neither noticed nor backed off. It cycled `handleMessage` 3+ times, got 3 consecutive no-command responses, hit the auto-stop at line 187 (`Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`), set `state = STOPPED`, and sent "Stopping auto-prompting" to chat. The next `history.save()` serialized `self_prompt: null`, `self_prompting_state: 0`. On next restart, the bot loaded null — the "mine 64 ancient debris" goal was gone. This is not a persistence bug (persistence worked exactly as designed — the goal was already STOPPED at save-time); it's an upstream loop-awareness bug that made persistence serialize an incorrect terminal state.
+
+**Root cause.** `startLoop`'s guard is `while (!this.interrupt)` — it has no signal for "the world is frozen, don't waste an LLM round-trip." It doesn't consult `chunk_wait.isHeld()` / StateTicker's held flag / any equivalent. Every 2 s (base cooldown) it fires another `handleMessage`, and when the LLM keeps returning empty (because there's nothing actionable to say during a chunk hold), the no-command counter ticks toward the auto-stop.
+
+**Solution sketch.** Before the `handleMessage` call inside the loop, check whether the bot is in a held state. Rough shape:
+
+```js
+// at top of while-loop body, before the self-prompt message build
+if (this.agent?.chunk_wait?.isHeld?.() || !isPositionValid(this.agent?.bot?.entity?.position)) {
+    // wait a tick, don't invite the LLM, don't increment no_command_count
+    await new Promise(r => setTimeout(r, 1000));
+    continue;
+}
+```
+
+The `continue` is the key behavior change — held ticks are no-ops, not LLM-round-trips and not auto-stop fuel. `no_command_count` does not advance while held.
+
+**Files.**
+- `src/agent/self_prompter.js` — add held check at top of `startLoop`'s while-body; expose a small helper if `chunk_wait` doesn't already have `isHeld()`.
+- Verify against `src/agent/chunk_wait.js` (need to read it — see Rule 2) to confirm the right predicate.
+
+**Blast radius.** Local to `self_prompter.js`'s main loop. Does not touch `handleMessage`, the stop path, or persistence. Additive guard — existing behavior preserved in the non-held case.
+
+**Success signal.** Replay scenario: trigger a ChunkWait hold (NaN position) with self-prompting active. `self_prompter` does not emit `handleMessage` calls during the hold, `no_command_count` does not advance, `state` stays `ACTIVE`, and once the hold clears the loop resumes normally. Memory.json save during a hold still reflects the active goal.
+
+**Philosophy alignment.** Principle 1 (don't ask the LLM for decisions when the world isn't in a decidable state). Principle 8 (instrumentation we just shipped — StateTicker's held flag — should drive control flow, not just logs).
 
 ### BT-3b. LLM telemetry — migrate remaining 19 model adapters through withLLMMetrics
 
