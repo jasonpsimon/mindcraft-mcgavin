@@ -25,6 +25,7 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 import { AutoRecoveryEngine } from './auto_recovery.js';
 import { ChunkWait } from './chunk_wait.js';
 import { StateTicker } from '../observability/state_ticker.js';
+import { captureBootSnapshot } from '../observability/boot_snapshot.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -40,7 +41,19 @@ export class Agent {
         this.prompter = new Prompter(this, settings.profile);
         this.name = (this.prompter.getName() || '').trim();
         console.log(`Initializing agent ${this.name}...`);
-        
+
+        // Capture boot snapshot (BT-8): one [Boot] structured log line plus
+        // data/boot-snapshot.json with the full resolved settings, models,
+        // runtime versions, target host/port, and feature flags. Runs here
+        // so the snapshot lands even if name validation / bot connect fail
+        // — bug reports can use the JSON file for reproducibility. Wrapped
+        // so a snapshot failure never blocks startup.
+        try {
+            captureBootSnapshot(this, settings);
+        } catch (bootErr) {
+            console.warn('[Boot] captureBootSnapshot threw:', bootErr.message);
+        }
+
         // Validate Name Format
         // connection_handler now ensures the message has [LoginGuard] prefix
         const nameCheck = validateNameFormat(this.name);
