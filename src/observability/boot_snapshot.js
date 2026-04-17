@@ -94,6 +94,27 @@ function _onOff(v) {
 }
 
 /**
+ * Render a model reference for the structured log line. Profiles store
+ * models in two shapes:
+ *   - bare string: e.g. "lmstudio/gemma-4-e4b"
+ *   - object: { api, model, url } (this shape is used when the profile
+ *     has embedding config, e.g. for a separate LM Studio embedder)
+ * Collapse both to a compact "api/model" (or just the string form) so
+ * the log line stays single-line and human-scannable. JSON dump keeps
+ * the raw object — no information loss there.
+ */
+function _modelLabel(m) {
+    if (m == null) return null;
+    if (typeof m === 'string') return m;
+    if (typeof m === 'object') {
+        if (m.api && m.model) return `${m.api}/${m.model}`;
+        if (m.model) return m.model;
+        if (m.api) return m.api;
+    }
+    return String(m);
+}
+
+/**
  * Best-effort lookup of the mineflayer package version from its
  * installed package.json. Returns `'?'` if the lookup fails (e.g.,
  * monorepo layouts where the dependency isn't a top-level module).
@@ -170,9 +191,9 @@ export function captureBootSnapshot(agent, settings) {
             .join(',');
         console.log(
             `[Boot] profile=${record.profile ?? '?'} ` +
-            `chat=${record.models.chat ?? '?'} ` +
-            `fast=${record.models.fast ?? '(chat)'} ` +
-            `embed=${record.models.embed ?? '(inherit)'} ` +
+            `chat=${_modelLabel(record.models.chat) ?? '?'} ` +
+            `fast=${_modelLabel(record.models.fast) ?? '(chat)'} ` +
+            `embed=${_modelLabel(record.models.embed) ?? '(inherit)'} ` +
             `node=${record.runtime.node} ` +
             `mineflayer=${record.runtime.mineflayer} ` +
             `mc_version=${record.mc.version ?? '?'} ` +
