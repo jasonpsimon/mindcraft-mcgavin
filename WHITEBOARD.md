@@ -56,38 +56,9 @@ _Last updated: 2026-04-16 (observability audit — BT-2..BT-11 + BT-bundle added
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
 
----
-
-## Shipped — awaiting live verification
-
-Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
-
-### 16.2. Block-family expansion for logs and planks
-
-**Status:** shipped `ab997fb` — awaiting live verification • **Priority:** high
-
-When the LLM requests a specific wood type (e.g., `oak_log`) that doesn’t exist in the current biome, `collectBlock` and `goToNearestBlock` now automatically expand the search to all log variants before reporting failure. Eliminates the infinite loop where the bot cycles searchForBlock → "Could not find" → goToSurface → retry on a wood type absent from the biome.
-
-**Implementation:** `BLOCK_FAMILIES` constant + `expandBlockFamily()` helper at module top of `skills.js`. Data-driven — one table entry per family (logs and planks shipped). `collectBlock` adds family members to the `blocktypes` array (same pattern as ore/deepslate expansion). `goToNearestBlock` falls back through variants with "No X found — using Y instead" log message.
-
-**Root cause (discovered during log review):** The original #16.2 described a generic empty-search loop. Actual root cause was the LLM picking biome-specific wood types — a Principle 1 problem (mechanical decision the LLM is bad at). Fix is code-level block-family equivalence, not an AutoRecovery pattern.
-
-**How to verify:**
-- [ ] Bot issues collectBlocks("oak_log", N) in a non-oak biome → log shows family expansion finding spruce/birch/etc. instead
-- [ ] Bot issues searchForBlock("oak_log", N) in a non-oak biome → log shows "No oak_log found — using spruce_log instead"
-- [x] No regression: bot collecting logs in a biome that HAS the requested type still works normally (observed: `collectBlocks("oak_log", 20)` succeeded in oak biome)
-
-## To-do queue
-
-Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Within each status group, items are sorted by importance/impact/severity — highest first. Numbers preserved from project history.
-
----
-
-**⏳ Not started**
-
 ### BT-1. State ticker — structured pulse stream
 
-**Status:** ⏳ not started • **Priority:** high (unlocks cheap verification for every subsequent change; closes the "silent success" observability gap)
+**Status:** 🟡 in progress • **Priority:** high (unlocks cheap verification for every subsequent change; closes the "silent success" observability gap)
 
 **Problem.** Bot logs are event-driven — commands parsed, mutex acquired/released, memories stored, failures surfaced. During quiet success (pathing, walking, mining without incident) emission drops to near zero. The bot holds rich live state — position, velocity, health, food, inventory, pathfinder goal, nearby entities, active mutex, current goal, ContextBuilder slot usage — that never leaves the process unless something breaks. Verification, debugging, and any future visualizer all pay this cost, usually via one-off `console.log` instrumentation that gets ripped out later.
 
@@ -135,6 +106,36 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 **Deferred (not v1).** HTTP/SSE endpoint; 2D top-down map PNG dump; mindserver integration. All can consume the same stream later.
 
 **Estimated effort.** Small — ~150 lines module, ~10 lines wiring, ~5 lines settings. One sitting.
+
+---
+
+## Shipped — awaiting live verification
+
+Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
+
+### 16.2. Block-family expansion for logs and planks
+
+**Status:** shipped `ab997fb` — awaiting live verification • **Priority:** high
+
+When the LLM requests a specific wood type (e.g., `oak_log`) that doesn’t exist in the current biome, `collectBlock` and `goToNearestBlock` now automatically expand the search to all log variants before reporting failure. Eliminates the infinite loop where the bot cycles searchForBlock → "Could not find" → goToSurface → retry on a wood type absent from the biome.
+
+**Implementation:** `BLOCK_FAMILIES` constant + `expandBlockFamily()` helper at module top of `skills.js`. Data-driven — one table entry per family (logs and planks shipped). `collectBlock` adds family members to the `blocktypes` array (same pattern as ore/deepslate expansion). `goToNearestBlock` falls back through variants with "No X found — using Y instead" log message.
+
+**Root cause (discovered during log review):** The original #16.2 described a generic empty-search loop. Actual root cause was the LLM picking biome-specific wood types — a Principle 1 problem (mechanical decision the LLM is bad at). Fix is code-level block-family equivalence, not an AutoRecovery pattern.
+
+**How to verify:**
+- [ ] Bot issues collectBlocks("oak_log", N) in a non-oak biome → log shows family expansion finding spruce/birch/etc. instead
+- [ ] Bot issues searchForBlock("oak_log", N) in a non-oak biome → log shows "No oak_log found — using spruce_log instead"
+- [x] No regression: bot collecting logs in a biome that HAS the requested type still works normally (observed: `collectBlocks("oak_log", 20)` succeeded in oak biome)
+
+## To-do queue
+
+Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Within each status group, items are sorted by importance/impact/severity — highest first. Numbers preserved from project history.
+
+---
+
+**⏳ Not started**
+
 
 ### BT-2. Damage event stream — every hit, not just death
 
