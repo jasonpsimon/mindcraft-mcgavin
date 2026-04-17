@@ -21,6 +21,12 @@ export class SelfPrompter {
         // Each rule: { id, description, condition: function(agent) => bool, action: string }
         this.persistentRules = [];
         this._ruleIdCounter = 0;
+
+        // --- Goal lifecycle tracking (BT-7 Goal lifecycle) ---
+        // _goalStartTime is set when a goal becomes active (start/advance)
+        // and cleared on end. Elapsed ms is computed at end/advance time.
+        this._goalStartTime = null;
+        this._goalPrompt = null;
     }
 
     start(prompt) {
@@ -32,6 +38,9 @@ export class SelfPrompter {
         }
         this.state = ACTIVE;
         this.prompt = prompt;
+        this._goalStartTime = Date.now();
+        this._goalPrompt = prompt;
+        console.log(`[Goal] event=start prompt=${JSON.stringify(prompt)} queue_depth=${this.goalQueue.length}`);
         this.startLoop();
     }
 
@@ -62,13 +71,14 @@ export class SelfPrompter {
     setPromptPaused(prompt) {
         this.prompt = prompt;
         this.state = PAUSED;
+        console.log(`[Goal] event=pause prompt=${JSON.stringify(prompt)}`);
     }
 
     // --- Goal Queue Methods ---
 
     addGoal(goalText) {
         this.goalQueue.push(goalText);
-        console.log(`[GoalQueue] Added goal: "${goalText}" (${this.goalQueue.length} in queue)`);
+        console.log(`[Goal] event=queue_add prompt=${JSON.stringify(goalText)} queue_depth=${this.goalQueue.length}`);
         return `Goal queued: "${goalText}" (position ${this.goalQueue.length} in queue)`;
     }
 
@@ -88,8 +98,12 @@ export class SelfPrompter {
     advanceGoal() {
         if (this.goalQueue.length > 0) {
             const nextGoal = this.goalQueue.shift();
-            console.log(`[GoalQueue] Advancing to next goal: "${nextGoal}" (${this.goalQueue.length} remaining)`);
+            const prev = this._goalPrompt ?? this.prompt;
+            const elapsed = this._goalStartTime ? Date.now() - this._goalStartTime : null;
+            console.log(`[Goal] event=advance from=${JSON.stringify(prev)} to=${JSON.stringify(nextGoal)} ms=${elapsed ?? '?'} queue_depth=${this.goalQueue.length}`);
             this.prompt = nextGoal;
+            this._goalPrompt = nextGoal;
+            this._goalStartTime = Date.now();
             return nextGoal;
         }
         return null;
@@ -232,6 +246,12 @@ export class SelfPrompter {
     }
 
     async stop(stop_action=true) {
+        if (this._goalStartTime && this._goalPrompt) {
+            const elapsed = Date.now() - this._goalStartTime;
+            console.log(`[Goal] event=end prompt=${JSON.stringify(this._goalPrompt)} reason=stop ms=${elapsed}`);
+            this._goalStartTime = null;
+            this._goalPrompt = null;
+        }
         this.interrupt = true;
         if (stop_action)
             await this.agent.actions.stop();
@@ -240,6 +260,9 @@ export class SelfPrompter {
     }
 
     async pause() {
+        if (this._goalStartTime && this._goalPrompt) {
+            console.log(`[Goal] event=pause prompt=${JSON.stringify(this._goalPrompt)}`);
+        }
         this.interrupt = true;
         await this.agent.actions.stop();
         this.stopLoop();

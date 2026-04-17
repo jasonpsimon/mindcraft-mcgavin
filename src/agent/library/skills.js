@@ -6,6 +6,7 @@ import Vec3 from 'vec3';
 import settings from "../../../settings.js";
 import { getDiscardSuggestions, autoDiscard, markDiscarded } from '../../utils/inventory_utils.js';
 import { withBotLock } from '../bot_mutex.js';
+import { wrapSkill } from '../../observability/skill_lifecycle.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
@@ -94,7 +95,7 @@ async function _equipBestToolFor(bot, block) {
     }
 }
 
-export async function craftRecipe(bot, itemName, num=1) {
+async function _impl_craftRecipe(bot, itemName, num=1) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -185,6 +186,8 @@ export async function craftRecipe(bot, itemName, num=1) {
     return true;
 }
 
+export const craftRecipe = wrapSkill('craftRecipe', _impl_craftRecipe);
+
 export async function wait(bot, milliseconds) {
     /**
      * Waits for the given number of milliseconds.
@@ -210,7 +213,7 @@ export async function wait(bot, milliseconds) {
     return true;
 }
 
-export async function smeltItem(bot, itemName, num=1) {
+async function _impl_smeltItem(bot, itemName, num=1) {
     /**
      * Puts 1 coal in furnace and smelts the given item name, waits until the furnace runs out of fuel or input items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -342,6 +345,8 @@ export async function smeltItem(bot, itemName, num=1) {
     log(bot, `Successfully smelted ${itemName}, got ${total} ${mc.getItemName(smelted_item.type)}.`);
     return true;
 }
+
+export const smeltItem = wrapSkill('smeltItem', _impl_smeltItem);
 
 export async function clearNearestFurnace(bot) {
     /**
@@ -485,7 +490,7 @@ export async function defendSelf(bot, range=9) {
 
 
 
-export async function collectBlock(bot, blockType, num=1, exclude=null) {
+async function _impl_collectBlock(bot, blockType, num=1, exclude=null) {
     /**
      * Collect one of the given block type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -707,7 +712,9 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     return collected > 0;
 }
 
-export async function pickupNearbyItems(bot) {
+export const collectBlock = wrapSkill('collectBlock', _impl_collectBlock);
+
+async function _impl_pickupNearbyItems(bot) {
     /**
      * Pick up all nearby items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -735,6 +742,8 @@ export async function pickupNearbyItems(bot) {
     log(bot, `Picked up ${pickedUp} items.`);
     return true;
 }
+
+export const pickupNearbyItems = wrapSkill('pickupNearbyItems', _impl_pickupNearbyItems);
 
 
 export async function breakBlockAt(bot, x, y, z) {
@@ -806,7 +815,7 @@ export async function breakBlockAt(bot, x, y, z) {
 }
 
 
-export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontCheat=false) {
+async function _impl_placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontCheat=false) {
     /**
      * Place the given block type at the given position. It will build off from any adjacent blocks. Will fail if there is a block in the way or nothing to build off of.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -1006,7 +1015,9 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
     }
 }
 
-export async function equip(bot, itemName) {
+export const placeBlock = wrapSkill('placeBlock', _impl_placeBlock);
+
+async function _impl_equip(bot, itemName) {
     /**
      * Equip the given item to the proper body part, like tools or armor.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -1053,6 +1064,8 @@ export async function equip(bot, itemName) {
     return true;
 }
 
+export const equip = wrapSkill('equip', _impl_equip);
+
 
 /**
  * Safely toss items by digging a side pocket when underground/confined.
@@ -1063,7 +1076,7 @@ export async function equip(bot, itemName) {
  * @param {null} metadata - always null (matches bot.toss signature)
  * @param {number} count - how many to toss
  */
-export async function safeToss(bot, itemType, metadata, count) {
+async function _impl_safeToss(bot, itemType, metadata, count) {
     return await withBotLock('safeToss', async () => {
         const pos = bot.entity.position.floored();
 
@@ -1212,6 +1225,8 @@ export async function safeToss(bot, itemType, metadata, count) {
     });
 }
 
+export const safeToss = wrapSkill('safeToss', _impl_safeToss);
+
 /**
  * Batch-toss multiple item types using a SINGLE dump run.
  * Digs one tunnel (underground) or one hole (surface), drops ALL items into the
@@ -1221,7 +1236,7 @@ export async function safeToss(bot, itemType, metadata, count) {
  * @param {Array<{type: number, count: number, name: string}>} items - Items to toss
  *   Each entry: { type: itemId, count: howMany, name: displayName }
  */
-export async function safeTossBatch(bot, items) {
+async function _impl_safeTossBatch(bot, items) {
     if (!items || items.length === 0) return;
 
     return await withBotLock('safeTossBatch', async () => {
@@ -1377,6 +1392,8 @@ export async function safeTossBatch(bot, items) {
         }
     });
 }
+
+export const safeTossBatch = wrapSkill('safeTossBatch', _impl_safeTossBatch);
 
 
 /**
@@ -3126,7 +3143,7 @@ export async function goToPosition(bot, x, y, z, min_distance=2) {
     }
 }
 
-export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64) {
+async function _impl_goToNearestBlock(bot, blockType,  min_distance=2, range=64) {
     /**
      * Navigate to the nearest block of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3178,6 +3195,8 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
     await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
     return true;
 }
+
+export const goToNearestBlock = wrapSkill('goToNearestBlock', _impl_goToNearestBlock);
 
 export async function goToNearestEntity(bot, entityType, min_distance=2, range=64) {
     /**
@@ -3936,7 +3955,7 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
     return bestCavern;
 }
 
-export async function digDown(bot, distance = 10) {
+async function _impl_digDown(bot, distance = 10) {
     /**
      * Digs down a specified distance using a safe staircase pattern.
      * Digs in the direction the bot is facing, creating a 1-wide, 3-high descending staircase.
@@ -4163,8 +4182,10 @@ export async function digDown(bot, distance = 10) {
     });
 }
 
+export const digDown = wrapSkill('digDown', _impl_digDown);
 
-export async function digUp(bot, distance = 10) {
+
+async function _impl_digUp(bot, distance = 10) {
     /**
      * Digs up a specified distance using a safe staircase pattern.
      * Digs in the direction the bot is facing, creating a 1-wide ascending staircase.
@@ -4374,6 +4395,8 @@ export async function digUp(bot, distance = 10) {
     log(bot, `Dug a staircase up ${ascended} blocks.`);
     return true;
 }
+
+export const digUp = wrapSkill('digUp', _impl_digUp);
 /**
  * Place a torch at (x, y, z) against the given face. Respects spawn zone
  * (placeBlock already blocks there). Records the position in the bot's

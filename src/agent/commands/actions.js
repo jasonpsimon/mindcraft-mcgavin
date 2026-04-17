@@ -385,15 +385,25 @@ export const actionsList = [
         description: 'Call when you have accomplished your current goal. If more goals are queued, advances to the next one automatically.',
         perform: async function (agent) {
             const currentGoal = agent.self_prompter.prompt;
+            // Snapshot start time BEFORE advanceGoal, because advanceGoal
+            // resets _goalStartTime when moving to the next queued goal.
+            const startTime = agent.self_prompter._goalStartTime;
             const nextGoal = agent.self_prompter.advanceGoal();
             if (nextGoal) {
-                // Auto-advance to next queued goal
+                // advanceGoal already emitted [Goal] event=advance with
+                // from/to/ms — no further lifecycle line needed here.
                 agent.self_prompter.prompt = nextGoal;
                 const remaining = agent.self_prompter.goalQueue.length;
-                console.log('[GoalQueue] Goal completed, advancing to: "' + nextGoal + '"');
                 return 'Goal completed: "' + currentGoal + '". Now working on: "' + nextGoal + '"' +
                     (remaining > 0 ? ' (' + remaining + ' more in queue)' : ' (last goal in queue)');
             }
+            // Queue drained — emit reason=complete, then clear tracker
+            // state so the forthcoming stop() call does not double-emit
+            // reason=stop for the same goal.
+            const elapsed = startTime ? Date.now() - startTime : null;
+            console.log(`[Goal] event=end prompt=${JSON.stringify(currentGoal)} reason=complete ms=${elapsed ?? '?'}`);
+            agent.self_prompter._goalStartTime = null;
+            agent.self_prompter._goalPrompt = null;
             agent.self_prompter.stop();
             return 'All goals completed. Self-prompting stopped.';
         }
