@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-7 Skill lifecycle + Goal lifecycle shipped `40c04f3` and live-verified — `[Skill] name=digDown args=[10] ms=2516 outcome=abort` + `[Goal] event=start prompt="mine 64 ancient debris" queue_depth=0` both emitted on first live run; JSONL sink `data/skill-stream.jsonl` writing. BT-7b filed for remaining 72 skills.)_
+_Last updated: 2026-04-17 (BT-6 Pathfinder telemetry shipped `1f4b2f2` — `path_telemetry.js` singleton hooks `goal_updated` / `path_update` / `path_reset` / `path_stop` / `goal_reached`, writes `data/path-stream.jsonl`, and attaches a compact `path:` field to every StateTicker pulse. StateTicker payload now shows `"path":{"started":0,"completed":0,"no_path":0,"timeout":0,"stuck_resets":0,...}` — verified live on running bot; live `[Path]` emission awaits a pathfinding skill call from the LLM. Synthetic end-to-end test hit all five events with correct counters, console format, and JSONL sink.)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7), and Goal lifecycle all verified live 2026-04-17.
-- Branch: `develop` — HEAD `40c04f3`. Nine observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), and Goal lifecycle. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 + Goal) sits underneath the measurement layer (BT-5) as the two-tier observability story for skill and goal execution.**
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `1f4b2f2`. Ten observability items shipped on `develop` today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, BT-4 MemoryRecall, BT-5 AutoRecovery stats, BT-7 Skill lifecycle (+ BT-7b filed for remaining 72 skills), Goal lifecycle, and BT-6 Pathfinder telemetry. Pushed to `origin/develop` 2026-04-17. **The lifecycle layer (BT-7 skills + Goal + BT-6 paths) sits underneath the measurement layer (BT-5) as the two-tier observability story.**
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -53,7 +53,7 @@ _Last updated: 2026-04-17 (BT-7 Skill lifecycle + Goal lifecycle shipped `40c04f
 - **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
 - **MemoryRecall** (BT-4): one `[MemoryRecall]` structured log line per memory retrieval (episodic + long-term + confidence/procedural) + append to `data/recall-stream.jsonl`. Fields: `subsystem, query, k, returned, backend, top_score, top_text` plus subsystem-specific extras (`category_top` for LTM; `tier, threshold_high, threshold_med, context_hash, record_count, trigger` for confidence). Backend values: `vectra`, `word-overlap`, `map`, `none`. Procedural lookups collapsed into confidence per Principle 5 (single caller — no duplicate log).
 - **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
-- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/agent/auto_recovery.js` (BT-5 stats), and `src/utils/retry.js` (BT-3 `withLLMMetrics`). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation.
+- All observability emitters audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `src/observability/state_ticker.js`, `src/observability/boot_snapshot.js`, `src/observability/damage_stream.js`, `src/observability/recall_log.js`, `src/observability/skill_lifecycle.js`, `src/observability/path_telemetry.js`, `src/agent/auto_recovery.js` (BT-5 stats), and `src/utils/retry.js` (BT-3 `withLLMMetrics`). BT-12 is an ordering fix in `agent.js`, no new module. Goal lifecycle is inline logging in `src/agent/self_prompter.js` + `src/agent/commands/actions.js` — no new module, no bot mutation.
 
 **Open behaviors / active monitoring:**
 - Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
@@ -276,22 +276,6 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 **Effort.** Moderate-mechanical — ~3–4 hours, ~72 rename-impl edits + 20-ish ad-hoc `[Skills]` line removals.
 
 **Files.** `src/agent/library/skills.js` only.
-
-### BT-6. Pathfinder telemetry
-
-**Status:** ⏳ not started • **Priority:** medium-high (biggest "bot got stuck" debugging surface)
-
-**Problem.** Grep of pathfinder-related logs returns **3 lines total**, all fallback paths in `skills.js`: `[CreateMovements]` (:1852), digDown fallback (:4122), digUp fallback (:4356). Normal pathfinder operation — goal set, route computed, replans, mid-path obstacles, target reached, timeouts — emits nothing.
-
-**Proposed solution.** Hook into `mineflayer-pathfinder` events: `goal_reached`, `path_update`, `path_reset`, `goal_updated`, `no_path`. One `[Path]` log line per event with goal target, path length, replan count, cost. Plus a session counter (`paths_started`, `paths_completed`, `paths_timed_out`, `replans_total`) consumable by state ticker.
-
-**Implementation plan.** Single listener registration in `init_agent.js` after bot spawn, module at `src/observability/path_telemetry.js`. Purely additive; zero mutation.
-
-**Blast radius.** Additive only.
-
-**Effort.** Small — ~70 lines.
-
-**Deferred.** Path visualization (top-down 2D) — separate work, consumes this stream.
 
 ### BT-9. World/time event emission to log
 
@@ -648,6 +632,51 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 
 ## Recently completed
 
+### 2026-04-17 — BT-6 Pathfinder telemetry: `[Path]` event stream shipped ✅
+
+Shipped `1f4b2f2` same day. Pathfinder was the last silent core subsystem — prior to BT-6, `grep` for pathfinder-related logs returned exactly 3 lines total (all fallback paths in `skills.js`). Normal operation — goal set, route computed, replans, mid-path obstacles, target reached, timeouts, noPath — emitted nothing. BT-6 closes that gap with a per-event structured stream plus a compact running-summary field on every StateTicker pulse.
+
+**Three surfaces, all live on the running bot 2026-04-17:**
+
+- **Per-event `[Path]` line** — one record per pathfinder event. Five events instrumented (verified against `node_modules/mineflayer-pathfinder/index.js`): `goal_updated(goal, dynamic)`, `path_update(results)`, `path_reset(reason)`, `path_stop`, `goal_reached(goal)`. Synthetic end-to-end emission (full lifecycle, all five events):
+  ```
+  [Path] event=goal_updated target={"x":100,"y":64,"z":200} dynamic=false paths_started=1
+  [Path] event=path_update status=success cost=42 time=120 visited_nodes=50 generated_nodes=80 path_len=5
+  [Path] event=path_reset reason=stuck
+  [Path] event=path_update status=timeout cost=0 time=5000 visited_nodes=200 generated_nodes=500 path_len=0
+  [Path] event=path_update status=noPath ...
+  [Path] event=goal_reached target={"x":100,"y":64,"z":200} elapsed_ms=2 paths_completed=1
+  [Path] event=path_stop elapsed_ms=?
+  ```
+  Correction to the original proposal in the to-do entry: `mineflayer-pathfinder` does NOT emit `no_path` or `goal_non_reachable` as distinct events — `noPath` is a **status** inside the `path_update` payload, not its own event. The implementation treats `path_update.status` as the primary failure surface and buckets each status into its own counter.
+
+- **JSONL sink** — `data/path-stream.jsonl`, same append-throttled-on-error pattern as every other BT module. One line per event; full structured record (target, cost, time, visited/generated nodes, path_len, elapsed_ms).
+
+- **StateTicker integration** — per-pulse snapshot now carries a compact `path:` field verified live in `data/state-stream.jsonl`:
+  ```json
+  "path": {
+    "started": 0, "completed": 0,
+    "no_path": 0, "timeout": 0, "stuck_resets": 0,
+    "current": null, "last_status": null
+  }
+  ```
+  A reader scanning any tick can see at a glance whether pathfinding is running, whether it recently failed to find a path, and whether the bot is currently stuck-resetting.
+
+**Live `[Path]` emission from the bot itself** is pending — gemma-4-e4b has been choosing `!digDown` in a tight loop and hasn't issued a pathfinding skill yet. The emission path is proven synthetically; it will light up the first time the LLM picks `collectBlock`/`goToNearestBlock`/`goToPosition`/etc.
+
+**Files shipped (`1f4b2f2`, 447 insertions, 3 files):**
+- `src/observability/path_telemetry.js` (new, ~400 lines) — module-level singleton (same shape as `recall_log.js` / `skill_lifecycle.js`), `hookPathTelemetry(agent)` installs listeners idempotently, `getPathStats()` exposes a shallow-clone snapshot, `configurePathTelemetry()` for settings. Hook gate: `_hookedPathfinder` reference identity prevents re-install on soft reconnect. Every handler body is try/catch-wrapped; failures route to a 10 s throttled `_throttleWarn`.
+- `src/agent/agent.js` — `configurePathTelemetry(settings.path_telemetry)` + `hookPathTelemetry(this)` wired in right after the BT-1 StateTicker start block. Same post-spawn mount point, same error-isolation pattern.
+- `src/observability/state_ticker.js` — import `getPathStats`; attach the compact `path:` field in `_snapshot()` alongside the existing `auto_recovery` block. Read-only, Rule-7 safe.
+
+**Philosophy alignment.** Principle 5 (finish the migration — pathfinder was the last silent subsystem; every core component now has a structured stream). Principle 8 (fail loudly, informatively — `noPath` and `timeout` now leave timestamped greppable records; `stuck` resets surface the failure mode the bot hits most often). Principle 1 (reduce LLM reliance — closes the diagnosis loop; the LLM no longer needs to re-reason "why couldn't I reach that tree?" from a bare failed-skill record).
+
+**Rule alignment.** Rule 5 (additive only — pure event listeners, no `pathfinder.goto`, no `bot.setControlState`). Rule 7 (grep on `path_telemetry.js` for the mutation perimeter returns zero matches; the Rule 7 audit line above now names the file explicitly). Rule 9 (simplicity — stateless emitter, no injection).
+
+**Verification.** Synthetic end-to-end test mocked a pathfinder via `EventEmitter`, fired the full lifecycle (all five events), confirmed every counter incremented correctly, every `[Path]` console line rendered with the documented format, every event wrote to the JSONL sink, and `getPathStats()` returned the expected shape. Live StateTicker confirmed the `path:` field is present and populated on every pulse.
+
+**Next in the logging roadmap:** BT-11 (ContextBuilder truncation), BT-9 (World/time events) + BT-10 (Entity delta stream), BT-bundle remainder, BT-3b (adapter sweep), BT-7b (remaining ~72 skill wraps).
+
 ### 2026-04-17 — BT-7 Skill lifecycle + Goal lifecycle: uniform `[Skill]` and `[Goal]` lines shipped + live-verified ✅
 
 Shipped `40c04f3` and live-verified same day. The lifecycle layer underneath BT-5's measurement layer is now in place: every wrapped skill invocation produces one `[Skill]` line carrying name/args/ms/outcome, and every goal transition (start / queue_add / advance / end / pause) produces one uniformly-prefixed `[Goal]` line. Previously: skill behavior was 19 ad-hoc logs + silence for the other 63; goal state was `[GoalQueue]` with no duration tracking.
@@ -687,7 +716,7 @@ Shipped `40c04f3` and live-verified same day. The lifecycle layer underneath BT-
 
 **Rule alignment.** Rule 5 (impl awaited and returned unchanged; exceptions re-throw in original order; emit path try/catch-wrapped). Rule 7 (`grep` on `skill_lifecycle.js` for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches).
 
-**Next in the logging roadmap:** BT-6 (Pathfinder telemetry), BT-11 (ContextBuilder truncation), BT-9 (World/time events) + BT-10 (Entity delta stream), BT-bundle remainder, BT-3b (adapter sweep), BT-7b (remaining ~72 skill wraps).
+**Next in the logging roadmap:** BT-11 (ContextBuilder truncation), BT-9 (World/time events) + BT-10 (Entity delta stream), BT-bundle remainder, BT-3b (adapter sweep), BT-7b (remaining ~72 skill wraps).
 
 ### 2026-04-17 — BT-5 AutoRecovery match/miss rate: three surfaces shipped + live-verified ✅
 
