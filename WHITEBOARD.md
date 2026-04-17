@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (observability audit — BT-2..BT-11 + BT-bundle added; #18 absorbed into BT-3; G step-1 moved into BT-4)_
+_Last updated: 2026-04-17 (BT-1 StateTicker shipped — observability foundation live)_
 
 ---
 
@@ -55,59 +55,6 @@ _Last updated: 2026-04-16 (observability audit — BT-2..BT-11 + BT-bundle added
 ## In-progress
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
-
-### BT-1. State ticker — structured pulse stream
-
-**Status:** 🟡 in progress • **Priority:** high (unlocks cheap verification for every subsequent change; closes the "silent success" observability gap)
-
-**Problem.** Bot logs are event-driven — commands parsed, mutex acquired/released, memories stored, failures surfaced. During quiet success (pathing, walking, mining without incident) emission drops to near zero. The bot holds rich live state — position, velocity, health, food, inventory, pathfinder goal, nearby entities, active mutex, current goal, ContextBuilder slot usage — that never leaves the process unless something breaks. Verification, debugging, and any future visualizer all pay this cost, usually via one-off `console.log` instrumentation that gets ripped out later.
-
-**Root cause.** No module owns "the bot's current state as data." Every log line is bolted to a discrete event. Philosophy Principle 8 covers loud failure but has no dual for observable success.
-
-**Proposed solution.** A `StateTicker` module that on a fixed interval (1 Hz, configurable) emits one structured JSON record capturing bot state. Writes to:
-- `[StateTicker]`-prefixed log line — fits existing conventions, tails with no new infra
-- `data/state-stream.jsonl` — append-only, rotating — enables replay/plotting without re-running
-
-**Record shape (v1):**
-
-```
-{
-  "t": "2026-04-16T23:48:00Z",
-  "pos": {"x":116.2,"y":63,"z":-253.5}, "vel": {"x":0,"y":-0.08,"z":0},
-  "health":20, "food":18, "dimension":"overworld",
-  "goal":"mine iron",
-  "pathfinder": {"active":true, "target":{"x":120,"y":57,"z":-256}},
-  "mutex": {"holder":null, "depth":0},
-  "inventory": {"count":17, "top":["cobblestone:64","stone:34","iron_ore:5"]},
-  "nearby_entities": [{"type":"zombie","dist":14.2}],
-  "nearby_threats": 1,
-  "last_command": {"name":"!searchForBlock","ok":true,"age_s":3.1},
-  "context_tokens": 2478
-}
-```
-
-**Implementation plan.**
-
-1. `src/observability/state_ticker.js` — single class, takes `bot` + `agent` at construction, exposes `start(intervalMs)` / `stop()`. No new deps.
-2. Wire into `init_agent.js` after bot+agent are both ready. Default 1000ms; `settings.js` keys `state_ticker_ms`, `state_ticker_log`, `state_ticker_file` (any `0`/`false` disables).
-3. Per-tick reads — all existing APIs: `bot.entity.position/velocity`, `bot.health/food`, `bot.game.dimension`, `bot.pathfinder.goal`, mutex `getHolder()` + depth (already tracked), inventory summary, `bot.nearestEntity` scan, `agent.current_goal`, last command outcome, ContextBuilder last token count.
-4. Output: `[StateTicker] {json}` log line + append to JSONL. Rotate JSONL at N MB (match whatever the episodic/procedural logs use).
-5. Shutdown hook: `stop()` on bot death/disconnect so timers don't leak across restarts.
-
-**Blast radius.** Purely additive. No module calls or is called by the ticker. One read-only touch of `init_agent.js` (start/stop). One `settings.js` block. Zero callers to update. **Rule 7 audit:** invariant is "ticker must never mutate bot state" — enforced by calling only getter-shaped APIs; documented at the module header.
-
-**Success signal.**
-- `state-stream.jsonl` grows during play; any timestamp reconstructs bot state without log archaeology
-- Quiet-period log tail shows regular `[StateTicker]` pulses — silent success now has a heartbeat
-- Future visualizer consumes the stream with zero bot changes — proves the decoupling
-
-**Philosophy alignment.** Principle 1 (100% code, no LLM). Principle 2 (first layer of observability memory agents/humans can reason about without asking the LLM). Principle 8 (extends "fail loudly" with "succeed observably").
-
-**Deferred (not v1).** HTTP/SSE endpoint; 2D top-down map PNG dump; mindserver integration. All can consume the same stream later.
-
-**Estimated effort.** Small — ~150 lines module, ~10 lines wiring, ~5 lines settings. One sitting.
-
----
 
 ## Shipped — awaiting live verification
 
@@ -667,6 +614,32 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-1 StateTicker: 1Hz structured pulse stream for observability ✅
+
+Shipped `src/observability/state_ticker.js` and wired it from
+`Agent.bot.once('spawn', ...)`. Emits one structured JSON record per
+second to two sinks: `[StateTicker] {...}` console log line, and
+append-only `data/state-stream.jsonl`. Record fields: `pos, vel, health,
+food, dimension, goal, goal_queue, pathfinder {active, target}, mutex
+{holder, queue}, inventory {count, top:3}, nearby_entities (top 3 by
+dist), nearby_threats`. `last_command` and `context_tokens` surface as
+`null` in v1 — BT-7 and BT-3 will wire them respectively.
+
+**Safety.** NaN-position / ChunkWait-held windows emit a minimal
+`{t, held:true, reason}` record instead of throwing. Tick-body errors
+throttled at 1/10s and never propagate. File-write errors likewise.
+Rule 7 invariant ("StateTicker must never mutate bot state") audited
+by grep — zero mutating calls in the module.
+
+**Verified live** 2026-04-17 14:52 UTC. `ThatCoolGuyDude` spawned at
+(-301, 62, -38), ticker logging at 1Hz, `data/state-stream.jsonl`
+growing with valid JSONL, no new errors or regressions in the tmux
+buffer. Commit `167e495`.
+
+Establishes the `src/observability/` module layout and the
+`data/*-stream.jsonl` output convention that BT-2..BT-11 + BT-bundle
+inherit.
 
 ### 2026-04-16 — createMovements factory: zone-aware pathfinder movements (Rule 7 perimeter closure) ✅
 
