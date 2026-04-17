@@ -104,6 +104,17 @@ const settings = {
         "responseReserve": 592 // tokens reserved for LLM response
     },
 
+    // State Ticker (BT-1): structured bot-state pulse for observability.
+    // Emits one JSON record per tick on [StateTicker] log line + JSONL file.
+    // Purely additive and read-only — see src/observability/state_ticker.js.
+    "state_ticker": {
+        "enabled": true,             // master on/off switch
+        "interval_ms": 1000,         // emit cadence; <= 0 disables
+        "log_to_console": true,      // emit [StateTicker] {...} log lines
+        "log_to_file": true,         // append JSONL to data/state-stream.jsonl
+        "file_path": "data/state-stream.jsonl"
+    },
+
 }
 
 export default settings;

@@ -24,6 +24,7 @@ import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { AutoRecoveryEngine } from './auto_recovery.js';
 import { ChunkWait } from './chunk_wait.js';
+import { StateTicker } from '../observability/state_ticker.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -260,6 +261,24 @@ export class Agent {
 
                 this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
+
+                // Start the StateTicker (BT-1): 1Hz structured pulse stream
+                // for bot-state observability. Attached to the Agent, not
+                // the bot, so it survives soft reconnects; start() is
+                // idempotent so calling it again after a reconnect just
+                // restarts the timer cleanly. Disabled if
+                // settings.state_ticker.enabled === false or interval_ms <= 0.
+                try {
+                    const stSettings = settings.state_ticker || {};
+                    if (stSettings.enabled !== false) {
+                        if (!this.state_ticker) {
+                            this.state_ticker = new StateTicker(this, stSettings);
+                        }
+                        this.state_ticker.start();
+                    }
+                } catch (stErr) {
+                    console.warn('[StateTicker] failed to start:', stErr.message);
+                }
 
                 if (!load_mem) {
                     if (settings.task) {
@@ -1124,6 +1143,9 @@ export class Agent {
         this.history.add('system', msg);
         this.bot.chat(code > 1 ? 'Restarting.': 'Exiting.');
         this.history.save();
+        // Stop observability timers before exit so they don't log into a
+        // half-torn-down process or leave rotating file handles open.
+        try { this.state_ticker?.stop(); } catch (_) {}
         process.exit(code);
     }
     async checkTaskDone() {
