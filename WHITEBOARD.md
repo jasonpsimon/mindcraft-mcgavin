@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-10 Entity delta stream shipped `ff39088` — three `[Entity]` inline log points landed in `src/agent/event_pipeline.js`, gated by an `_trackedEntities` Map keyed by entity.id. Spawn log sits inside the existing 16-block hostile/mob filter; gone/died are new listeners that emit only for Map-contained entities. Synthetic-verified all 7 cases (2 in-range spawns + 2 filtered-out spawns + 1 gone + 1 died + 1 re-gone silence + final Map empty). Live post-restart on `ff39088`: StateTicker 1 Hz pulses unchanged, spider/creeper hovering at 18-19 blocks correctly stay silent, natural `[Entity]` emissions await a hostile crossing the 16-block filter. Paired ship with BT-9 World/time events (shipped `4433b1b`) — together they close the ambient world/entity awareness gap. Next: BT-bundle remainder.)_
+_Last updated: 2026-04-17 (BT-bundle(a) Mutex wait duration — moved to in-progress. Plan: inside `src/agent/bot_mutex.js` `withLock`, after the reentrant early-return and before the FIFO `while` loop, capture `enterT = Date.now()` and a `queued = false` flag; flip `queued = true` inside the loop body so it trips only for acquires that actually waited; compute `waitMs = queued ? Date.now() - enterT : 0` after acquisition and append `${queued ? ` wait=${waitMs}ms` : ''}` to the existing `#<id> acquired: <label>` log line. ~3 lines of real change, zero new state on the mutex object, zero change to the reentrant path, zero change to release accounting. Uncontended acquires stay byte-identical to today. Starts the BT-bundle remainder on top of BT-10 `ff39088`.)_
 
 ---
 
@@ -67,7 +67,25 @@ _Last updated: 2026-04-17 (BT-10 Entity delta stream shipped `ff39088` — three
 
 ## In-progress
 
-_(empty — BT-10 Entity delta stream shipped `ff39088` and live-deployed 2026-04-17, completing the BT-9 + BT-10 ambient-awareness logging pair. See Recently completed. Next in the logging roadmap: BT-bundle remainder.)_
+### BT-bundle(a). Mutex wait duration — add elapsed-wait-ms to queued acquires
+
+**Status:** 🚧 in progress (implementing 2026-04-17) • **Priority:** low (small, standalone; first of the BT-bundle remainder) • **Source:** BT-bundle. Observability minor items
+
+**Root cause.** `src/agent/bot_mutex.js:82` logs queue depth at acquire (`(queue: <n>)`) but not how long the caller actually waited. A log tailer can see *that* contention happened but not *how bad* it was — a 5 ms wait vs. a 5,000 ms wait both look identical in the buffer. Under a concurrency bug (missed release, runaway pathfinder, cascading recovery) the only signal today is "queue is growing" without a latency number to pair it with. Adding an elapsed-ms stamp closes that gap for ~3 lines.
+
+**Scope.** Inside `botMutex.withLock(label, fn)`:
+- After the reentrant early-return (current line 67) and before the FIFO `while` loop, capture `const enterT = Date.now();` and `let queued = false;`.
+- Inside the `while` loop body, set `queued = true;` on each iteration (cheap; sets the flag once on first queued iteration and is a no-op on repeats).
+- After acquisition, after `const qd = this._queue.length;`, compute `const waitMs = queued ? Date.now() - enterT : 0;`.
+- Append `${queued ? ` wait=${waitMs}ms` : ''}` to the existing `#<id> acquired: <label>${qd > 0 ? ` (queue: ${qd})` : ''}` log line.
+
+**Out of scope.** No release-side timing (hold duration — different concern, not asked). No p95/p99 aggregation (log-only; aggregation is a reader's job). No change to the reentrant path (nested calls skip the whole acquire/log flow already). No JSONL sink (console-only is the existing convention for `[BotMutex]`).
+
+**Blast radius.** `withLock` is the only acquire path and every bot-mutating skill/recovery/command already routes through it via `withBotLock`. The new fields append to an existing log line — they don't change callers, API, or control flow. Uncontended acquires (the common case) keep `queued === false`, skip the `Date.now()` call on release, and emit byte-identical logs. The only user-visible change is that contended acquires now read `#42 acquired: safeToss (queue: 1) wait=14ms` instead of `#42 acquired: safeToss (queue: 1)`. `grep -n 'BotMutex' src/` across the repo confirms the log-line shape is not parsed anywhere — it's human-facing only.
+
+**Verification.** `node --check src/agent/bot_mutex.js` parse-clean. Node REPL synthetic: two concurrent `withLock('A', sleep(50))` + `withLock('B', …)` acquires — expect first to log no `wait=`, second to log `wait=~50ms`. Live: restart bot on new SHA, grep tmux buffer for `wait=` — any contended acquire during play produces a line. Lifecycle traffic from the bot (`safeToss`, `dig`, pathfinder) routinely contends under self-preservation, so natural trigger is reliable within one play session.
+
+**Downstream unblock.** Pairs with BT-5 AutoRecovery stats (when recovery sprays lock acquires, BT-5 tells us the recovery fired; BT-bundle(a) tells us how much the lock queue slowed it). After this: BT-bundle(b) Process exit reasons, then BT-bundle(c) File I/O silent-swallow audit.
 
 ## Shipped — awaiting live verification
 
@@ -286,7 +304,7 @@ Broader question surfaced by this: `!addRule`'s one-line-action model is too nar
 
 _Goal lifecycle shipped `40c04f3` 2026-04-17 paired with BT-7 (see Recently completed). Remainder:_
 
-- **Mutex wait duration.** `bot_mutex.js:82` logs queue depth on acquire; add elapsed-wait-ms when acquire follows a queued wait. ~3 lines.
+- ~~**Mutex wait duration.** `bot_mutex.js:82` logs queue depth on acquire; add elapsed-wait-ms when acquire follows a queued wait. ~3 lines.~~ (in progress — see In-progress: BT-bundle(a))
 - **File I/O silent-swallow scan.** 27 `readFileSync` + 8 async `fs.readFile/writeFile` calls. Audit each `catch` branch for "logged or swallowed." Already noted in L3 audit (April 15). Risk: silent memory-save failures. Extends #15 (`full_state.js` sweep, shipped) to the whole codebase.
 - **Process exit reasons.** `agent.js cleanKill` + `process.on('exit', ...)` — log the exit reason as a structured line so session replay sees the end clearly.
 
