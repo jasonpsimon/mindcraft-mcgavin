@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-16 (BT-1 state ticker added to to-do queue)_
+_Last updated: 2026-04-16 (observability audit — BT-2..BT-11 + BT-bundle added; #18 absorbed into BT-3; G step-1 moved into BT-4)_
 
 ---
 
@@ -136,6 +136,230 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **Estimated effort.** Small — ~150 lines module, ~10 lines wiring, ~5 lines settings. One sitting.
 
+### BT-2. Damage event stream — every hit, not just death
+
+**Status:** ⏳ not started • **Priority:** high (fills the "how did the bot lose 14 HP" black box; **unblocks F's "died to lava at Y=-12" LTM store path**)
+
+**Problem.** Death is logged (`agent.js:1074`: `"Agent died: ..."`) and writes to memory_bank, long_term_memory, episodic. Non-lethal damage events are not logged. The `bot.on('health')` handler at `agent.js:1046` tracks `lastDamageTime`/`lastDamageTaken` as state variables but emits nothing. A player watching the log sees the bot go from 20 HP to 6 HP between two command outputs with zero record of what happened.
+
+**Root cause.** Damage tracking exists for reflex modes (self_preservation needs `lastDamageTime`), not for observability. No one asked "could a human reading the log reconstruct the damage timeline?"
+
+**Proposed solution.** `DamageStream` that emits one `[Damage]` log line + one JSONL record per `health`-decrease event:
+
+```
+{"t":"...","amount":3.0,"health_before":14,"health_after":11,"source":"zombie","pos":{...},"food":17}
+```
+
+Source inference: check `bot.lastAttackedEntity` + entity type; fall back to block-at-feet for lava/fire/sweet_berries/void, `bot.oxygenLevel` drop for drowning, Y-velocity for fall damage. When source is indeterminate, emit `"source":"unknown"` rather than swallow the event.
+
+**Implementation plan.**
+1. `src/observability/damage_stream.js` — single module. Wire into `agent.js:1046` health handler (additive, three lines); existing state already tracked there.
+2. Classifier: small table mapping inference rules → source label. Data-driven per Rule 1.
+3. On death, also feed `long_term_memory.store()` with source + position — directly advances F's death-event path. Keep the existing death handler's memory_bank write.
+4. Output: `[Damage]`-prefixed log line + append to `data/damage-stream.jsonl` (append-only, rotating).
+
+**Blast radius.** Three-line addition to `agent.js:1046` health handler. No callers affected. BT-1 state ticker optional consumer (damage count in last 60s).
+
+**Success signal.** Log tail shows `[Damage]` pulses for every hit; `damage-stream.jsonl` replays a full combat. Deaths now carry inferred source in LTM on restart.
+
+**Philosophy alignment.** Principle 1 (classifier, not LLM). Principle 2 (feeds LTM — memory cognition). Principle 4 (persists across sessions). Principle 8 (fails loudly).
+
+**Effort.** Small — ~80 lines module, ~5 lines wiring.
+
+### BT-3. LLM call telemetry — latency, tokens, retries
+
+**Status:** ⏳ not started • **Priority:** high (you can't tune what you can't measure; tonight's model-switch to `-obliterated` is untuned blind)
+
+**Absorbs #18 (model-provider server-side logging sweep).** #18 scoped error-case logging in 17 model-adapter `catch` blocks. BT-3 instruments every call (success + error) at the `retry()` wrapper level, covering #18's scope as a subset. #18 removed from queue.
+
+**Problem.** `models/lmstudio.js:22` logs `"Awaiting LM Studio response from model X"` and `:35` logs `"Received."` — no elapsed time, no token counts, no prompt cache hit info. `utils/retry.js:101` logs retry attempts and backoff but not cumulative elapsed. We have zero visibility into: how long did the call take, tokens in/out, retries used, whether LM Studio hit its prompt cache. LM Studio's own log has this data (we saw it tonight in `2026-04-16.3.log`) but the bot side is blind.
+
+**Root cause.** `sendRequest` in each model adapter wraps the OpenAI SDK call with no timing instrumentation. It's a function that awaits and returns.
+
+**Proposed solution.** Extract `withLLMMetrics(label, fn)` helper in `utils/retry.js` (already wraps with retry). Emit one `[LLM]` log line per call:
+
+```
+[LLM] model=gemma-4-e4b-it-obliterated elapsed_ms=8420 prompt_tok=3435 completion_tok=14 tok_per_s=1.66 retries=0 cache_hit=? status=ok
+```
+
+`cache_hit` from `stats`/`usage` in response if LM Studio returns it; otherwise null. Error case logs same shape with `status=error err_class=...`.
+
+**Implementation plan.**
+1. Extend `retry()` to capture `startTime` and the response `usage`/`stats`.
+2. Emit `[LLM]` structured line in one call site (`retry.js`). Applies to every model routing through it.
+3. Audit the 17 model adapters — migrate any not using `retry()` through it. Satisfies #18 scope.
+4. JSONL optional — log-only first pass; add `data/llm-stream.jsonl` later if analytics wanted.
+
+**Blast radius.** One touch in `utils/retry.js`. All 17 model adapters benefit. Adapter audit (~15 min) to confirm each routes through `retry`.
+
+**Success signal.** Every LLM call surface-logs timing + tokens. Tuning loops (temperature, truncation, model choice) become observable.
+
+**Philosophy alignment.** Principle 1 (measurement enables LLM-reliance reduction). Principle 8.
+
+**Effort.** Small — ~30 lines in `retry.js` + adapter audit.
+
+### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
+
+**Status:** ⏳ not started • **Priority:** high (currently impossible to verify Principle 2 — "memory is cognition" — is actually firing)
+
+**Absorbs G step 1 (ConfidenceEngine.evaluate instrumentation).** G's audit step 1 proposed identical `ConfidenceEngine.evaluate()` logging. Moved here as a subset of the general retrieval-visibility work; G becomes a pure threshold-tuning item that depends on BT-4 shipping.
+
+**Problem.** All three memory subsystems log *writes* (`[EpisodicMemory] Stored episode`, `[ProceduralMemory] Recorded outcome`, `[SeedMemory] Loaded N facts`). Retrievals are silent unless they error (`episodic_memory.js:157` and `long_term_memory.js:214` only log on Vectra fallback to word overlap). For a successful retrieval call, we see nothing: no query, no top-K results, no similarity scores. We cannot tell whether memory contributed to the current response.
+
+**Root cause.** Retrieval treated as transparent (embed → query → splice into prompt). Nobody instrumented the decision path.
+
+**Proposed solution.** Add `[MemoryRecall]` log line + JSONL record at each retrieval exit:
+
+```
+[MemoryRecall] subsystem=episodic query="mine iron ore" k=3 returned=2 backend=vectra top_score=0.82 top_text="Found iron at -253 prev session..."
+```
+
+Truncate `top_text` to 80 chars. Always log subsystem + k + backend (vectra vs word-overlap fallback) to see which path fired. Four instrumentation sites: `episodic_memory.js:137` (`retrieve`), `long_term_memory.js:retrieve`, `procedural_memory` lookup, and `confidence_engine.js evaluate()` (HIGH/MED/LOW decision + score + context key + threshold in effect).
+
+**Implementation plan.**
+1. Helper `src/observability/recall_log.js` to standardize format + JSONL output.
+2. Add `log_recall({subsystem, query, k, results})` before `return` in each retrieval function.
+3. Add `log_evaluation({context_key, confidence, tier, threshold, record_count})` in `ConfidenceEngine.evaluate()`.
+4. Output: log line + append to `data/recall-stream.jsonl`.
+
+**Blast radius.** One edit each in four functions. Pure read-side instrumentation, no behavior change.
+
+**Success signal.** Log shows `[MemoryRecall]` lines interleaved with `[ContextBuilder]`. Memory → prompt → response is traceable. Unblocks G's threshold-tuning with real distribution data.
+
+**Philosophy alignment.** Principle 2 (observability of cognition layer). Principle 8.
+
+**Effort.** Small — ~50 lines across four files.
+
+### BT-5. AutoRecovery match/miss rate
+
+**Status:** ⏳ not started • **Priority:** high (exact measurement needed to judge Principle 1 progress)
+
+**Problem.** AutoRecovery logs extensively **when it matches** (`auto_recovery.js:442, 451, 460, 469, 485, 507, 527` — 35 `console.log` in that file, mostly in match branches). When it's consulted and no pattern matches, effectively no log — the loop at `auto_recovery.js:307` `for (const pattern of this.patterns)` just falls through. One branch logs `"passing through"` for a specific `cannot_smelt` case; the general "we looked at N patterns and none matched" never surfaces. No way to measure: fraction of failures AutoRecovery caught vs. passed through to LLM, which patterns are hot, which are dead.
+
+**Root cause.** Instrumentation written from the pattern-author's perspective (each pattern logs its own hit), not from the dispatcher's perspective.
+
+**Proposed solution.** One `[AutoRecovery]` summary line per invocation, regardless of match:
+
+```
+[AutoRecovery] input="Cannot smelt coal_ore..." tried=7 matched=cannot_smelt outcome=recovered fallback=false
+[AutoRecovery] input="Unknown error: ..." tried=7 matched=none passthrough_to=llm
+```
+
+Plus per-pattern rolling hit counter via `getStats()` — consumable by state ticker or a `!recovery-stats` debug command.
+
+**Implementation plan.**
+1. `_logInvocation(input, result)` at dispatcher exit after the for-loop resolves.
+2. Each pattern returns `{matched, recovered, handler}` so the dispatcher assembles the summary.
+3. `stats.byPattern = {cannot_smelt: {hit: 12, miss: 0}, ...}` — aggregates over session.
+4. Optional: `!recovery-stats` debug command dumps the table.
+
+**Blast radius.** Dispatcher entry/exit only; existing per-pattern logs stay as detail. No behavior change.
+
+**Success signal.** Every failure seen by AutoRecovery produces exactly one summary line. Stats directly answer "what fraction of failures did scaffolding catch."
+
+**Philosophy alignment.** Principle 1 (this is the measurement). Principle 8.
+
+**Effort.** Small — ~60 lines in `auto_recovery.js`.
+
+### BT-6. Pathfinder telemetry
+
+**Status:** ⏳ not started • **Priority:** medium-high (biggest "bot got stuck" debugging surface)
+
+**Problem.** Grep of pathfinder-related logs returns **3 lines total**, all fallback paths in `skills.js`: `[CreateMovements]` (:1852), digDown fallback (:4122), digUp fallback (:4356). Normal pathfinder operation — goal set, route computed, replans, mid-path obstacles, target reached, timeouts — emits nothing.
+
+**Proposed solution.** Hook into `mineflayer-pathfinder` events: `goal_reached`, `path_update`, `path_reset`, `goal_updated`, `no_path`. One `[Path]` log line per event with goal target, path length, replan count, cost. Plus a session counter (`paths_started`, `paths_completed`, `paths_timed_out`, `replans_total`) consumable by state ticker.
+
+**Implementation plan.** Single listener registration in `init_agent.js` after bot spawn, module at `src/observability/path_telemetry.js`. Purely additive; zero mutation.
+
+**Blast radius.** Additive only.
+
+**Effort.** Small — ~70 lines.
+
+**Deferred.** Path visualization (top-down 2D) — separate work, consumes this stream.
+
+### BT-7. Skill lifecycle standardization
+
+**Status:** ⏳ not started • **Priority:** medium-high (makes every skill trivially analyzable; success-rate queries without grep archaeology)
+
+**Problem.** `skills.js` has 19 `[Skill]`/`[Skills]` prefixed lines across 82 exported skill functions (~4500 lines). Some skills are verbosely instrumented (`SpawnEscape`, `SafeToss`), others near-silent. No uniform "skill X was called with args Y, took Z ms, returned outcome W."
+
+**Proposed solution.** A `wrapSkill(name, fn)` decorator that piggybacks on the existing `ProceduralMemory.recordOutcome` pattern. Every wrapped call emits:
+
+```
+[Skill] name=collectBlocks args={type:iron_ore,count:5} ms=8420 outcome=success notes=collected:5
+```
+
+Apply progressively — don't retrofit all 82 skills in one PR. Start with the 10 hottest: `collectBlocks`, `searchForBlock`, `goToNearestBlock`, `pickupNearbyItems`, `smeltItem`, `craftRecipe`, `digDown`, `digUp`, `placeBlock`, `safeToss`.
+
+**Blast radius.** Additive wrapper per skill. Existing ad-hoc logs can stay or be trimmed as standardization progresses.
+
+**Effort.** Medium — ~30 lines wrapper + ~5 min per skill to apply (10 skills ≈ 1 hour).
+
+### BT-8. Boot config snapshot
+
+**Status:** ⏳ not started • **Priority:** medium-high (cheapest big-win item — one structured line at startup)
+
+**Problem.** `process/init_agent.js:42-50` logs `"Connecting to MindServer"`, `"Starting agent"`, and errors. Nowhere does it emit which profile is loaded, which model is active, which embedding model, which mineflayer/prismarine versions, which Node version, or what settings are in effect. Bug reports and session logs have to infer all this from filesystem state or tribal knowledge.
+
+**Proposed solution.** One `[Boot]` structured log line at agent init:
+
+```
+[Boot] profile=ThatCoolGuyDude model=lmstudio/gemma-4-e4b-it-obliterated embed=lmstudio/text-embedding-nomic-embed-text-v1.5 node=20.11 mineflayer=4.x mc_version=1.21.4 host=192.168.1.198 port=55916 settings_hash=abc123 features={state_ticker:on,chunk_wait:on,...}
+```
+
+Also dump full resolved config to `data/boot-snapshot.json` (overwritten per boot) — one file, full reproducibility for any bug report.
+
+**Effort.** Trivial — ~40 lines in `init_agent.js`.
+
+### BT-9. World/time event emission to log
+
+**Status:** ⏳ not started • **Priority:** medium (already tracked internally — just needs to surface)
+
+**Problem.** `full_state.js` already reads weather, `timeOfDay`, dimension (`:47-51, :117`). `event_pipeline.js:96` handles weather change, but the only sink is `agent.history.episodic.addEvent` (text for episodic memory). Nothing goes to console log. A log tailer sees no weather transitions, no dawn/dusk, no dimension changes.
+
+**Proposed solution.** EventPipeline weather/respawn/dimension handlers already fire — add a `console.log('[World] ...')` alongside the episodic write. Time-of-day transitions (dawn/dusk) need a polled check — do it in state ticker (BT-1) or a dedicated sub-module.
+
+**Effort.** Trivial — ~10 lines in `event_pipeline.js` + ~20 lines for time transitions.
+
+### BT-10. Entity delta stream
+
+**Status:** ⏳ not started • **Priority:** medium (currently only `entitySpawn` half-handled; despawn silent; targeting silent)
+
+**Problem.** `event_pipeline.js:68` listens for `entitySpawn` but only uses it to trigger urgent modes update — no structured log. Mineflayer also emits `entityGone`, `entityMoved`, `entitySwingArm` — none handled. Bot's relationship to nearby entities (mob started targeting me, mob left range, mob died) is invisible except via periodic prompt snapshots.
+
+**Proposed solution.** Handlers for `entityGone`, a targeting check (when any hostile's `target` becomes `bot.entity`), entity death via `bot.on('entityDead', ...)` if exposed. Emit `[Entity]` log lines:
+
+```
+[Entity] event=acquired type=zombie dist=14.2 pos={...}
+[Entity] event=targeting type=zombie dist=8.1
+[Entity] event=died type=zombie killed_by=bot
+```
+
+**Blast radius.** Additive in `event_pipeline.js`.
+
+**Effort.** Small — ~60 lines.
+
+### BT-11. ContextBuilder truncation decisions
+
+**Status:** ⏳ not started • **Priority:** medium (ContextBuilder is load-bearing; its decisions should be auditable)
+
+**Problem.** ContextBuilder emits a stats line with totals (`prompter.js`: `[ContextBuilder] 2478/6908 tokens | conv:... mem:... ex:... nb:...`) — good summary. Drop/truncate decisions are not logged. When the token budget forces a section to be shortened or skipped, we see only the post-truncation counts, not the decision process. For a small-context model, this is where "why didn't the bot know about X" answers live.
+
+**Proposed solution.** Inside ContextBuilder's budget-enforcement code path, log one `[ContextBuilder] dropped=examples (budget=0)` or `[ContextBuilder] truncated=memory 2400→1916 tokens (budget)` line per decision.
+
+**Effort.** Small — ~20 lines in `prompter.js`.
+
+### BT-bundle. Observability minor items
+
+**Status:** ⏳ not started • **Priority:** mixed (small, standalone; ship any/all as convenient) • **Source:** 2026-04-16 observability audit
+
+Grouped because each is small and standalone:
+
+- **Mutex wait duration.** `bot_mutex.js:82` logs queue depth on acquire; add elapsed-wait-ms when acquire follows a queued wait. ~3 lines.
+- **Goal lifecycle.** Goal-set and goal-complete emit effectively nothing today (`prompter.js:586` only logs failures). Add `[Goal] set=mine_iron` / `[Goal] completed=mine_iron ms=...`. ~20 lines.
+- **File I/O silent-swallow scan.** 27 `readFileSync` + 8 async `fs.readFile/writeFile` calls. Audit each `catch` branch for "logged or swallowed." Already noted in L3 audit (April 15). Risk: silent memory-save failures. Extends #15 (`full_state.js` sweep, shipped) to the whole codebase.
+- **Process exit reasons.** `agent.js cleanKill` + `process.on('exit', ...)` — log the exit reason as a structured line so session replay sees the end clearly.
+
 ### F. Long-term memory population audit
 
 **Status:** ⏳ not started • **Priority:** **HIGH — promoted 2026-04-15 after audit confirmed subsystem is frozen** (biggest leverage for "gemma-4 punches above its weight")
@@ -174,17 +398,20 @@ The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowl
 
 ### G. Procedural memory / ConfidenceEngine activation audit
 
-**Status:** ⏳ not started • **Priority:** medium-high (complementary to F; actionable in one line of config once #20 instrumentation lands)
+**Status:** ⏳ not started • **Priority:** medium-high (complementary to F; actionable in one line of config once BT-4 + #20 instrumentation are both in place)
 
-**Audit update 2026-04-15 (L4.1 + L5.2):** live data now available. `ConfidenceEngine` is firing 24× in 500 log lines — every repeat command comes back at **92-93% confidence**. `highThreshold` in `src/memory/confidence_engine.js` is `0.98`. Gap is 3-5 percentage points. The engine is ready to bypass; the threshold is miscalibrated. Static `procedural_memory.json` inspection shows max stored confidence of 0.68, so the 0.98 threshold has never fired historically either. **Quick win: lower `highThreshold` to 0.95 and monitor for false-positive bypasses** — should unlock HIGH-tier bypasses on established patterns immediately. If none appear in a week of play, consider 0.90. Instrumentation from #20 (logs on record/update) is a prerequisite for tuning with confidence. Depends on #20 to ship first.
+**Scope narrowed 2026-04-16:** G's original audit step 1 (adding `ConfidenceEngine.evaluate()` logging) was absorbed into BT-4 (Memory retrieval visibility). G is now a pure threshold-tuning item that runs once BT-4 has shipped the evaluation logs. Re-numbered steps below reflect this.
+
+**Audit update 2026-04-15 (L4.1 + L5.2):** live data now available. `ConfidenceEngine` is firing 24× in 500 log lines — every repeat command comes back at **92-93% confidence**. `highThreshold` in `src/memory/confidence_engine.js` is `0.98`. Gap is 3-5 percentage points. The engine is ready to bypass; the threshold is miscalibrated. Static `procedural_memory.json` inspection shows max stored confidence of 0.68, so the 0.98 threshold has never fired historically either. **Quick win: lower `highThreshold` to 0.95 and monitor for false-positive bypasses** — should unlock HIGH-tier bypasses on established patterns immediately. If none appear in a week of play, consider 0.90. Depends on #20 (write-side, shipped) + BT-4 (read-side, pending) for the full distribution picture.
 
 `ProceduralMemory` tracks action-context pairs with Wilson-score confidence. `ConfidenceEngine.evaluate()` decides HIGH (≥0.85, bypass LLM) / MEDIUM (0.5-0.84, suggest) / LOW (<0.5, full reasoning). The audit question: what's the actual distribution? If the engine always falls through to LOW (cold-start with no data), procedural memory is collecting metrics nobody reads and the entire bypass mechanism is inert.
 
-**Audit steps:**
-1. Add instrumentation to `ConfidenceEngine.evaluate()` — log the bypass decision + confidence score + context key for 1 hour of play.
-2. Analyze: confidence distribution across commands, bypass hit rate, how many unique contexts seen.
-3. If cold-start dominates: consider seeding `procedural_memory.json` with hand-curated high-confidence patterns (e.g., `"equip pickaxe before mine stone" → confidence 1.0`).
-4. If already firing at reasonable rate: adjust thresholds if false positives / false negatives appear.
+**Prerequisite:** BT-4 ships `[MemoryRecall]` + ConfidenceEngine evaluation logs, giving the distribution data this tuning needs.
+
+**Audit steps (post-BT-4):**
+1. Analyze: confidence distribution across commands, bypass hit rate, how many unique contexts seen.
+2. If cold-start dominates: consider seeding `procedural_memory.json` with hand-curated high-confidence patterns (e.g., `"equip pickaxe before mine stone" → confidence 1.0`).
+3. If already firing at reasonable rate: adjust thresholds if false positives / false negatives appear.
 
 **Success signal:** measurable fraction of commands bypass the LLM via HIGH confidence — speeds up the bot and reduces hallucination risk. Procedural memory grows session-over-session.
 
@@ -219,14 +446,6 @@ JP observed the bot placing vertical/horizontal columns of resource blocks (cobb
 Earlier session work explicitly removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` because it has no collision box and the bot walks through it. Current code (line ~1909 in skills.js) still lists it. Either the removal was never committed or a later change reintroduced it.
 
 **Fix:** Check git log for the removal. If it was removed and reintroduced, revert. If it was never committed, remove it. Sugar cane does not impede movement — it should not be in a movement-blocking allowlist.
-
-### 18. Model-provider server-side logging sweep (17 files)
-
-**Status:** ⏳ not started • **Priority:** low-medium (code-quality sweep, not functionally broken) • **Source:** audit finding L3.7
-
-17 model-provider files (`src/models/claude.js:50`, `gpt.js:75`, `deepseek.js:41`, etc.) catch inference failures and set a user-facing `"My brain disconnected, try again."` fallback with zero server-side log. Operator has no visibility into which model failed, what error (rate limit? auth? timeout?), or whether retrying is futile.
-
-**Fix:** `console.warn('[ModelProvider:${this.model_name}] Inference failed:', err.message);` before the user-facing fallback. Repeat across 17 files.
 
 ### 21. L1 cleanup bundle (low-priority nits)
 
