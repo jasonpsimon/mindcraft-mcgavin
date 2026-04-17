@@ -27,6 +27,7 @@ import { ChunkWait } from './chunk_wait.js';
 import { StateTicker } from '../observability/state_ticker.js';
 import { captureBootSnapshot } from '../observability/boot_snapshot.js';
 import { DamageStream } from '../observability/damage_stream.js';
+import { hookPathTelemetry, configurePathTelemetry } from '../observability/path_telemetry.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -293,6 +294,22 @@ export class Agent {
                     }
                 } catch (stErr) {
                     console.warn('[StateTicker] failed to start:', stErr.message);
+                }
+
+                // Install PathTelemetry listeners (BT-6): one [Path]
+                // structured record per pathfinder event. Same mount
+                // point as StateTicker — after spawn so bot.pathfinder
+                // is loaded. Idempotent on soft reconnect (the module
+                // tracks whether the current pathfinder instance is
+                // already hooked). Config mirrors StateTicker.
+                try {
+                    const ptSettings = settings.path_telemetry || {};
+                    configurePathTelemetry(ptSettings);
+                    if (ptSettings.enabled !== false) {
+                        hookPathTelemetry(this);
+                    }
+                } catch (ptErr) {
+                    console.warn('[Path] failed to start:', ptErr.message);
                 }
 
                 // Vacate any protected zone before anything else happens.

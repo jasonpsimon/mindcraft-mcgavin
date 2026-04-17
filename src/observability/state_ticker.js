@@ -55,6 +55,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { botMutex } from '../agent/bot_mutex.js';
+import { getPathStats } from './path_telemetry.js';
 
 // Hostile mob types counted toward `nearby_threats`. Kept as a module-level
 // Set so adding a new hostile requires one data entry, not a code change
@@ -270,6 +271,30 @@ export class StateTicker {
             auto_recovery = null;
         }
 
+        // BT-6: PathTelemetry session stats. Compact summary — started/
+        // completed counts, the current path's target (if any), and the
+        // last-path-update status (so a reader can see at a glance when
+        // the bot last failed to find a path or timed out). Full event
+        // stream lives at data/path-stream.jsonl.
+        let path_stats = null;
+        try {
+            const ps = getPathStats();
+            path_stats = {
+                started: ps.paths_started,
+                completed: ps.paths_completed,
+                no_path: ps.path_updates.noPath,
+                timeout: ps.path_updates.timeout,
+                stuck_resets: ps.resets.stuck,
+                current: ps.current ? {
+                    target: ps.current.target,
+                    dynamic: ps.current.dynamic,
+                } : null,
+                last_status: ps.last && ps.last.event === 'path_update' ? ps.last.status : null,
+            };
+        } catch (_) {
+            path_stats = null;
+        }
+
         return {
             t,
             pos: {
@@ -288,6 +313,7 @@ export class StateTicker {
             goal,
             goal_queue: goalQueueDepth,
             pathfinder: { active: pfActive, target: pfTarget },
+            path: path_stats,
             mutex,
             inventory: { count: items.length, top: topItems },
             nearby_entities: nearby.slice(0, 3),
