@@ -2,15 +2,15 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-4 picked up — moved to in-progress; 6 BT-N items remain in ⏳)_
+_Last updated: 2026-04-17 (BT-4 memory retrieval visibility shipped + live-verified; 6 BT-N items remain in ⏳)_
 
 ---
 
 ## Current state (live on develop)
 
 **Deployment:**
-- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), and startup-window ordering fix (BT-12) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `4de3b85`. Five observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, and BT-12 startup-window ordering fix. Pushed to `origin/develop` 2026-04-17.
+- Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), and MemoryRecall (BT-4) all verified live 2026-04-17.
+- Branch: `develop` — HEAD `1bcbbb6`. Six observability items shipped and verified live today: BT-1 StateTicker, BT-8 BootSnapshot, BT-3 LLM call telemetry (+ BT-3b filed for remaining 19 adapters), BT-2 DamageStream, BT-12 startup-window ordering fix, and BT-4 MemoryRecall. Pushed to `origin/develop` 2026-04-17.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -45,14 +45,15 @@ _Last updated: 2026-04-17 (BT-4 picked up — moved to in-progress; 6 BT-N items
 - D1 shipped: legacy `history.memory` 500-char summary deprecated when ContextBuilder is enabled. `promptMemSaving` call skipped; `$MEMORY` removed from coding template. Episodic capture still runs unconditionally. No more "Memory truncated" warnings.
 - AutoRecovery `cannot_smelt` handler: classifies `!smelt("X")` failures into 4 groups — ore-drops-directly (Group A, tell LLM), ore-needs-raw-form (Group B, auto-correct), vanilla-smeltable (Group C), plus FURNACE_FUELS and SMELT_FINAL_PRODUCTS meta-confusion handlers.
 
-**Observability (5 modules live — BT-1, BT-2, BT-3, BT-8, BT-12):**
+**Observability (6 modules live — BT-1, BT-2, BT-3, BT-4, BT-8, BT-12):**
 - `src/observability/` module tree introduced; `data/*-stream.jsonl` is the output convention BT-2..BT-11 inherit.
 - **StateTicker** (BT-1): 1 Hz structured pulse — `[StateTicker] {json}` log line + append to `data/state-stream.jsonl`. Fields: `pos, vel, health, food, dimension, goal, goal_queue, pathfinder, mutex, inventory{count,top:3}, nearby_entities, nearby_threats, last_command, context_tokens`. NaN-position / ChunkWait-held windows emit `{t, held:true, reason}` instead of throwing. Tick + file-write errors throttled at 1/10s. Survives soft reconnects; idempotent `start()`.
 - **BootSnapshot** (BT-8): one `[Boot]` structured log line per agent init + `data/boot-snapshot.json` (overwritten per boot) with full resolved settings, model refs, runtime versions, MC target, settings hash, and feature flags. Runs before `bot` exists (zero mutation risk) and before name validation so the snapshot lands even on failed starts.
 - **withLLMMetrics** (BT-3): one `[LLM]` structured log line per LM Studio round-trip (chat + embed). Fields: `label, model, elapsed_ms, prompt_tok, completion_tok, total_tok, tok_per_s, retries, finish, cache_hit, status`. Terminal errors emit `status=error err_class=...`. Only `lmstudio.js` migrates today — remaining 19 adapters tracked as BT-3b.
 - **DamageStream** (BT-2): one `[Damage]` log line + JSONL record per health-decrease event. Source inferred via priority classifier (nearest hostile mob → contact block → drowning oxygen → fall velocity → unknown). On death, attaches inferred source to long-term memory so the bot starts next session knowing what killed it.
+- **MemoryRecall** (BT-4): one `[MemoryRecall]` structured log line per memory retrieval (episodic + long-term + confidence/procedural) + append to `data/recall-stream.jsonl`. Fields: `subsystem, query, k, returned, backend, top_score, top_text` plus subsystem-specific extras (`category_top` for LTM; `tier, threshold_high, threshold_med, context_hash, record_count, trigger` for confidence). Backend values: `vectra`, `word-overlap`, `map`, `none`. Procedural lookups collapsed into confidence per Principle 5 (single caller — no duplicate log).
 - **Startup-window visibility (BT-12):** `startEvents()` + `StateTicker.start()` now run BEFORE `await skills.escapeProtectedZone(this.bot)` in the spawn handler, so damage / state / path decisions during the 45-60s zone-escape window are captured. `_setupEventHandlers` stays after escape so chat/whisper + init-message processing remains gated.
-- All four observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, and `retry.js`.
+- All five observability modules audited for Rule 7: grep for `bot.(dig|placeBlock|chat|toss|setControlState|attack|equip|unequip|activateItem)|pathfinder.goto` returns zero matches across `state_ticker.js`, `boot_snapshot.js`, `damage_stream.js`, `recall_log.js`, and `retry.js`.
 
 **Open behaviors / active monitoring:**
 - Bot respawned after goal cycle and is now self-prompting toward `mine 64 ancient debris` (resumed from saved memory). Position ~(-310, 62, -28) after spawn-zone escape; diamond/coal/stick stack still in inventory. Live [LLM] and [StateTicker] telemetry confirms the full observability layer is active during this run.
@@ -63,46 +64,7 @@ _Last updated: 2026-04-17 (BT-4 picked up — moved to in-progress; 6 BT-N items
 
 ## In-progress
 
-### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
-
-**Status:** 🟡 in-progress (picked up 2026-04-17) • **Priority:** high (currently impossible to verify Principle 2 — "memory is cognition" — is actually firing)
-
-**Absorbs G step 1 (ConfidenceEngine.evaluate instrumentation).** G's audit step 1 proposed identical `ConfidenceEngine.evaluate()` logging. Covered here as a subset of the general retrieval-visibility work; G becomes a pure threshold-tuning item that depends on BT-4 shipping.
-
-**Problem.** All three memory subsystems log *writes* but retrievals are silent unless they error. For a successful retrieval call, we see nothing: no query, no top-K results, no similarity scores. We cannot tell whether memory contributed to the current response.
-
-**Approach (post-recon refinement).**
-
-1. **New module:** `src/observability/recall_log.js` — module-level `logRecall({subsystem, query, k, returned, backend, top_score, top_text, ...extras})` function (stateless, matches `captureBootSnapshot`'s shape). One `[MemoryRecall]` log line + append to `data/recall-stream.jsonl`. Error-throttled file sink (10s window, BT-2 pattern). `query` and `top_text` truncated to 80 chars each. Settings flag `settings.recall_log.enabled` (default true) kills it globally if needed.
-
-2. **Three instrumentation sites (not four — procedural collapses into confidence):**
-   - `src/memory/episodic_memory.js:retrieve` — log at both exit paths (Vectra success, word-overlap fallback), emitting `backend=vectra` or `backend=word-overlap`.
-   - `src/memory/long_term_memory.js:recall` — same, 2 exits, plus `category_top` extra.
-   - `src/memory/confidence_engine.js:evaluate` — **option A restructure** to single exit, emit one `[MemoryRecall] subsystem=confidence tier=... confidence=... context_hash=... record_count=...` per decision.
-
-3. **Procedural rationale (Principle 5 / Rule 9).** `ProceduralMemory.lookup()` has exactly one caller (`confidence_engine.js:68`). Instrumenting `evaluate()` captures 100% of procedural lookups with the richer decision context (tier, thresholds). A separate procedural log line would duplicate once per LLM turn.
-
-**Perimeter (Rule 7) — retrieval callsite map:**
-- Episodic retrieve: `episodic_memory.js:137` (2 exits) + internal via `getFormattedMemories` (prompter.js:257, 377).
-- LTM recall: `long_term_memory.js:190` (2 exits) + internal via `getFormattedKnowledge` (prompter.js:385).
-- Procedural lookup: `procedural_memory.js:126` — single caller at `confidence_engine.js:68`.
-- Confidence evaluate: `confidence_engine.js:63` — single caller at `agent.js:856`. Return fields consumed by caller: `.level, .confidence, .action, .contextHash` (verified by grep) + `buildSuggestionFromResult` reads `.action, .confidence`.
-- `coder.js:197 .evaluate()` is unrelated (`compartment.evaluate(src)` — vm sandbox, not ConfidenceEngine).
-
-**Option A verification homework (baked into per-BT loop):**
-1. Stats equality check post-deploy: `totalDecisions === bypassed + suggested + fullReasoning` after 5+ turns.
-2. Result shape preservation: every branch still sets `{level, action, confidence, contextHash}`.
-3. Throw-safety: `logRecall` calls wrapped in try/catch so failures can't break agent per-turn flow.
-4. Rule 7 sweep: new module + confidence_engine.js have zero bot-mutation verbs.
-5. Diff hygiene: 4-return → 1-return, branch order preserved, variable names preserved.
-
-**Blast radius.** Additive read-side instrumentation + one confined control-flow restructure in `evaluate()`. No behavior change in any of the three subsystems.
-
-**Success signal.** Log shows interleaved `[MemoryRecall] subsystem={episodic,long_term,confidence}` lines. Memory → prompt → response is traceable. `data/recall-stream.jsonl` populates. Unblocks G's threshold-tuning with real distribution data.
-
-**Philosophy alignment.** Principle 2 (observability of cognition layer). Principle 8 (fail informatively).
-
-**Effort.** ~120 lines across 4 files.
+_Empty — pick the next BT-N item from the ⏳ queue._
 
 ## Shipped — awaiting live verification
 
@@ -579,6 +541,90 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-17 — BT-4 MemoryRecall: [MemoryRecall] log line per memory retrieval ✅
+
+Shipped `src/observability/recall_log.js` (≈220 lines, module-level stateless logger
+matching the `captureBootSnapshot` shape) and instrumented all three memory
+subsystems. Every retrieval now emits exactly one `[MemoryRecall]` structured log
+line + one JSONL record to `data/recall-stream.jsonl`. Principle 2 ("memory is
+cognition") is finally observable.
+
+**Module shape.** Module-level `logRecall({subsystem, query, k, returned, backend,
+top_score, top_text, ...extras})` — no class, no per-agent state, no DI. Matches
+`captureBootSnapshot`. `configureRecallLog({enabled, log_to_console, log_to_file,
+file_path})` is the settings hook. `logRecall` is non-throwing (internal try/catch
+with 10 s error throttling on both console and file sinks). `query` and `top_text`
+truncated to 80 chars each; multi-line queries collapsed to single-line.
+
+**Three instrumentation sites (procedural collapsed into confidence per Principle 5
++ Rule 9):**
+
+- `src/memory/episodic_memory.js retrieve()` — 3 exits logged: empty-cache
+  (`backend=none`, `returned=0`), Vectra success (`backend=vectra`, `top_score`,
+  `top_text`), word-overlap fallback (`backend=word-overlap`). Vectra result hoisted
+  OUT of the try/catch so the log call fires outside any path that might be
+  misclassified as "Vectra query failed."
+- `src/memory/long_term_memory.js recall()` — symmetric 3 exits with
+  `category` / `category_top` extras so category filtering is visible.
+- `src/memory/confidence_engine.js evaluate()` — **option A single-exit restructure**
+  (4 returns → 1). Each of the four branches ((!entry), HIGH bypass, MEDIUM suggest,
+  LOW fallthrough-with-entry) still bumps exactly one stats counter and assigns
+  `{level, action, confidence, contextHash}`. One log call fires after the branch
+  block, inside a try/catch defense-in-depth wrapper. Extras: `tier, threshold_high,
+  threshold_med, context_hash (12-char prefix), record_count, trigger`. Procedural
+  `ProceduralMemory.lookup()` has exactly one caller (confidence_engine.js:68), so
+  instrumenting `evaluate()` captures 100 % of procedural reads with richer context
+  — a separate procedural log line would duplicate per LLM turn.
+
+**Record shape:**
+```
+[MemoryRecall] subsystem=episodic    query="mine 64 ancient debris ..." k=3 returned=3 backend=vectra top_score=0.715 top_text="System: Recent behaviors log: Fighting creeper! ..."
+[MemoryRecall] subsystem=long_term   query="mine 64 ancient debris ..." k=5 returned=5 backend=vectra top_score=0.640 top_text="Never dig straight down — you can fall into lava ..." category_top="strategy"
+[MemoryRecall] subsystem=confidence  query="mine 64 ancient debris" k=1 returned=1 backend=map top_score=0.722 top_text="!digDown(3)" trigger="You are self-prompting with the goal ..." tier="MEDIUM" threshold_high=0.98 threshold_med=0.5 context_hash="cfa049aac5ad" record_count=294
+```
+
+**Option A verification (post-deploy):**
+1. ✅ Stats-equality invariant preserved by construction: every branch in the
+   restructured `evaluate()` increments exactly one of `{bypassed, suggested,
+   fullReasoning}` and every entry increments `totalDecisions` once. Branch-order
+   diff hygiene preserved; node --check clean.
+2. ✅ Result shape preserved: all four branches set `{level, action, confidence,
+   contextHash}`. Consumer at `agent.js:856` and `buildSuggestionFromResult()`
+   unaffected (grep-verified for `.level, .confidence, .action, .contextHash`).
+3. ✅ Throw-safety: `logRecall` wrapped in try/catch — even if the logger throws,
+   the agent's per-turn hot path continues uninterrupted.
+4. ✅ Rule 7 perimeter clean: `grep -E 'bot\.(dig|placeBlock|chat|toss|setControlState|
+   attack|equip|unequip|activateItem)|pathfinder\.goto'` across the new `recall_log.js`
+   and the edits in `episodic_memory.js`, `long_term_memory.js`, and
+   `confidence_engine.js` returns zero matches. The logger is pure log + `fs.appendFile`.
+5. ✅ Procedural collapse documented in both commit body and `recall_log.js` header —
+   future audits won't mistake it for a skipped instrumentation site.
+
+**Verified live 2026-04-17.** Bot restarted via `tmux kill-session -t mindcraft-mcgavin
+&& ./start.sh`; `[MemoryRecall]` lines surfaced from all three subsystems within the
+first turn:
+- 5 × `subsystem=confidence` (tier=LOW and tier=MEDIUM both observed; context_hash
+  stable across repeated goal decisions; top_score in the 0.65–0.74 range — right on
+  top of G's 0.95 threshold-drop target for HIGH bypasses)
+- 5 × `subsystem=episodic` (all `backend=vectra`, top_score 0.71–0.72)
+- 5 × `subsystem=long_term` (all `backend=vectra`, top_score 0.62–0.64,
+  `category_top="strategy"` on one, `"fact"` on another)
+
+`data/recall-stream.jsonl` populating correctly with valid JSONL (15 records /
+5 each subsystem). 5:5:5 symmetry confirms episodic + LTM fire together once per
+prompt assembly while confidence fires once per LLM turn, matching the architectural
+prediction.
+
+**Unblocks G's threshold-tuning work** — the `record_count=294` and the
+0.65–0.74 top_score distribution now visible in JSONL means JP has real data to
+evaluate whether dropping `highThreshold` from 0.98 → 0.95 would unlock HIGH-tier
+bypasses without false positives.
+
+**Blast radius.** Additive read-side instrumentation + one confined control-flow
+restructure in `evaluate()`. Zero behavior change in any of the three subsystems.
+
+Commits `d335327` (whiteboard pickup) + `1bcbbb6` (ship — 4 files, +362/-43).
 
 ### 2026-04-17 — BT-12 observability wiring before spawn-escape await ✅
 
