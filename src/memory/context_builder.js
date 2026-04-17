@@ -102,9 +102,16 @@ export class ContextBuilder {
         );
         if (params.commandDocs && cmdBudget > 200) {
             const cmdStr = this._trimToFit(params.commandDocs, cmdBudget);
+            // T1: commands truncated when _trimToFit shrunk the input
+            if (cmdStr.length < params.commandDocs.length) {
+                console.log(`[ContextBuilder] truncated=commands ${params.commandDocs.length}→${cmdStr.length} chars (budget)`);
+            }
             sections.push(cmdStr + '\n');
             usedChars += cmdStr.length + 1;
             stats.sections.commands = cmdStr.length + 1;
+        } else if (params.commandDocs) {
+            // D1: commands requested but budget too small to include
+            console.log(`[ContextBuilder] dropped=commands (budget=${cmdBudget})`);
         }
 
         // --- PRIORITY 5: Conversation turns (compressed in self-prompt mode) ---
@@ -130,11 +137,19 @@ export class ContextBuilder {
 
             let memStr = memParts.join('\n');
             if (memStr.length > 0) {
+                const memOrig = memStr.length;
                 memStr = this._trimToFit(memStr, memBudget);
+                // T3: memory truncated when _trimToFit shrunk the input
+                if (memStr.length < memOrig) {
+                    console.log(`[ContextBuilder] truncated=memory ${memOrig}→${memStr.length} chars (budget)`);
+                }
                 sections.push(memStr + '\n');
                 usedChars += memStr.length + 1;
                 stats.sections.memory = memStr.length + 1;
             }
+        } else if (params.episodicMemory || params.longTermMemory) {
+            // D2: memory requested but budget too small to include
+            console.log(`[ContextBuilder] dropped=memory (budget=${memBudget})`);
         }
 
         // --- PRIORITY 7: Examples (skip during self-prompting, use 1-2 with players) ---
@@ -147,9 +162,16 @@ export class ContextBuilder {
             const exBudget = this.availableChars - usedChars;
             if (exBudget > 200) {
                 const exStr = this._trimToFit(params.examples, exBudget);
+                // T4: examples truncated when _trimToFit shrunk the input
+                if (exStr.length < params.examples.length) {
+                    console.log(`[ContextBuilder] truncated=examples ${params.examples.length}→${exStr.length} chars (budget)`);
+                }
                 sections.push(exStr);
                 usedChars += exStr.length;
                 stats.sections.examples = exStr.length;
+            } else {
+                // D3: examples requested but budget too small to include
+                console.log(`[ContextBuilder] dropped=examples (budget=${exBudget})`);
             }
         }
 
@@ -206,6 +228,9 @@ export class ContextBuilder {
 
         const lines = [];
         let totalLen = 'Conversation:\n'.length;
+        // T2: track turns dropped due to budget pressure (distinct from turns skipped
+        // by self-prompt filters above, which continue rather than break the loop)
+        let budgetDroppedTurns = 0;
 
         // Work backwards from most recent
         for (let i = turns.length - 1; i >= 0; i--) {
@@ -229,10 +254,19 @@ export class ContextBuilder {
                           turn.role === 'system' ? 'System' : 'User';
             const line = `${prefix}: ${content}`;
 
-            if (totalLen + line.length + 1 > budget) break;
+            if (totalLen + line.length + 1 > budget) {
+                // Current turn + all older unvisited turns didn't fit.
+                // Over-counts filter-eligible older turns, but honest direction: budget forced the stop.
+                budgetDroppedTurns = i + 1;
+                break;
+            }
 
             lines.unshift(line);
             totalLen += line.length + 1;
+        }
+
+        if (budgetDroppedTurns > 0) {
+            console.log(`[ContextBuilder] truncated=conversation dropped=${budgetDroppedTurns} turns (budget)`);
         }
 
         if (lines.length === 0) return '';
