@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — moved to Recently completed; 2 new incident-driven items filed in To-do: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state)_
+_Last updated: 2026-04-17 (BT-5 AutoRecovery stats shipped + live-verified — moved to Recently completed; 4 new incident-driven items filed in To-do: #22 escapeProtectedZone suffocation trap, #23 self-prompter ignores held state, #24 self-prompter doesn't interrupt for player chat, #25 !addRule has no armor/durability pattern)_
 
 ---
 
@@ -143,6 +143,87 @@ The `continue` is the key behavior change — held ticks are no-ops, not LLM-rou
 **Success signal.** Replay scenario: trigger a ChunkWait hold (NaN position) with self-prompting active. `self_prompter` does not emit `handleMessage` calls during the hold, `no_command_count` does not advance, `state` stays `ACTIVE`, and once the hold clears the loop resumes normally. Memory.json save during a hold still reflects the active goal.
 
 **Philosophy alignment.** Principle 1 (don't ask the LLM for decisions when the world isn't in a decidable state). Principle 8 (instrumentation we just shipped — StateTicker's held flag — should drive control flow, not just logs).
+
+### 24. Self-prompter doesn't interrupt stuck loops for player chat
+
+**Status:** ⏳ not started • **Priority:** high (observed live 2026-04-17; player chat effectively invisible to a stuck bot)
+
+**Problem.** Observed live 2026-04-17 ~19:00Z. The bot was deep in a repeating `!digDown(10)` → "dangerous drop ahead, 0 blocks dug" loop against an unreachable cavern. JP sent two chat messages via `Bones_McGavin`:
+
+1. "Set a goal to mine 64 ancient debris" — processed (goal set via `!goal`, bot then pattern-completed into the dig-loop).
+2. "add a new rule, if any part of your diamond armor breaks, make a replacement corresponding diamond armor and equip it" — RECEIVED (seen in tmux: `ThatCoolGuyDude received message from Bones_McGavin : ...`) but NEVER acted on. Zero `[PersistentRule]` logs in 5000+ lines of tmux; zero `!addRule` in the rotated history file; `memory.json persistent_rules: []` after the save that covered this window.
+
+The LLM's next response after the rule chat stayed in the dig-down pattern. The chat joined the conversation turns but did not break the loop. From the player's perspective, the message was ignored.
+
+**Root cause.** Two contributing patterns:
+
+1. `SelfPrompter.startLoop` treats player-chat drainage as secondary — the `_playerMsgQueue` drain runs AFTER the LLM has already generated a response to its own self-prompt (`self_prompter.js:168-177`). So if a player message arrives mid-generation, it's drained as a new `handleMessage` call but the LLM that just responded has no visibility into what the player said relative to what it was already doing. No mechanism to interrupt or reset the pattern.
+2. When the LLM has been issuing `!digDown` repeatedly and a new chat arrives, nothing in the prompt says "a player just interrupted you — reconsider." The self-prompt message at `self_prompter.js:159` is still `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command...`. Pattern-matching continues.
+
+**Solution sketch.**
+
+- **Interrupt-on-chat:** when a `Bones_McGavin`/player-authored message arrives, call `self_prompter.stopLoop()` (or a softer version that doesn't set `state=STOPPED`) so the current self-prompt cycle exits cleanly, then route the player message through `handleMessage` outside the loop, then resume. This preserves the goal but gives the player message undivided attention.
+- **Chat-aware prompt prefix:** if `_playerMsgQueue` had messages drained during the last turn, prepend the prompt with `A player just said: "<message>". Address it before continuing.` so the LLM can't pattern-complete past it.
+- **Stuck-loop detection:** secondary — if the last N commands were identical (same name + args), the self-prompt should say `You have repeated !digDown(10) 4 times with no progress. Try a different approach.` Extends BT-5's measurement instinct.
+
+Option 1 is the surgical fix; 2 is the defense-in-depth; 3 is the root cause of the dig-loop itself and probably belongs with #10 survival hardening.
+
+**Files.**
+- `src/agent/self_prompter.js` — interrupt + prompt-prefix logic.
+- `src/agent/agent.js` — `handleMessage` may need to signal "this was a player, not a self-prompt" to the prompter.
+
+**Blast radius.** Changes control flow inside the loop. Medium risk — must verify interrupts don't cascade into the auto-stop counter or goal-loss path from #23. Ship #23 first.
+
+**Success signal.** Replay scenario: put the bot in a repeating failing command (`!digDown` against unreachable cavern), send a chat message, the bot's very next response addresses the chat — not another `!digDown`. Confirm via the rotated history file that `!addRule` / `!goal` / whatever the chat demanded actually appears.
+
+**Philosophy alignment.** Principle 1 (the player is the human-in-the-loop; never let the LLM's self-prompting drown them out). Rule 7 (complete the perimeter — every loop that talks to the LLM needs a chat-interrupt path, not just the top-level handler).
+
+### 25. `!addRule` has no armor/durability pattern
+
+**Status:** ⏳ not started • **Priority:** medium (would unlock the class of rules JP actually requested 2026-04-17)
+
+**Problem.** `!addRule` at `src/agent/commands/actions.js:419` uses hardcoded description-matching to pick a `conditionFn` and `action`. Current cases (2026-04-17): diamond ore, iron ore, inventory full / clean inventory, low health / heal, generic "ore + collect", plus a default for ore/coal/gold/inventory-full/low-health actions. **No armor or durability trigger.**
+
+JP's 2026-04-17 chat "add a new rule, if any part of your diamond armor breaks, make a replacement corresponding diamond armor and equip it" describes exactly this class. Even if the LLM had responded with `!addRule(...)`, the description would fall through to `conditionFn = () => true` (fires every tick forever) and `action = '!searchForBlock("diamond_ore", 64)'` — completely wrong. Rule would spam and never do the right thing.
+
+**Root cause.** The pattern dictionary in `!addRule.perform` was seeded from early-development examples (ore / inventory / health) and hasn't kept up with the equipment-management category. Equipment durability isn't a first-class concept in the current rules dispatch.
+
+**Solution sketch.** Add a case:
+
+```js
+} else if (descLower.includes('armor') || descLower.includes('armour') || descLower.includes('broken') || descLower.includes('durability')) {
+    conditionFn = (agent) => {
+        try {
+            const slots = agent.bot.inventory.slots;
+            // equipment slots in mineflayer: 5 (helmet), 6 (chest), 7 (leggings), 8 (boots)
+            for (const slotIdx of [5, 6, 7, 8]) {
+                const item = slots[slotIdx];
+                if (!item) continue;
+                const maxDur = item.maxDurability || 0;
+                const dur = maxDur - (item.durabilityUsed || 0);
+                if (maxDur > 0 && dur / maxDur < 0.2) return true; // <20% durability
+            }
+            return false;
+        } catch { return false; }
+    };
+    // action: auto-craft and equip best-tier replacement
+    action = '!craftRecipe("diamond_chestplate", 1)'; // default — see note
+}
+```
+
+Note: the action for this rule is harder than the condition. "Make a replacement corresponding diamond armor and equip it" requires figuring out WHICH slot is broken, checking whether a replacement of the matching tier exists in inventory, crafting it if not, then equipping. That's multi-step and probably needs a new `!replaceBrokenArmor` skill or a chain of commands. For the minimum viable rule, action `!equipBestArmor` (if that exists) or `!craftRecipe("diamond_chestplate", 1)` as a placeholder until a real replacement skill exists.
+
+Broader question surfaced by this: `!addRule`'s one-line-action model is too narrow for "detect X, do multi-step Y." Either (a) allow compound actions (array of commands), (b) allow rule action to be a skill-function name rather than a command string, or (c) accept this limitation and scope rules to single-command responses only.
+
+**Files.**
+- `src/agent/commands/actions.js` — new case in `!addRule.perform`.
+- Possibly `src/agent/library/skills.js` — new `replaceBrokenArmor(bot)` skill if we go the multi-step route.
+
+**Blast radius.** Additive case in the if/else chain. Low risk unless we expand the action model (which would touch everywhere rules are fired).
+
+**Success signal.** JP's original chat — "add a new rule, if any part of your diamond armor breaks..." — results in a registered rule with a condition that correctly fires when any equipped armor piece drops below 20% durability, and an action that's at least plausibly corrective.
+
+**Philosophy alignment.** Principle 1 (durability is a mechanical signal — don't ask the LLM to notice). Rule 9 (minimum code — start with one case in the chain; don't redesign the whole rules API until there's a second real use case).
 
 ### BT-3b. LLM telemetry — migrate remaining 19 model adapters through withLLMMetrics
 
