@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (full-refresh pass after BT-1 + BT-8 ship — Current state reflects observability layer + live HEAD)_
+_Last updated: 2026-04-17 (BT-3 LLM call telemetry moved to In-progress)_
 
 ---
 
@@ -62,6 +62,38 @@ _Last updated: 2026-04-17 (full-refresh pass after BT-1 + BT-8 ship — Current 
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
 
+### BT-3. LLM call telemetry — latency, tokens, retries
+
+**Status:** 🟡 in progress • **Priority:** high (you can't tune what you can't measure; tonight's model-switch to `-obliterated` is untuned blind)
+
+**Absorbs #18 (model-provider server-side logging sweep).** #18 scoped error-case logging in 17 model-adapter `catch` blocks. BT-3 instruments every call (success + error) at the `retry()` wrapper level, covering #18's scope as a subset. #18 removed from queue.
+
+**Problem.** `models/lmstudio.js:22` logs `"Awaiting LM Studio response from model X"` and `:35` logs `"Received."` — no elapsed time, no token counts, no prompt cache hit info. `utils/retry.js:101` logs retry attempts and backoff but not cumulative elapsed. We have zero visibility into: how long did the call take, tokens in/out, retries used, whether LM Studio hit its prompt cache. LM Studio's own log has this data (we saw it tonight in `2026-04-16.3.log`) but the bot side is blind.
+
+**Root cause.** `sendRequest` in each model adapter wraps the OpenAI SDK call with no timing instrumentation. It's a function that awaits and returns.
+
+**Proposed solution.** Extract `withLLMMetrics(label, fn)` helper in `utils/retry.js` (already wraps with retry). Emit one `[LLM]` log line per call:
+
+```
+[LLM] model=gemma-4-e4b-it-obliterated elapsed_ms=8420 prompt_tok=3435 completion_tok=14 tok_per_s=1.66 retries=0 cache_hit=? status=ok
+```
+
+`cache_hit` from `stats`/`usage` in response if LM Studio returns it; otherwise null. Error case logs same shape with `status=error err_class=...`.
+
+**Implementation plan.**
+1. Extend `retry()` to capture `startTime` and the response `usage`/`stats`.
+2. Emit `[LLM]` structured line in one call site (`retry.js`). Applies to every model routing through it.
+3. Audit the 17 model adapters — migrate any not using `retry()` through it. Satisfies #18 scope.
+4. JSONL optional — log-only first pass; add `data/llm-stream.jsonl` later if analytics wanted.
+
+**Blast radius.** One touch in `utils/retry.js`. All 17 model adapters benefit. Adapter audit (~15 min) to confirm each routes through `retry`.
+
+**Success signal.** Every LLM call surface-logs timing + tokens. Tuning loops (temperature, truncation, model choice) become observable.
+
+**Philosophy alignment.** Principle 1 (measurement enables LLM-reliance reduction). Principle 8.
+
+**Effort.** Small — ~30 lines in `retry.js` + adapter audit.
+
 ## Shipped — awaiting live verification
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
@@ -120,37 +152,6 @@ Source inference: check `bot.lastAttackedEntity` + entity type; fall back to blo
 
 **Effort.** Small — ~80 lines module, ~5 lines wiring.
 
-### BT-3. LLM call telemetry — latency, tokens, retries
-
-**Status:** ⏳ not started • **Priority:** high (you can't tune what you can't measure; tonight's model-switch to `-obliterated` is untuned blind)
-
-**Absorbs #18 (model-provider server-side logging sweep).** #18 scoped error-case logging in 17 model-adapter `catch` blocks. BT-3 instruments every call (success + error) at the `retry()` wrapper level, covering #18's scope as a subset. #18 removed from queue.
-
-**Problem.** `models/lmstudio.js:22` logs `"Awaiting LM Studio response from model X"` and `:35` logs `"Received."` — no elapsed time, no token counts, no prompt cache hit info. `utils/retry.js:101` logs retry attempts and backoff but not cumulative elapsed. We have zero visibility into: how long did the call take, tokens in/out, retries used, whether LM Studio hit its prompt cache. LM Studio's own log has this data (we saw it tonight in `2026-04-16.3.log`) but the bot side is blind.
-
-**Root cause.** `sendRequest` in each model adapter wraps the OpenAI SDK call with no timing instrumentation. It's a function that awaits and returns.
-
-**Proposed solution.** Extract `withLLMMetrics(label, fn)` helper in `utils/retry.js` (already wraps with retry). Emit one `[LLM]` log line per call:
-
-```
-[LLM] model=gemma-4-e4b-it-obliterated elapsed_ms=8420 prompt_tok=3435 completion_tok=14 tok_per_s=1.66 retries=0 cache_hit=? status=ok
-```
-
-`cache_hit` from `stats`/`usage` in response if LM Studio returns it; otherwise null. Error case logs same shape with `status=error err_class=...`.
-
-**Implementation plan.**
-1. Extend `retry()` to capture `startTime` and the response `usage`/`stats`.
-2. Emit `[LLM]` structured line in one call site (`retry.js`). Applies to every model routing through it.
-3. Audit the 17 model adapters — migrate any not using `retry()` through it. Satisfies #18 scope.
-4. JSONL optional — log-only first pass; add `data/llm-stream.jsonl` later if analytics wanted.
-
-**Blast radius.** One touch in `utils/retry.js`. All 17 model adapters benefit. Adapter audit (~15 min) to confirm each routes through `retry`.
-
-**Success signal.** Every LLM call surface-logs timing + tokens. Tuning loops (temperature, truncation, model choice) become observable.
-
-**Philosophy alignment.** Principle 1 (measurement enables LLM-reliance reduction). Principle 8.
-
-**Effort.** Small — ~30 lines in `retry.js` + adapter audit.
 
 ### BT-4. Memory retrieval visibility — episodic, long-term, procedural reads
 
