@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-2 DamageStream shipped — four observability modules live; 8 BTs remaining)_
+_Last updated: 2026-04-17 (BT-12 filed + in-progress — startup-window observability fix)_
 
 ---
 
@@ -63,6 +63,41 @@ _Last updated: 2026-04-17 (BT-2 DamageStream shipped — four observability modu
 ## In-progress
 
 ***PAUSED TO WORK ON BETTER TOOLING.***
+
+### BT-12. Observability startup-window visibility
+
+**Status:** 🟡 in progress • **Priority:** medium (fixes a blind spot JP spotted during BT-2 verification today — any damage, path decisions, or state during spawn-escape are currently invisible)
+
+**Problem.** In `Agent.bot.once('spawn', ...)` the ordering is:
+
+```
+await escapeProtectedZone(this.bot)   // blocks ~45-60s on in-zone spawn
+this._setupEventHandlers(...)
+this.startEvents()                    // wires health / damage / death / etc.
+StateTicker.start()                   // 1Hz pulse
+```
+
+StateTicker and DamageStream do not exist until after the escape `await` completes. Any damage the bot takes during escape (hostile inside the zone, path-assisted fall, lava pocket) is lost: the `[Damage]` line never fires and the death handler's LTM source-write has nothing to read. `[StateTicker]` pulses also do not start until post-escape, so the full zone-escape window is invisible to the observability layer.
+
+**Root cause.** Original ordering grouped all post-spawn setup together. The observability wiring has no actual dependency on escape having completed — `startEvents()` just attaches listeners to `this.bot` (which has existed since login) and `StateTicker.start()` reads `bot.entity.*` getters (guarded by a NaN/ChunkWait `{held:true}` fallback). The grouping is convenience, not correctness.
+
+**Proposed solution.** Move two things BEFORE `await skills.escapeProtectedZone(this.bot)`:
+- `this.startEvents()` — wires `bot.on('health'|'error'|'end'|'death'|'kicked'|'messagestr'|'time')` and constructs `DamageStream`.
+- The StateTicker construction + `start()` block.
+
+Leave `_setupEventHandlers(save_data, init_message)` in its current position. That module wires chat/whisper handling and kicks the initial prompt; gating it until after escape keeps the bot from mid-hop chat-processing.
+
+**Blast radius.** Surgical. ~20 lines moved in `src/agent/agent.js` (no net additions). `startEvents()` re-call safety is already covered by the existing per-field `if (!this.damage_stream)` guard + `StateTicker.start()` idempotence. Mineflayer listener attachment before spawn is standard (mineflayer docs: attach before-spawn is the idiomatic pattern, events simply fire when they fire).
+
+**Rule 7 audit.** No new code; just ordering. The observability modules already satisfied Rule 7 in their own commits — moving when they are constructed does not introduce new bot mutations.
+
+**How to verify.**
+- [ ] Restart bot with a spawn that lands INSIDE the 250-block protection zone.
+- [ ] `[StateTicker]` pulses interleave with `[SpawnEscape] -X hop N` lines (not only after escape).
+- [ ] If the bot takes damage during the escape hops, a `[Damage]` line fires.
+
+**Estimated effort.** Tiny. One file touched, one commit.
+
 
 ## Shipped — awaiting live verification
 
