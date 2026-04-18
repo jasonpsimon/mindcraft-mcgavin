@@ -131,12 +131,18 @@ export class Prompter {
         this.contextBuilder = new ContextBuilder(settings.context_builder || {});
         this.generationLock = new GenerationLock();
         mkdirSync(`./bots/${name}`, { recursive: true });
-        writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
-            if (err) {
-                throw new Error('Failed to save profile:', err);
-            }
+        // BT-bundle(c): sync writeFileSync does not accept a callback — the
+        // previous `(err) => throw ...` arrow was silently discarded by Node,
+        // so a real write failure (ENOSPC, EACCES) would escape as an uncaught
+        // throw with no structured log. Wrap in try/catch with [Prompter] log
+        // and re-throw so the caller still sees the failure.
+        try {
+            writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4));
             console.log("Copy profile saved.");
-        });
+        } catch (err) {
+            console.error(`[Prompter] Failed to save profile ./bots/${name}/last_profile.json: ${err.message}`);
+            throw err;
+        }
     }
 
     getName() {

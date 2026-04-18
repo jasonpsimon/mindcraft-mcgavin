@@ -46,7 +46,11 @@ export class NPCContoller {
                 }
             }
         } catch (e) {
-            console.log('Error reading construction file');
+            // BT-bundle(c): prior log was 'Error reading construction file'
+            // with no prefix, no error message, and no filename. Include
+            // the error message; directory is fixed so path context is
+            // implicit in the [NPC] prefix.
+            console.error(`[NPC] Error reading construction files from src/agent/npc/construction: ${e.message}`);
         }
 
         for (let name in this.constructions) {

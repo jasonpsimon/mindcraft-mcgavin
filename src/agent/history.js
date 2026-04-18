@@ -80,15 +80,27 @@ export class History {
         if (this.full_history_fp === undefined) {
             const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
             this.full_history_fp = `./bots/${this.name}/histories/${string_timestamp}.json`;
-            writeFileSync(this.full_history_fp, '[]', 'utf8');
+            // BT-bundle(c): the init write was outside the try/catch below —
+            // a missing histories dir or permission error would propagate
+            // up into async appendFullHistory's caller with no [History]
+            // log. Wrap it, log, and reset fp so a later call may retry.
+            try {
+                writeFileSync(this.full_history_fp, '[]', 'utf8');
+            } catch (err) {
+                console.error(`[History] init write failed ${this.full_history_fp}: ${err.message}`);
+                this.full_history_fp = undefined;
+                return;
+            }
         }
+        // BT-bundle(c): catch covers read→parse→push→write; prior message
+        // said "Error reading" which was misleading on write-side throws.
         try {
             const data = readFileSync(this.full_history_fp, 'utf8');
             let full_history = JSON.parse(data);
             full_history.push(...to_store);
             writeFileSync(this.full_history_fp, JSON.stringify(full_history, null, 4), 'utf8');
         } catch (err) {
-            console.error(`Error reading ${this.name}'s full history file: ${err.message}`);
+            console.error(`Error appending to ${this.name}'s full history file: ${err.message}`);
         }
     }
 

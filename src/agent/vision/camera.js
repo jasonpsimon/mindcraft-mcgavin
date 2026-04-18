@@ -59,7 +59,18 @@ export class Camera extends EventEmitter {
 
         const buf = await getBufferFromStream(imageStream);
         await this._ensureScreenshotDirectory();
-        await fs.writeFile(`${this.fp}/${filename}.jpg`, buf);
+        // BT-bundle(c): prior call had no local try/catch and the caller
+        // (vision_interpreter.js) does not wrap either — a disk-full /
+        // permission error would bubble up with no [Camera] prefix.
+        // Log at the write site so the failure is attributable to the
+        // screenshot save, then re-throw so the caller still fails.
+        const filepath = `${this.fp}/${filename}.jpg`;
+        try {
+            await fs.writeFile(filepath, buf);
+        } catch (err) {
+            console.error(`[Camera] screenshot save failed (${filepath}): ${err.message}`);
+            throw err;
+        }
         console.log('saved', filename);
         return filename;
     }
