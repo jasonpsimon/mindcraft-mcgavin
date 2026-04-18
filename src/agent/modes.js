@@ -168,7 +168,12 @@ const modes_list = [
         on: true,
         active: false,
         update: async function (agent) {
-            const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
+            // Detection range must match defendSelf's attack range (8) — otherwise
+            // enemies in the 8–16 ring trigger the say() + execute() but defendSelf
+            // scans at 8 and aborts, producing phantom "Fighting X!" announcements
+            // with no actual combat. Principle 1 alignment: don't ask the mode to
+            // trigger on a distance the skill can't handle.
+            const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 8);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Fighting ${enemy.name}!`);
                 execute(this, agent, async () => {
