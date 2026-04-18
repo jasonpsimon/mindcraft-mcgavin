@@ -348,7 +348,7 @@ async function _impl_smeltItem(bot, itemName, num=1) {
 
 export const smeltItem = wrapSkill('smeltItem', _impl_smeltItem);
 
-export async function clearNearestFurnace(bot) {
+async function _impl_clearNearestFurnace(bot) {
     /**
      * Clears the nearest furnace of all items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -384,9 +384,10 @@ export async function clearNearestFurnace(bot) {
     return true;
 
 }
+export const clearNearestFurnace = wrapSkill('clearNearestFurnace', _impl_clearNearestFurnace);
 
 
-export async function attackNearest(bot, mobType, kill=true) {
+async function _impl_attackNearest(bot, mobType, kill=true) {
     /**
      * Attack mob of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -406,8 +407,9 @@ export async function attackNearest(bot, mobType, kill=true) {
     log(bot, 'Could not find any '+mobType+' to attack.');
     return false;
 }
+export const attackNearest = wrapSkill('attackNearest', _impl_attackNearest);
 
-export async function attackEntity(bot, entity, kill=true) {
+async function _impl_attackEntity(bot, entity, kill=true) {
     /**
      * Attack mob of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -442,8 +444,9 @@ export async function attackEntity(bot, entity, kill=true) {
         return true;
     }
 }
+export const attackEntity = wrapSkill('attackEntity', _impl_attackEntity);
 
-export async function defendSelf(bot, range=9) {
+async function _impl_defendSelf(bot, range=9) {
     /**
      * Defend yourself from all nearby hostile mobs until there are no more.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -487,6 +490,7 @@ export async function defendSelf(bot, range=9) {
         log(bot, `No enemies nearby to defend self from.`);
     return attacked;
 }
+export const defendSelf = wrapSkill('defendSelf', _impl_defendSelf);
 
 
 
@@ -746,7 +750,7 @@ async function _impl_pickupNearbyItems(bot) {
 export const pickupNearbyItems = wrapSkill('pickupNearbyItems', _impl_pickupNearbyItems);
 
 
-export async function breakBlockAt(bot, x, y, z) {
+async function _impl_breakBlockAt(bot, x, y, z) {
     /**
      * Break the block at the given position. Will use the bot's equipped item.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -813,6 +817,7 @@ export async function breakBlockAt(bot, x, y, z) {
     }
     return true;
 }
+export const breakBlockAt = wrapSkill('breakBlockAt', _impl_breakBlockAt);
 
 
 async function _impl_placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontCheat=false) {
@@ -1941,7 +1946,7 @@ const SOLID_GROUND_BLOCKS = new Set([
     'rooted_dirt', 'dirt_path', 'farmland',
 ]);
 
-export async function autoBreakStuckPlant(bot) {
+async function _impl_autoBreakStuckPlant(bot) {
     return await withBotLock('autoBreakStuckPlant', async () => {
         // Per-block failure blacklist (Bug C fix 2026-04-15). When a dig
         // throws (e.g. mode preemption / pathfinder race), don't immediately
@@ -2017,6 +2022,7 @@ export async function autoBreakStuckPlant(bot) {
         return false;
     });
 }
+export const autoBreakStuckPlant = wrapSkill('autoBreakStuckPlant', _impl_autoBreakStuckPlant);
 
 /**
  * Walk the bot out of the spawn protection zone if it's inside it.
@@ -2234,7 +2240,7 @@ async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
     }
 }
 
-export async function escapeSpawnZone(bot) {
+async function _impl_escapeSpawnZone(bot) {
     return await withBotLock('escapeSpawnZone', async () => {
         _installSpawnEscapeInstrumentation(bot);
         const spawn = bot.spawnPoint;
@@ -2319,6 +2325,7 @@ export async function escapeSpawnZone(bot) {
         }
     });
 }
+export const escapeSpawnZone = wrapSkill('escapeSpawnZone', _impl_escapeSpawnZone);
 
 /**
  * Escape ANY protected zone — spawn, village, or manual structure.
@@ -2338,7 +2345,7 @@ export async function escapeSpawnZone(bot) {
 const MAX_ZONE_ESCAPES = 5;  // cap on sequential zone escapes (village -> village -> ...)
 // Buffer: bot walks 50% past the zone edge (e.g., radius 100 -> target 150)
 
-export async function escapeProtectedZone(bot) {
+async function _impl_escapeProtectedZone(bot) {
     return await withBotLock('escapeProtectedZone', async () => {
         _installSpawnEscapeInstrumentation(bot);
 
@@ -2459,6 +2466,7 @@ export async function escapeProtectedZone(bot) {
         }
     });
 }
+export const escapeProtectedZone = wrapSkill('escapeProtectedZone', _impl_escapeProtectedZone);
 
 /**
  * Commit to one direction: walk in 40-block hops, do stuck maneuvers on
@@ -2710,7 +2718,7 @@ function _findSealBlock(bot, preferredName) {
     return null;
 }
 
-export async function discard(bot, itemName, num=-1) {
+async function _impl_discard(bot, itemName, num=-1) {
     /**
      * Discard the given item.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2741,8 +2749,9 @@ export async function discard(bot, itemName, num=-1) {
     log(bot, `Discarded ${discarded} ${itemName}.`);
     return true;
 }
+export const discard = wrapSkill('discard', _impl_discard);
 
-export async function putInChest(bot, itemName, num=-1) {
+async function _impl_putInChest(bot, itemName, num=-1) {
     /**
      * Put the given item in the nearest chest.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2770,8 +2779,9 @@ export async function putInChest(bot, itemName, num=-1) {
     log(bot, `Successfully put ${to_put} ${itemName} in the chest.`);
     return true;
 }
+export const putInChest = wrapSkill('putInChest', _impl_putInChest);
 
-export async function takeFromChest(bot, itemName, num=-1) {
+async function _impl_takeFromChest(bot, itemName, num=-1) {
     /**
      * Take the given item from the nearest chest, potentially from multiple slots.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2816,8 +2826,9 @@ export async function takeFromChest(bot, itemName, num=-1) {
     log(bot, `Successfully took ${totalTaken} ${itemName} from the chest.`);
     return totalTaken > 0;
 }
+export const takeFromChest = wrapSkill('takeFromChest', _impl_takeFromChest);
 
-export async function viewChest(bot) {
+async function _impl_viewChest(bot) {
     /**
      * View the contents of the nearest chest.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2845,8 +2856,9 @@ export async function viewChest(bot) {
     await chestContainer.close();
     return true;
 }
+export const viewChest = wrapSkill('viewChest', _impl_viewChest);
 
-export async function consume(bot, itemName="") {
+async function _impl_consume(bot, itemName="") {
     /**
      * Eat/drink the given item.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2869,9 +2881,10 @@ export async function consume(bot, itemName="") {
     log(bot, `Consumed ${item.name}.`);
     return true;
 }
+export const consume = wrapSkill('consume', _impl_consume);
 
 
-export async function giveToPlayer(bot, itemType, username, num=1) {
+async function _impl_giveToPlayer(bot, itemType, username, num=1) {
     /**
      * Give one of the specified item to the specified player
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2942,6 +2955,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     log(bot, `Failed to give ${itemType} to ${username}, it was never received.`);
     return false;
 }
+export const giveToPlayer = wrapSkill('giveToPlayer', _impl_giveToPlayer);
 
 export async function goToGoal(bot, goal) {
     /**
@@ -3087,7 +3101,7 @@ function startDoorInterval(bot) {
     return doorCheckInterval;
 }
 
-export async function goToPosition(bot, x, y, z, min_distance=2) {
+async function _impl_goToPosition(bot, x, y, z, min_distance=2) {
     /**
      * Navigate to the given position.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3142,6 +3156,7 @@ export async function goToPosition(bot, x, y, z, min_distance=2) {
         return false;
     }
 }
+export const goToPosition = wrapSkill('goToPosition', _impl_goToPosition);
 
 async function _impl_goToNearestBlock(bot, blockType,  min_distance=2, range=64) {
     /**
@@ -3198,7 +3213,7 @@ async function _impl_goToNearestBlock(bot, blockType,  min_distance=2, range=64)
 
 export const goToNearestBlock = wrapSkill('goToNearestBlock', _impl_goToNearestBlock);
 
-export async function goToNearestEntity(bot, entityType, min_distance=2, range=64) {
+async function _impl_goToNearestEntity(bot, entityType, min_distance=2, range=64) {
     /**
      * Navigate to the nearest entity of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3217,8 +3232,9 @@ export async function goToNearestEntity(bot, entityType, min_distance=2, range=6
     await goToPosition(bot, entity.position.x, entity.position.y, entity.position.z, min_distance);
     return true;
 }
+export const goToNearestEntity = wrapSkill('goToNearestEntity', _impl_goToNearestEntity);
 
-export async function goToPlayer(bot, username, distance=3) {
+async function _impl_goToPlayer(bot, username, distance=3) {
     /**
      * Navigate to the given player.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3253,9 +3269,10 @@ export async function goToPlayer(bot, username, distance=3) {
 
     log(bot, `You have reached ${username}.`);
 }
+export const goToPlayer = wrapSkill('goToPlayer', _impl_goToPlayer);
 
 
-export async function followPlayer(bot, username, distance=4) {
+async function _impl_followPlayer(bot, username, distance=4) {
     /**
      * Follow the given player endlessly. Will not return until the code is manually stopped.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3319,9 +3336,10 @@ export async function followPlayer(bot, username, distance=4) {
     clearInterval(doorCheckInterval);
     return true;
 }
+export const followPlayer = wrapSkill('followPlayer', _impl_followPlayer);
 
 
-export async function moveAway(bot, distance) {
+async function _impl_moveAway(bot, distance) {
     /**
      * Move away from current position in any direction.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3353,8 +3371,9 @@ export async function moveAway(bot, distance) {
     log(bot, `Moved away from ${pos.floored()} to ${new_pos.floored()}.`);
     return true;
 }
+export const moveAway = wrapSkill('moveAway', _impl_moveAway);
 
-export async function moveAwayFromEntity(bot, entity, distance=16) {
+async function _impl_moveAwayFromEntity(bot, entity, distance=16) {
     /**
      * Move away from the given entity.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3368,8 +3387,9 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
     await bot.pathfinder.goto(inverted_goal);
     return true;
 }
+export const moveAwayFromEntity = wrapSkill('moveAwayFromEntity', _impl_moveAwayFromEntity);
 
-export async function avoidEnemies(bot, distance=16) {
+async function _impl_avoidEnemies(bot, distance=16) {
     /**
      * Move a given distance away from all nearby enemy mobs.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3398,8 +3418,9 @@ export async function avoidEnemies(bot, distance=16) {
     log(bot, `Moved ${distance} away from enemies.`);
     return true;
 }
+export const avoidEnemies = wrapSkill('avoidEnemies', _impl_avoidEnemies);
 
-export async function stay(bot, seconds=30) {
+async function _impl_stay(bot, seconds=30) {
     /**
      * Stay in the current position until interrupted. Disables all modes.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3422,8 +3443,9 @@ export async function stay(bot, seconds=30) {
     log(bot, `Stayed for ${(Date.now() - start)/1000} seconds.`);
     return true;
 }
+export const stay = wrapSkill('stay', _impl_stay);
 
-export async function useDoor(bot, door_pos=null) {
+async function _impl_useDoor(bot, door_pos=null) {
     /**
      * Use the door at the given position.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3474,8 +3496,9 @@ export async function useDoor(bot, door_pos=null) {
     log(bot, `Used door at ${door_pos}.`);
     return true;
 }
+export const useDoor = wrapSkill('useDoor', _impl_useDoor);
 
-export async function goToBed(bot) {
+async function _impl_goToBed(bot) {
     /**
      * Sleep in the nearest bed.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3514,8 +3537,9 @@ export async function goToBed(bot) {
     log(bot, `You have woken up.`);
     return true;
 }
+export const goToBed = wrapSkill('goToBed', _impl_goToBed);
 
-export async function tillAndSow(bot, x, y, z, seedType=null) {
+async function _impl_tillAndSow(bot, x, y, z, seedType=null) {
     /**
      * Till the ground at the given position and plant the given seed type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3603,8 +3627,9 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
     }
     return true;
 }
+export const tillAndSow = wrapSkill('tillAndSow', _impl_tillAndSow);
 
-export async function activateNearestBlock(bot, type) {
+async function _impl_activateNearestBlock(bot, type) {
     /**
      * Activate the nearest block of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -3627,6 +3652,7 @@ export async function activateNearestBlock(bot, type) {
     log(bot, `Activated ${type} at x:${block.position.x.toFixed(1)}, y:${block.position.y.toFixed(1)}, z:${block.position.z.toFixed(1)}.`);
     return true;
 }
+export const activateNearestBlock = wrapSkill('activateNearestBlock', _impl_activateNearestBlock);
 
 /**
  * Helper function to find and navigate to a villager for trading
@@ -3700,7 +3726,7 @@ async function findAndGoToVillager(bot, id) {
  * @example
  * await skills.showVillagerTrades(bot, "123");
  */
-export async function showVillagerTrades(bot, id) {
+async function _impl_showVillagerTrades(bot, id) {
     const villagerEntity = await findAndGoToVillager(bot, id);
     if (!villagerEntity) {
         return false;
@@ -3730,6 +3756,7 @@ export async function showVillagerTrades(bot, id) {
         return false;
     }
 }
+export const showVillagerTrades = wrapSkill('showVillagerTrades', _impl_showVillagerTrades);
 
 /**
  * Trade with a specified villager
@@ -3741,7 +3768,7 @@ export async function showVillagerTrades(bot, id) {
  * @example
  * await skills.tradeWithVillager(bot, "123", "1", "2");
  */
-export async function tradeWithVillager(bot, id, index, count) {
+async function _impl_tradeWithVillager(bot, id, index, count) {
     const villagerEntity = await findAndGoToVillager(bot, id);
     if (!villagerEntity) {
         return false;
@@ -3809,6 +3836,7 @@ export async function tradeWithVillager(bot, id, index, count) {
         return false;
     }
 }
+export const tradeWithVillager = wrapSkill('tradeWithVillager', _impl_tradeWithVillager);
 
 function hasResources(window, trade, count) {
     const first = enough(trade.inputItem1, count);
@@ -4410,7 +4438,7 @@ export const digUp = wrapSkill('digUp', _impl_digUp);
  * @param {string} face - 'top', 'bottom', 'north', 'south', 'east', 'west'
  * @returns {Promise<boolean>} true if torch placed successfully
  */
-export async function placeTorchAt(bot, x, y, z, face = 'bottom') {
+async function _impl_placeTorchAt(bot, x, y, z, face = 'bottom') {
     return await withBotLock('placeTorchAt', async () => {
         const torch = bot.inventory.findInventoryItem('torch');
         if (!torch) {
@@ -4440,8 +4468,9 @@ export async function placeTorchAt(bot, x, y, z, face = 'bottom') {
         return success;
     });
 }
+export const placeTorchAt = wrapSkill('placeTorchAt', _impl_placeTorchAt);
 
-export async function goToSurface(bot) {
+async function _impl_goToSurface(bot) {
     /**
      * Navigate to the surface. If the bot has placed torches during a
      * mining dive (bot.placedTorches from placeTorchAt), follow them back
@@ -4500,8 +4529,9 @@ export async function goToSurface(bot) {
     }
     return false;
 }
+export const goToSurface = wrapSkill('goToSurface', _impl_goToSurface);
 
-export async function useToolOn(bot, toolName, targetName) {
+async function _impl_useToolOn(bot, toolName, targetName) {
     /**
      * Equip a tool and use it on the nearest target.
      * @param {MinecraftBot} bot
@@ -4562,6 +4592,7 @@ export async function useToolOn(bot, toolName, targetName) {
 
     return true;
  }
+export const useToolOn = wrapSkill('useToolOn', _impl_useToolOn);
 
  export async function useToolOnBlock(bot, toolName, block) {
     /**
