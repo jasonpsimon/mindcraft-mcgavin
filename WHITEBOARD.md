@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#26 phantom self_defense fixed** — one-line bug in `modes.js:171` (detection range 16 → 8) found within minutes of BT-7b telemetry going live; triple-win verification (phantom combat 0, disconnect.spam 0, stuck escape unwedged). **Observability migration phase fully closed:** BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped 2026-04-17 — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 is the first migration-discovered bug fix (`outcome=abort` clustering is now a generic phantom-action detector). See Recently completed for per-item detail._
+_Last updated: 2026-04-18. HEAD `5f274f1` on `origin/develop`. Latest ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#2
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `df9b737`. Nineteen ships on `develop` on 2026-04-17: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
+- Branch: `develop` — HEAD `5f274f1`. Most recent ship 2026-04-18: self-prompter recoverable circuit-breaker + `stoppedReason` attribution + watchdog telemetry (see Recently completed). Prior nineteen ships on 2026-04-17: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -528,6 +528,39 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### 2026-04-18 — Self-prompter recoverable circuit-breaker + stop attribution + telemetry ✅
+
+Shipped `5f274f1` on `develop` — 44-line additive fix to `src/agent/self_prompter.js` closing a multi-hour idle failure mode observed live 2026-04-18.
+
+**The bug.** JP asked "what's the bot doing right now?" and the answer was: nothing, for ~3 hours. `session.log` showed the self-prompt loop emitted `Agent did not use command in the last 3 auto-prompts. Stopping auto-prompting.` at 14:41:35Z. After that line, the only LLM calls over the next several hours were triggered by death-respawn `handleMessage` events; once the bot stopped dying, there was no pump to restart the agent loop. `[Goal] event=start prompt="gather 64 ancient debris"` was still the last goal event — no `event=end`, no `event=pause`, just silence.
+
+**Root cause.** `startLoop()` at `src/agent/self_prompter.js` had a circuit breaker at `MAX_NO_COMMAND = 3`: when the LLM returned three consecutive responses with no `!commandName`, the loop set `this.state = STOPPED; break;` and exited. The STOPPED state is a terminal sink — `update(delta)` only restarts the loop when `state === ACTIVE`. There was no distinction between "user stopped the bot" (don't resume) and "circuit breaker tripped" (should eventually resume), so making the breaker self-healing required adding attribution first. Goal lifecycle telemetry also never fired on the breaker path — the active goal just disappeared from the log stream.
+
+**The fix (A+C+D combined, guarded by new attribution field).**
+
+1. **Stop attribution (`stoppedReason`).** New field on `SelfPrompter`. Set to `'user'` in `stop()` before `state = STOPPED`, `'circuitBreaker'` in the `MAX_NO_COMMAND` branch of `startLoop()`, cleared to `null` in `start()`, `handleLoad()`, and on watchdog resume. No external readers (greped). Enables everything downstream.
+
+2. **Circuit-breaker telemetry (D).** The `MAX_NO_COMMAND` branch now emits `[Goal] event=end prompt=<JSON> reason=circuit_breaker ms=<elapsed>` and clears `_goalStartTime`/`_goalPrompt` before setting `stoppedReason = 'circuitBreaker'` and `state = STOPPED`. Goal lifecycle is now complete on this path; log analysis can count breaker trips independently of user stops.
+
+3. **Watchdog in `update()` (C).** New branch: `else if (this.state === STOPPED && this.stoppedReason === 'circuitBreaker' && this.prompt && !this.loop_active && !this.interrupt)`. Accumulates `idle_time` while the agent is idle; after `WATCHDOG_MS = 180000` (3 min) it emits `[Goal] event=resume prompt=<JSON> reason=circuit_breaker_watchdog`, sets `state = ACTIVE`, clears `stoppedReason`, restarts `_goalStartTime`/`_goalPrompt`, and calls `startLoop()`. User stops (`stoppedReason === 'user'`) never auto-resume.
+
+**Telemetry contract (new).**
+- `[Goal] event=end prompt=<JSON> reason=circuit_breaker ms=<n>` — emitted when 3 consecutive no-command responses trip the breaker.
+- `[Goal] event=resume prompt=<JSON> reason=circuit_breaker_watchdog` — emitted when the watchdog auto-resumes after 3 min idle in `circuitBreaker` state.
+- `[Goal] event=end prompt=<JSON> reason=stop ms=<n>` — unchanged; user-initiated stops.
+
+**Blast radius (small and safe).** `grep -rn "stoppedReason" src/` returns only the 8 sites inside `self_prompter.js`. `node --check` passes. Behavior is strictly additive: the new watchdog only runs when `state === STOPPED && stoppedReason === 'circuitBreaker'`, a state that didn't exist before this commit. Existing user-stop semantics untouched.
+
+**Verification — honest status.**
+- Boot-verified: bot restarted via `start.sh`, first `[LLM]` call fired (`Hello world, I'm ThatCoolGuyDude.`), StateTicker streaming, `auto_recovery.invocations=0` (fresh counters), no runtime error.
+- Live circuit-breaker exercise: **deferred**. The 3-consecutive-no-command failure case is LLM-random and can't be forced cleanly without adding speculative instrumentation. When it trips in real play the logs will show the new telemetry contract above. Per Rule 6, this is a boot-verified ship, not a breaker-exercised one.
+
+**Philosophy alignment.** Principle 5 (eliminate tribal knowledge — the single-use-flag stop-attribution pattern makes the distinction between user intent and automatic recovery explicit in state rather than inferred from log context). Rule 4 (root cause first — the "bot goes idle for hours" symptom traced to a terminal STOPPED state with no recovery path; fixed by giving STOPPED an attribution field rather than adding an external watchdog or restart cron). Rule 9 (simplicity first — rejected four-option bundle in favor of A+C+D, declined B as speculative; rejected stateless watchdog in favor of additive field with 0 external readers). Rule 10 (surgical — only `self_prompter.js` changed, +44 lines, no refactor of adjacent code).
+
+**Followups (not blocking).**
+- Consider classifying `[Goal] event=end reason=circuit_breaker ms=<n>` into `data/` JSONL if breaker trips become frequent — lets us compute trip rate by goal category.
+- If watchdog resume → immediate re-trip becomes a pattern, add trip-count backoff (e.g., second breaker in same goal within 10 min escalates to goal-advance or human-notify). Not shipping speculatively.
 
 ### 2026-04-17 — #26 phantom self_defense fixed: narrow mode detection range to defendSelf attack range ✅
 
