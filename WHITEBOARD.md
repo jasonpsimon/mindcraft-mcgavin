@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#26 phantom self_defense fixed** — one-line bug in `modes.js:171` (detection range 16 → 8) found within minutes of BT-7b telemetry going live; triple-win verification (phantom combat 0, disconnect.spam 0, stuck escape unwedged). **Observability migration phase fully closed:** BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped today — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 is the first migration-discovered bug fix (`outcome=abort` clustering is now a generic phantom-action detector). See Recently completed for per-item detail._
+_Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#26 phantom self_defense fixed** — one-line bug in `modes.js:171` (detection range 16 → 8) found within minutes of BT-7b telemetry going live; triple-win verification (phantom combat 0, disconnect.spam 0, stuck escape unwedged). **Observability migration phase fully closed:** BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped 2026-04-17 — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 is the first migration-discovered bug fix (`outcome=abort` clustering is now a generic phantom-action detector). See Recently completed for per-item detail._
 
 ---
 
@@ -10,7 +10,7 @@ _Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#2
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `df9b737`. Nineteen ships on `develop` today: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
+- Branch: `develop` — HEAD `df9b737`. Nineteen ships on `develop` on 2026-04-17: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -31,7 +31,7 @@ _Last updated: 2026-04-17. HEAD `df9b737` on `origin/develop`. Latest ship: **#2
 - Tier 1 junk (drained): cobblestone/bulk stone/sandstone/soil variants, all 18 ore blocks (smelt to resource then drop), lava_bucket, chest.
 - `autoDiscardAllJunk` drains everything in one pass on inventory-full, 3 distinguishable log labels (`N X` / `N extra X` / `N lower-tier X`).
 
-**Protected zones (#7 shipped today):**
+**Protected zones (#7 shipped 2026-04-15):**
 - Unified shape `{name, type: 'spawn'|'structure'|'village', x, z, radius, yMin?, yMax?}` checked by `_isInAnyProtectedZone` before any destructive op.
 - Spawn zone (existing, 250-block radius, Y-agnostic).
 - Manual zones from `player_structures.json` at repo root (stub committed, empty `structures` array; users add as needed; graceful loader handles missing/malformed files).
@@ -395,7 +395,7 @@ Given world seed + MC version, regenerate each chunk deterministically and diff 
 - **Ranged-attacker positioning** — `self_defense` works for melee but doesn't position well against crossbow/arrow attacks. Bot died to a Pillager 2026-04-14. Fix: strafe + use shield when arrow is incoming; close distance or break line-of-sight for crossbow attackers. (Folded in from Known issues 2026-04-15.)
 - **Pre-fight equip** — `self_defense` mode ensure best weapon is equipped before attacking. Partially done via #4 `equipHighestAttack`.
 - **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
-- **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness today.
+- **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness currently.
 
 ### 12. Movements safety audit — Rule 7 follow-through
 
@@ -555,7 +555,7 @@ Shipped `df9b737` same day on top of BT-7b, immediately after the BT-7b telemetr
 
 The phantom combat was the direct fix; the reconnect storm dropped because no more anti-spam-tripping chat/movement chatter; the stuck escape unwedged because `self_defense` (`interrupts: ['all']`) was no longer constantly preempting it. Three observed bugs, one root cause, one line.
 
-**Why BT-7b made this findable.** Pre-BT-7b, only the 11 hottest skills emitted `[Skill]` lifecycle lines; `defendSelf` was not one of them. The bug had been sitting latent since `defendSelf` got an `attackRange` parameter mismatch (origin date unknown) — the symptom was visible (chat spam) but the smoking gun (`outcome=abort` in `data/skill-stream.jsonl` 241 times in a tight window with `notes="No enemies nearby"`) only became greppable once BT-7b shipped earlier today. Within minutes of BT-7b going live, the JSONL stream made the misalignment obvious. Direct payoff for the migration: a class of phantom-action bugs (mode triggers skill, skill aborts immediately) is now mechanically findable across all 42 wrapped skills via `outcome=abort` clustering.
+**Why BT-7b made this findable.** Pre-BT-7b, only the 11 hottest skills emitted `[Skill]` lifecycle lines; `defendSelf` was not one of them. The bug had been sitting latent since `defendSelf` got an `attackRange` parameter mismatch (origin date unknown) — the symptom was visible (chat spam) but the smoking gun (`outcome=abort` in `data/skill-stream.jsonl` 241 times in a tight window with `notes="No enemies nearby"`) only became greppable once BT-7b shipped earlier on 2026-04-17. Within minutes of BT-7b going live, the JSONL stream made the misalignment obvious. Direct payoff for the migration: a class of phantom-action bugs (mode triggers skill, skill aborts immediately) is now mechanically findable across all 42 wrapped skills via `outcome=abort` clustering.
 
 **Philosophy alignment.** Principle 1 (don't ask the LLM to reason about mechanical signals — the mode and the skill share a numeric range; that should be a single source of truth, not a coincidence between two literals). Principle 8 (fail loudly — the abort case was already loud once BT-7b landed; the fix makes the success case loud by removing the no-op trigger). Rule 4 (root cause first — fixed the misaligned constant, did not add a guard inside `defendSelf` to silently swallow the no-target case). Rule 6 (verify honestly — pass criterion was "0 phantom Fighting announcements + 0 abort defendSelf calls + escapeProtectedZone unwedges", confirmed all three over 3 minutes; not just "no error in logs").
 
@@ -774,7 +774,7 @@ Shipped `46024a6` same day on top of BT-bundle(a), continuing the BT-bundle rema
 
 ### 2026-04-17 — BT-bundle(a) Mutex wait duration: elapsed-ms stamp appended to the `[BotMutex]` acquire log for queued-wait acquires ✅
 
-Shipped `d87045b` same day on top of BT-10, starting the BT-bundle remainder. Before BT-bundle(a), `src/agent/bot_mutex.js` already logged queue depth on acquire (`(queue: <n>)`) — a tailer could see *that* contention happened but not *how bad* it was. A 5 ms wait and a 5,000 ms wait both produced the exact same log line. Under a concurrency bug (missed release, runaway pathfinder, cascading recovery) the only signal today was "queue is growing" without a latency number to pair it with. BT-bundle(a) closes that gap for 4 lines of real change, all inside one function.
+Shipped `d87045b` same day on top of BT-10, starting the BT-bundle remainder. Before BT-bundle(a), `src/agent/bot_mutex.js` already logged queue depth on acquire (`(queue: <n>)`) — a tailer could see *that* contention happened but not *how bad* it was. A 5 ms wait and a 5,000 ms wait both produced the exact same log line. Under a concurrency bug (missed release, runaway pathfinder, cascading recovery) the only signal before BT-bundle(a) was "queue is growing" without a latency number to pair it with. BT-bundle(a) closes that gap for 4 lines of real change, all inside one function.
 
 **Files (1 shipped):**
 - `src/agent/bot_mutex.js` — `withLock`: capture `const enterT = Date.now();` and `let queued = false;` right before the FIFO wait `while` loop; set `queued = true;` on each loop iteration (cheap, same value on repeats); after acquisition compute `const waitMs = queued ? Date.now() - enterT : 0;`; append `${queued ? ` wait=${waitMs}ms` : ''}` to the existing acquire log line.
@@ -1278,7 +1278,7 @@ change is one extra `[LLM]` log line per call.
 [LLM] label=LMStudio model=gemma-4-e4b elapsed_ms=250 retries=3 status=error err_class=FetchError
 ```
 
-**Principle 5 honesty.** Only `lmstudio.js` migrates today. The other 19 adapters (`gpt, claude,
+**Principle 5 honesty.** Only `lmstudio.js` migrates in this ship. The other 19 adapters (`gpt, claude,
 ollama, gemini, ...`) retain their original per-adapter error handling and do NOT emit `[LLM]`
 lines. This deferral is explicit and tracked as **BT-3b** — it is NOT a partial migration being
 silently left unfinished.
