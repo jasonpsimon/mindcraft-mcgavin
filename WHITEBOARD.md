@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-17 (BT-bundle(a) Mutex wait duration shipped `d87045b` — `src/agent/bot_mutex.js` `withLock` now captures `enterT` + `queued` flag before the FIFO wait loop, flips `queued = true` only inside the loop body, and appends `wait=<ms>` to the existing `#<id> acquired: <label>` log line for acquires that actually waited. Uncontended acquires stay byte-identical; reentrant path unchanged; release accounting unchanged. Synthetic-verified 4 cases (uncontended silent, contended `wait=50ms`, reentrant inner fully suppressed, three-deep contention with ascending waits `39ms` → `84ms`). Live post-restart on `d87045b`: 6 uncontended acquires (1 `escapeProtectedZone`, 5 `cmd:!digDown`) all logged without `wait=` — the byte-identical-uncontended contract holds. Natural contended trigger is a matter of time — state-stream.jsonl history shows 206 ticks with `mutex.queue>=1` across 27k samples (~0.75% rate); `tmux pipe-pane` installed into `/tmp/bot-mutex-live.log` on the gaming server to catch any `wait=` line durably past the 2000-line tmux buffer. Starts the BT-bundle remainder. Next: BT-bundle(b) Process exit reasons.)_
+_Last updated: 2026-04-17 (BT-bundle(b) Process exit reasons — moved to in-progress. Plan: two files, ~8-12 lines total. (1) `src/process/init_agent.js` — at module top level before the IIFE, add `process.on('exit', code => ...)` → `[Exit] event=process_exit code=<n>`; `process.on('uncaughtException', err => ...)` → `[Exit] event=uncaught err="<msg>" stack_head="<first-frame>"`; `process.on('unhandledRejection', reason => ...)` → `[Exit] event=unhandled_rejection reason="<msg>"`. (2) `src/agent/agent.js` `cleanKill(msg, code)` — prepend `console.log('[Exit] event=clean_kill code=<n> reason="<msg>"')` before the history/chat/save cascade. `process.on('exit')` is synchronous and fires for every exit path (clean, SIGINT, uncaught), so `cleanKill` paths emit two structured lines (why + exit); SIGINT / tmux-kill paths emit one; crashes emit two (cause + exit). Child-process model confirmed: agent runs as a `spawn`ed Node child from `src/process/agent_process.js`; `init_agent.js` is the child's entry point — one registration there covers every agent process. Starts on top of BT-bundle(a) `d87045b`.)_
 
 ---
 
@@ -68,7 +68,27 @@ _Last updated: 2026-04-17 (BT-bundle(a) Mutex wait duration shipped `d87045b` �
 
 ## In-progress
 
-_(empty — BT-bundle(a) Mutex wait duration shipped `d87045b` and live-deployed 2026-04-17 on top of BT-10. See Recently completed. Next in the logging roadmap: BT-bundle(b) Process exit reasons, then BT-bundle(c) File I/O silent-swallow audit.)_
+### BT-bundle(b). Process exit reasons — structured `[Exit]` log on every shutdown path
+
+**Status:** 🚧 in progress (implementing 2026-04-17) • **Priority:** low (small, standalone; second of the BT-bundle remainder) • **Source:** BT-bundle. Observability minor items
+
+**Root cause.** Today `agent.js cleanKill(msg, code)` calls `this.bot?.chat(msg)` + `this.history.save()` + `process.exit(code)` with no structured log line. `process.on('exit', ...)` isn't wired anywhere — neither in `init_agent.js` (the child-process entry point) nor in `agent.js`. `process.on('uncaughtException')` / `process.on('unhandledRejection')` aren't wired either. A session-replay reader sees the tmux buffer end mid-sentence with no indication of whether the process shut down cleanly (`cleanKill` from spawn-timeout / duplicate login / task complete), crashed (uncaught error), got killed externally (SIGINT from `tmux kill-session`), or ran to normal completion.
+
+**Scope.** Two files, ~8-12 lines total:
+- **`src/process/init_agent.js`** (module top level, before the `(async () => {...})()` IIFE): register three process-wide handlers.
+  - `process.on('exit', (code) => console.log(`[Exit] event=process_exit code=${code}`))` — fires synchronously on every exit, including clean, SIGINT, uncaught. Always the last structured line in a session.
+  - `process.on('uncaughtException', (err) => console.log(`[Exit] event=uncaught err="<quoted msg>" stack_head="<first stack frame trimmed>"`))` — fires before the process dies, so the stack head is captured in the buffer.
+  - `process.on('unhandledRejection', (reason) => console.log(`[Exit] event=unhandled_rejection reason="<quoted msg>"`))` — same, for promise rejections.
+- **`src/agent/agent.js` `cleanKill`** (first line of method body): prepend `console.log(`[Exit] event=clean_kill code=${code} reason="<quoted msg>"`)`.
+
+**Out of scope.** No SIGINT/SIGTERM handlers beyond logging (those would change shutdown semantics — adding a graceful shutdown hook is a different BT). No JSONL sink (console-only matches existing `[Exit]`-style convention). No log-level config. No changes to the spawn-timeout / duplicate-login / disconnect paths — they route through `process.exit` directly, and `process.on('exit')` catches them all uniformly.
+
+**Blast radius.** `cleanKill` callsites grep (`checkAllPlayersPresent` at 753, `bot kill/stop` at 1144/1154) all take the same first-line path, so the `[Exit] event=clean_kill` line fires exactly once per intentional shutdown. The three `process.on(...)` handlers are additive — they don't replace or shadow existing handlers. Mineflayer's own `bot.on('error', ...)` at `agent.js:184` is untouched (that's a bot-level error, not a Node-process-level one). The `agent_process.js` parent-side `agentProcess.on('exit', ...)` at `agent_process.js:31` is in the **parent** process and sees the child's exit; BT-bundle(b) logs from the **child** process and produces its output line *before* the parent logs `Agent process exited with code ...`. Both lines will appear in the same tmux stream (stdio is inherited), so the reader sees child-side reason + parent-side observation.
+
+**Verification.** `node --check` parse-clean on both files. Live: (a) restart bot on new SHA — expect `[Exit] event=process_exit code=0` when the old child process terminates during restart; (b) grep tmux buffer for `[Exit]` after a natural shutdown (spawn timeout, task-complete kill, or external `tmux kill-session`) — expect at least one `[Exit]` line plus a final `[Exit] event=process_exit`. For `cleanKill` triggered paths (task complete, duplicate login, spawn timeout), expect *two* `[Exit]` lines: `event=clean_kill` then `event=process_exit`.
+
+**Downstream unblock.** Closes the observability story for the **end** of a session — BT-8 BootSnapshot covers the start, StateTicker covers the middle, BT-bundle(b) covers the end. After this: BT-bundle(c) File I/O silent-swallow audit (the final bundle item).
+
 
 ## Shipped — awaiting live verification
 
@@ -289,7 +309,7 @@ _Goal lifecycle shipped `40c04f3` 2026-04-17 paired with BT-7 (see Recently comp
 
 - ~~**Mutex wait duration.** `bot_mutex.js:82` logs queue depth on acquire; add elapsed-wait-ms when acquire follows a queued wait. ~3 lines.~~ (shipped `d87045b` as BT-bundle(a) — see Recently completed)
 - **File I/O silent-swallow scan.** 27 `readFileSync` + 8 async `fs.readFile/writeFile` calls. Audit each `catch` branch for "logged or swallowed." Already noted in L3 audit (April 15). Risk: silent memory-save failures. Extends #15 (`full_state.js` sweep, shipped) to the whole codebase.
-- **Process exit reasons.** `agent.js cleanKill` + `process.on('exit', ...)` — log the exit reason as a structured line so session replay sees the end clearly.
+- ~~**Process exit reasons.** `agent.js cleanKill` + `process.on('exit', ...)` — log the exit reason as a structured line so session replay sees the end clearly.~~ (in progress — see In-progress: BT-bundle(b))
 
 ### F. Long-term memory population audit
 
