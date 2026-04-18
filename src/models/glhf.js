@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 import { stripThinkTags } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class GLHF {
     static prefix = 'glhf';
@@ -33,7 +34,13 @@ export class GLHF {
             attempt++;
             console.log(`Awaiting glhf.chat API response... (attempt: ${attempt})`);
             try {
-                let completion = await this.openai.chat.completions.create(pack);
+                // Wrap goes inside the think-block retry loop so each attempt
+                // emits one [LLM] line, matching the BT-3 per-round-trip
+                // convention.
+                let completion = await withLLMMetrics(
+                    { label: 'GLHF', model: pack.model },
+                    () => this.openai.chat.completions.create(pack),
+                );
                 if (completion.choices[0].finish_reason === 'length') {
                     throw new Error('Context length exceeded');
                 }

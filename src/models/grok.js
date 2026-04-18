@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 // xAI doesn't supply a SDK for their models, but fully supports OpenAI and Anthropic SDKs
 export class Grok {
@@ -33,7 +34,10 @@ export class Grok {
         try {
             console.log('Awaiting xai api response...')
             ///console.log('Messages:', messages);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'Grok', model: pack.model },
+                () => this.openai.chat.completions.create(pack),
+            );
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded'); 
             console.log('Received.')

@@ -1,6 +1,27 @@
 import { GoogleGenAI } from '@google/genai';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { withLLMMetrics } from '../utils/retry.js';
+
+// Gemini generateContent returns `{ usageMetadata: { promptTokenCount,
+// candidatesTokenCount, totalTokenCount, cachedContentTokenCount? },
+// candidates: [{ finishReason }] }`. Normalize to the default extractor's
+// field names so the [LLM] line format stays uniform.
+function _extractGeminiUsage(response) {
+    if (!response || typeof response !== 'object') {
+        return { prompt_tokens: null, completion_tokens: null, total_tokens: null, finish_reason: null, cache_hit: null };
+    }
+    const meta = response.usageMetadata || {};
+    const candidate = Array.isArray(response.candidates) ? response.candidates[0] : null;
+    const cachedTok = meta.cachedContentTokenCount;
+    return {
+        prompt_tokens: meta.promptTokenCount ?? null,
+        completion_tokens: meta.candidatesTokenCount ?? null,
+        total_tokens: meta.totalTokenCount ?? null,
+        finish_reason: candidate?.finishReason ?? null,
+        cache_hit: typeof cachedTok === 'number' ? (cachedTok > 0) : null,
+    };
+}
 
 
 export class Gemini {
@@ -46,15 +67,19 @@ export class Gemini {
             });
         }
 
-        const result = await this.genAI.models.generateContent({
-            model: this.model_name || "gemini-2.5-flash",
-            contents: contents,
-            safetySettings: this.safetySettings,
-            config: {
-                systemInstruction: systemMessage,
-                ...(this.params || {})
-            }
-        });
+        const geminiModel = this.model_name || "gemini-2.5-flash";
+        const result = await withLLMMetrics(
+            { label: 'Gemini', model: geminiModel, extractUsage: _extractGeminiUsage },
+            () => this.genAI.models.generateContent({
+                model: geminiModel,
+                contents: contents,
+                safetySettings: this.safetySettings,
+                config: {
+                    systemInstruction: systemMessage,
+                    ...(this.params || {})
+                }
+            }),
+        );
         const response = await result.text;
 
         console.log('Received.');
@@ -109,10 +134,14 @@ export class Gemini {
     }
 
     async embed(text) {
-        const result = await this.genAI.models.embedContent({
-            model: this.model_name || "gemini-embedding-001",
-            contents: text,
-        })
+        const embedModel = this.model_name || "gemini-embedding-001";
+        const result = await withLLMMetrics(
+            { label: 'Gemini-Embed', model: embedModel, extractUsage: _extractGeminiUsage },
+            () => this.genAI.models.embedContent({
+                model: embedModel,
+                contents: text,
+            }),
+        );
 
         return result.embeddings;
     }

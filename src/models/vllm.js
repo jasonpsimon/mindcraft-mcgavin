@@ -4,6 +4,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class VLLM {
     static prefix = 'vllm';
@@ -41,7 +42,10 @@ export class VLLM {
             console.log('Awaiting openai api response...')
             // console.log('Messages:', messages);
             // todo set max_tokens, temperature, top_p, etc. in pack
-            let completion = await this.vllm.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'VLLM', model: pack.model },
+                () => this.vllm.chat.completions.create(pack),
+            );
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.')

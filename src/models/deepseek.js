@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class DeepSeek {
     static prefix = 'deepseek';
@@ -32,7 +33,10 @@ export class DeepSeek {
         try {
             console.log('Awaiting deepseek api response...')
             // console.log('Messages:', messages);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'DeepSeek', model: pack.model },
+                () => this.openai.chat.completions.create(pack),
+            );
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded'); 
             console.log('Received.')

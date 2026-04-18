@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat, stripThinkTags } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 // llama, mistral
 export class Novita {
@@ -35,7 +36,10 @@ export class Novita {
       let res = null;
       try {
           console.log('Awaiting novita api response...')
-          let completion = await this.openai.chat.completions.create(pack);
+          let completion = await withLLMMetrics(
+              { label: 'Novita', model: pack.model },
+              () => this.openai.chat.completions.create(pack),
+          );
           if (completion.choices[0].finish_reason == 'length')
               throw new Error('Context length exceeded'); 
           console.log('Received.')

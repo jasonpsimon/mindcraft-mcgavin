@@ -1,5 +1,27 @@
 import { getKey } from '../utils/keys.js';
 import { stripThinkTags } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
+
+// Hyperbolic's raw-fetch OpenAI-style endpoint returns the standard
+// `{ choices: [{ finish_reason, message }], usage: { prompt_tokens,
+// completion_tokens, total_tokens } }` shape wrapped in a raw Response —
+// after .json() it matches the default extractor. A thin wrapper keeps the
+// extraction explicit so the [LLM] line format stays uniform even when the
+// raw-fetch error path returns a malformed body.
+function _extractHyperbolicUsage(response) {
+    if (!response || typeof response !== 'object') {
+        return { prompt_tokens: null, completion_tokens: null, total_tokens: null, finish_reason: null, cache_hit: null };
+    }
+    const usage = response.usage || {};
+    const firstChoice = Array.isArray(response.choices) ? response.choices[0] : null;
+    return {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+        finish_reason: firstChoice?.finish_reason ?? null,
+        cache_hit: null,
+    };
+}
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
@@ -48,20 +70,27 @@ export class Hyperbolic {
             let completionContent = null;
 
             try {
-                const response = await fetch(this.apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${this.apiKey}`
+                // Wrap goes inside the think-block retry loop so each attempt
+                // emits one [LLM] line, matching the BT-3 per-round-trip
+                // convention. The inner async call returns the parsed JSON
+                // body so _extractHyperbolicUsage sees the usage block.
+                const data = await withLLMMetrics(
+                    { label: 'Hyperbolic', model: this.modelName, extractUsage: _extractHyperbolicUsage },
+                    async () => {
+                        const response = await fetch(this.apiUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${this.apiKey}`
+                            },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
                     },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
+                );
                 if (data?.choices?.[0]?.finish_reason === 'length') {
                     throw new Error('Context length exceeded');
                 }

@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class Qwen {
     static prefix = 'qwen';
@@ -31,7 +32,10 @@ export class Qwen {
         try {
             console.log('Awaiting Qwen api response...');
             // console.log('Messages:', messages);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'Qwen', model: pack.model },
+                () => this.openai.chat.completions.create(pack),
+            );
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
@@ -54,13 +58,20 @@ export class Qwen {
     // random backoff helps maximize bandwidth utilization.
     async embed(text) {
         const maxRetries = 5; // Maximum number of retries
+        const embedModel = this.model_name || "text-embedding-v3";
         for (let retries = 0; retries < maxRetries; retries++) {
             try {
-                const { data } = await this.openai.embeddings.create({
-                    model: this.model_name || "text-embedding-v3",
-                    input: text,
-                    encoding_format: "float",
-                });
+                // Wrap goes inside the 429-backoff retry loop so each attempt
+                // emits one [LLM] line, matching the BT-3 per-round-trip
+                // convention.
+                const { data } = await withLLMMetrics(
+                    { label: 'Qwen-Embed', model: embedModel },
+                    () => this.openai.embeddings.create({
+                        model: embedModel,
+                        input: text,
+                        encoding_format: "float",
+                    }),
+                );
                 return data[0].embedding;
             } catch (err) {
                 if (err.status === 429) {

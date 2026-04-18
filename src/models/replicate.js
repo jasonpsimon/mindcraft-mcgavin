@@ -1,6 +1,7 @@
 import Replicate from 'replicate';
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 // llama, mistral
 export class ReplicateAPI {
@@ -32,15 +33,28 @@ export class ReplicateAPI {
 		let res = null;
 		try {
 			console.log('Awaiting Replicate API response...');
-			let result = '';
-			for await (const event of this.replicate.stream(model_name, { input })) {
-				result += event;
-				if (result === '') break;
-				if (result.includes(stop_seq)) {
-					result = result.slice(0, result.indexOf(stop_seq));
-					break;
-				}
-			}
+			// Replicate streams token-by-token via an async iterator and does
+			// not surface a usage block on the final chunk — the wrapper's
+			// default extractUsage will see no `usage` field and emit all
+			// null-token fields, which is accepted for streaming adapters
+			// (same convention as HuggingFace). The wrap still captures
+			// elapsed_ms + status + retries so the [LLM] line shape stays
+			// uniform.
+			const result = await withLLMMetrics(
+				{ label: 'Replicate', model: model_name },
+				async () => {
+					let acc = '';
+					for await (const event of this.replicate.stream(model_name, { input })) {
+						acc += event;
+						if (acc === '') break;
+						if (acc.includes(stop_seq)) {
+							acc = acc.slice(0, acc.indexOf(stop_seq));
+							break;
+						}
+					}
+					return acc;
+				},
+			);
 			res = result;
 		} catch (err) {
 			console.log(err);
@@ -51,9 +65,10 @@ export class ReplicateAPI {
 	}
 
 	async embed(text) {
-		const output = await this.replicate.run(
-			this.model_name || "mark3labs/embeddings-gte-base:d619cff29338b9a37c3d06605042e1ff0594a8c3eff0175fd6967f5643fc4d47",
-			{ input: {text} }
+		const embedModel = this.model_name || "mark3labs/embeddings-gte-base:d619cff29338b9a37c3d06605042e1ff0594a8c3eff0175fd6967f5643fc4d47";
+		const output = await withLLMMetrics(
+			{ label: 'Replicate-Embed', model: embedModel },
+			() => this.replicate.run(embedModel, { input: {text} }),
 		);
 		return output.vectors;
 	}

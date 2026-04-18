@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class Mercury {
     static prefix = 'mercury';
@@ -39,7 +40,10 @@ export class Mercury {
         try {
             console.log('Awaiting mercury api response from model', this.model_name)
             // console.log('Messages:', messages);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'Mercury', model: pack.model },
+                () => this.openai.chat.completions.create(pack),
+            );
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded'); 
             console.log('Received.')
@@ -81,11 +85,15 @@ export class Mercury {
     async embed(text) {
         if (text.length > 8191)
             text = text.slice(0, 8191);
-        const embedding = await this.openai.embeddings.create({
-            model: this.model_name || "text-embedding-3-small",
-            input: text,
-            encoding_format: "float",
-        });
+        const embedModel = this.model_name || "text-embedding-3-small";
+        const embedding = await withLLMMetrics(
+            { label: 'Mercury-Embed', model: embedModel },
+            () => this.openai.embeddings.create({
+                model: embedModel,
+                input: text,
+                encoding_format: "float",
+            }),
+        );
         return embedding.data[0].embedding;
     }
 

@@ -1,6 +1,7 @@
 import { toSinglePrompt, stripThinkTags } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { HfInference } from "@huggingface/inference";
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class HuggingFace {
   static prefix = 'huggingface';
@@ -36,14 +37,25 @@ export class HuggingFace {
       console.log(`Awaiting Hugging Face API response... (model: ${model_name}, attempt: ${attempt})`);
       let res = '';
       try {
-        // Consume the streaming response chunk by chunk
-        for await (const chunk of this.huggingface.chatCompletionStream({
-          model: model_name,
-          messages: [{ role: "user", content: input }],
-          ...(this.params || {})
-        })) {
-          res += (chunk.choices[0]?.delta?.content || "");
-        }
+        // Wrap goes inside the think-block retry loop so each attempt
+        // emits one [LLM] line, matching the BT-3 per-round-trip
+        // convention. Streaming response has no usage metadata — the
+        // default extractor sees no `usage` field and emits null-token
+        // fields, which is accepted for streaming adapters.
+        res = await withLLMMetrics(
+          { label: 'HuggingFace', model: model_name },
+          async () => {
+            let acc = '';
+            for await (const chunk of this.huggingface.chatCompletionStream({
+              model: model_name,
+              messages: [{ role: "user", content: input }],
+              ...(this.params || {})
+            })) {
+              acc += (chunk.choices[0]?.delta?.content || "");
+            }
+            return acc;
+          },
+        );
       } catch (err) {
         console.log(err);
         res = 'My brain disconnected, try again.';

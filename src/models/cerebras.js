@@ -1,6 +1,7 @@
 import CerebrasSDK from '@cerebras/cerebras_cloud_sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class Cerebras {
     static prefix = 'cerebras';
@@ -27,7 +28,10 @@ export class Cerebras {
 
         let res;
         try {
-            const completion = await this.client.chat.completions.create(pack);
+            const completion = await withLLMMetrics(
+                { label: 'Cerebras', model: pack.model },
+                () => this.client.chat.completions.create(pack),
+            );
             // OpenAI-compatible shape
             res = completion.choices?.[0]?.message?.content || '';
         } catch (err) {

@@ -1,6 +1,7 @@
 import Groq from 'groq-sdk'
 import { getKey } from '../utils/keys.js';
 import { stripThinkTags } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -49,13 +50,17 @@ export class GroqCloudAPI {
                 this.params.max_completion_tokens = 4000;
             }
 
-            let completion = await this.groq.chat.completions.create({
-                "messages": messages,
-                "model": this.model_name || "qwen/qwen3-32b",
-                "stream": false,
-                "stop": stop_seq,
-                ...(this.params || {})
-            });
+            const groqModel = this.model_name || "qwen/qwen3-32b";
+            let completion = await withLLMMetrics(
+                { label: 'Groq', model: groqModel },
+                () => this.groq.chat.completions.create({
+                    "messages": messages,
+                    "model": groqModel,
+                    "stream": false,
+                    "stop": stop_seq,
+                    ...(this.params || {})
+                }),
+            );
 
             res = stripThinkTags(completion.choices[0].message.content);
         }

@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class OpenRouter {
     static prefix = 'openrouter';
@@ -35,7 +36,10 @@ export class OpenRouter {
         let res = null;
         try {
             console.log('Awaiting openrouter api response...');
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await withLLMMetrics(
+                { label: 'OpenRouter', model: pack.model },
+                () => this.openai.chat.completions.create(pack),
+            );
             if (!completion?.choices?.[0]) {
                 console.error('No completion or choices returned:', completion);
                 return 'No response received.';

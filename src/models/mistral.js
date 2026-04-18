@@ -1,6 +1,7 @@
 import { Mistral as MistralClient } from '@mistralai/mistralai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
 
 export class Mistral {
     static prefix = 'mistral';
@@ -49,11 +50,14 @@ export class Mistral {
             messages.push(...strictFormat(turns));
 
             console.log('Awaiting mistral api response...')
-            const response  = await this.#client.chat.complete({
-                model,
-                messages,
-                ...(this.params || {})
-            });
+            const response  = await withLLMMetrics(
+                { label: 'Mistral', model },
+                () => this.#client.chat.complete({
+                    model,
+                    messages,
+                    ...(this.params || {})
+                }),
+            );
 
             result = response.choices[0].message.content;
         } catch (err) {
@@ -85,10 +89,13 @@ export class Mistral {
     }
 
     async embed(text) {
-        const embedding = await this.#client.embeddings.create({
-            model: "mistral-embed",
-            inputs: text
-        });
+        const embedding = await withLLMMetrics(
+            { label: 'Mistral-Embed', model: 'mistral-embed' },
+            () => this.#client.embeddings.create({
+                model: "mistral-embed",
+                inputs: text
+            }),
+        );
         return embedding.data[0].embedding;
     }
 }

@@ -1,4 +1,26 @@
 import { strictFormat, stripThinkTags } from '../utils/text.js';
+import { withLLMMetrics } from '../utils/retry.js';
+
+// Ollama's /api/chat returns `{ message: { content }, eval_count,
+// prompt_eval_count }` instead of OpenAI's `usage` block. Normalize so the
+// [LLM] line format stays uniform.
+function _extractOllamaUsage(response) {
+    if (!response || typeof response !== 'object') {
+        return { prompt_tokens: null, completion_tokens: null, total_tokens: null, finish_reason: null, cache_hit: null };
+    }
+    const promptTok = typeof response.prompt_eval_count === 'number' ? response.prompt_eval_count : null;
+    const completionTok = typeof response.eval_count === 'number' ? response.eval_count : null;
+    const totalTok = (typeof promptTok === 'number' && typeof completionTok === 'number')
+        ? promptTok + completionTok
+        : null;
+    return {
+        prompt_tokens: promptTok,
+        completion_tokens: completionTok,
+        total_tokens: totalTok,
+        finish_reason: response.done_reason ?? (response.done ? 'stop' : null),
+        cache_hit: null,
+    };
+}
 
 export class Ollama {
     static prefix = 'ollama';
@@ -23,12 +45,18 @@ export class Ollama {
             console.log(`Awaiting local response... (model: ${model}, attempt: ${attempt})`);
             let res = null;
             try {
-                let apiResponse = await this.send(this.chat_endpoint, {
-                    model: model,
-                    messages: messages,
-                    stream: false,
-                    ...(this.params || {})
-                });
+                // Wrap goes inside the think-block retry loop so each attempt
+                // emits one [LLM] line, matching the BT-3 per-round-trip
+                // convention.
+                let apiResponse = await withLLMMetrics(
+                    { label: 'Ollama', model, extractUsage: _extractOllamaUsage },
+                    () => this.send(this.chat_endpoint, {
+                        model: model,
+                        messages: messages,
+                        stream: false,
+                        ...(this.params || {})
+                    }),
+                );
                 if (apiResponse) {
                     res = apiResponse['message']['content'];
                 } else {
@@ -62,7 +90,10 @@ export class Ollama {
     async embed(text) {
         let model = this.model_name || 'embeddinggemma';
         let body = { model: model, input: text };
-        let res = await this.send(this.embedding_endpoint, body);
+        let res = await withLLMMetrics(
+            { label: 'Ollama-Embed', model, extractUsage: _extractOllamaUsage },
+            () => this.send(this.embedding_endpoint, body),
+        );
         return res['embedding'];
     }
 
