@@ -1224,6 +1224,10 @@ export class Agent {
     
 
     cleanKill(msg='Killing agent process...', code=1) {
+        // BT-bundle(b): structured exit signal before the teardown cascade,
+        // so a log tailer sees "why" paired with the process.on('exit') "did".
+        const quoted = String(msg).replace(/"/g, '\\"');
+        console.log(`[Exit] event=clean_kill code=${code} reason="${quoted}"`);
         this.history.add('system', msg);
         this.bot.chat(code > 1 ? 'Restarting.': 'Exiting.');
         this.history.save();
