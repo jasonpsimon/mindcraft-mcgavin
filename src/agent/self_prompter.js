@@ -27,6 +27,12 @@ export class SelfPrompter {
         // and cleared on end. Elapsed ms is computed at end/advance time.
         this._goalStartTime = null;
         this._goalPrompt = null;
+
+        // --- Stop attribution (for circuit-breaker watchdog) ---
+        // Records why state transitioned to STOPPED. The watchdog in update()
+        // only auto-resumes when stoppedReason === 'circuitBreaker'; explicit
+        // user stops ('user') are respected and never auto-resumed.
+        this.stoppedReason = null;
     }
 
     start(prompt) {
@@ -37,6 +43,7 @@ export class SelfPrompter {
             prompt = this.prompt;
         }
         this.state = ACTIVE;
+        this.stoppedReason = null;
         this.prompt = prompt;
         this._goalStartTime = Date.now();
         this._goalPrompt = prompt;
@@ -60,6 +67,7 @@ export class SelfPrompter {
         if (state == undefined)
             state = STOPPED;
         this.state = state;
+        this.stoppedReason = null;
         this.prompt = prompt;
         if (state !== STOPPED && !prompt)
             throw new Error('No prompt loaded when self-prompting is active');
@@ -198,6 +206,15 @@ export class SelfPrompter {
                     let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
                     this.agent.openChat(out);
                     console.warn(out);
+                    // Emit goal-end telemetry so the circuit-breaker stop is distinguishable
+                    // from an explicit user stop in log analysis.
+                    if (this._goalStartTime && this._goalPrompt) {
+                        const elapsed = Date.now() - this._goalStartTime;
+                        console.log(`[Goal] event=end prompt=${JSON.stringify(this._goalPrompt)} reason=circuit_breaker ms=${elapsed}`);
+                        this._goalStartTime = null;
+                        this._goalPrompt = null;
+                    }
+                    this.stoppedReason = 'circuitBreaker';
                     this.state = STOPPED;
                     break;
                 }
@@ -228,6 +245,32 @@ export class SelfPrompter {
                 this.idle_time = 0;
             }
         }
+        // --- Circuit-breaker watchdog ---
+        // If we stopped because of the 3-failed-prompts circuit breaker (not a
+        // user-initiated stop) and we still have a goal, give the bot a chance
+        // to recover after a cool-off period. User stops ('user') are respected
+        // and never auto-resumed.
+        else if (this.state === STOPPED
+                 && this.stoppedReason === 'circuitBreaker'
+                 && this.prompt
+                 && !this.loop_active
+                 && !this.interrupt) {
+            if (this.agent.isIdle())
+                this.idle_time += delta;
+            else
+                this.idle_time = 0;
+
+            const WATCHDOG_MS = 180000; // 3 minutes
+            if (this.idle_time >= WATCHDOG_MS) {
+                console.log(`[Goal] event=resume prompt=${JSON.stringify(this.prompt)} reason=circuit_breaker_watchdog`);
+                this.state = ACTIVE;
+                this.stoppedReason = null;
+                this._goalStartTime = Date.now();
+                this._goalPrompt = this.prompt;
+                this.idle_time = 0;
+                this.startLoop();
+            }
+        }
         else {
             this.idle_time = 0;
         }
@@ -256,6 +299,7 @@ export class SelfPrompter {
         if (stop_action)
             await this.agent.actions.stop();
         this.stopLoop();
+        this.stoppedReason = 'user';
         this.state = STOPPED;
     }
 
