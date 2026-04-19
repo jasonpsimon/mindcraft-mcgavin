@@ -29,6 +29,7 @@ import { captureBootSnapshot } from '../observability/boot_snapshot.js';
 import { DamageStream } from '../observability/damage_stream.js';
 import { hookPathTelemetry, configurePathTelemetry } from '../observability/path_telemetry.js';
 import { hookPlacementTracker, configurePlacementTracker } from '../observability/placement_tracker.js';
+import { hookDoorTracker, configureDoorTracker } from '../observability/door_tracker.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -341,6 +342,20 @@ export class Agent {
                     }
                 } catch (plErr) {
                     console.warn('[Placement] failed to start:', plErr.message);
+                }
+
+                // BT-7f (2026-04-19): door tracker — wraps bot.activateBlock
+                // to record door/fence-gate opens; the close_doors mode reads
+                // bot._openedDoors and re-activates each entry once the bot
+                // has moved on. Idempotent hook; safe on soft reconnect.
+                try {
+                    const dtSettings = settings.door_tracker || {};
+                    configureDoorTracker(dtSettings);
+                    if (dtSettings.enabled !== false) {
+                        hookDoorTracker(this);
+                    }
+                } catch (dtErr) {
+                    console.warn('[Doors] failed to start:', dtErr.message);
                 }
 
                 // Vacate any protected zone before anything else happens.

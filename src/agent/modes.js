@@ -7,6 +7,8 @@ import convoManager from './conversation.js';
 import { withBotLock } from './bot_mutex.js';
 // BT-7b: cleanup_blocks mode records each cleanup into the placement stream.
 import { recordCleanup } from '../observability/placement_tracker.js';
+// BT-7f: door/fence-gate close-on-exit.
+import { recordDoorClose, doorHelpers } from '../observability/door_tracker.js';
 import { Vec3 } from 'vec3';
 
 async function say(agent, message) {
@@ -310,6 +312,120 @@ const modes_list = [
                 }
                 this.next_change = Date.now() + Math.random() * 10000 + 2000;
             }
+        }
+    },
+    {
+        // BT-7f (2026-04-19): close doors/fence gates the bot opened during
+        // pathfinding or LLM-driven activation. Reads bot._openedDoors
+        // (populated by door_tracker via a bot.activateBlock wrapper) and
+        // re-activates each entry once the bot has moved on.
+        //
+        // Skip reasons:
+        //   - player-nearby      (don't close in someone's face)
+        //   - too-close           (bot still within min_distance)
+        //   - not-trackable       (block no longer a door/gate)
+        //   - already-closed      (state changed externally)
+        //
+        // Note: no protected-zone skip — closing doors inside player bases
+        // is *exactly* what we want (keeps mobs out at night). Bot shouldn't
+        // have been opening protected-zone doors gratuitously in the first
+        // place, but if it did, closing is strictly beneficial.
+        //
+        // interrupts:[] means this never preempts running work.
+        name: 'close_doors',
+        description: 'When idle, close doors/fence gates the bot opened and then walked away from.',
+        interrupts: [],
+        on: true,
+        active: false,
+        min_distance: 3,
+        player_guard: 3,
+        update: async function (agent) {
+            const bot = agent.bot;
+            if (!Array.isArray(bot._openedDoors) || bot._openedDoors.length === 0) return;
+            const bpos = bot.entity && bot.entity.position;
+            if (!bpos) return;
+            const now = Date.now();
+
+            // Find the oldest door eligible for closing.
+            let idx = -1;
+            let target = null;
+            let skipReason = null;
+            for (let i = 0; i < bot._openedDoors.length; i++) {
+                const e = bot._openedDoors[i];
+                if (!e) continue;
+                const cx = e.x + 0.5, cy = e.y + 0.5, cz = e.z + 0.5;
+                const dx = bpos.x - cx, dy = bpos.y - cy, dz = bpos.z - cz;
+                if ((dx*dx + dy*dy + dz*dz) <= (this.min_distance * this.min_distance)) continue;
+
+                // Player-occupancy check (any non-bot player entity within player_guard).
+                let playerNearby = false;
+                try {
+                    for (const id in bot.entities) {
+                        const ent = bot.entities[id];
+                        if (!ent || ent === bot.entity) continue;
+                        if (ent.type !== 'player') continue;
+                        const pd = ent.position;
+                        if (!pd) continue;
+                        const pdx = pd.x - cx, pdy = pd.y - cy, pdz = pd.z - cz;
+                        if ((pdx*pdx + pdy*pdy + pdz*pdz) <= (this.player_guard * this.player_guard)) {
+                            playerNearby = true;
+                            break;
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+                if (playerNearby) {
+                    skipReason = 'player-nearby';
+                    idx = i; target = e; break;
+                }
+
+                idx = i; target = e; break;
+            }
+            if (idx === -1) return;
+
+            // Re-read the block; verify it's still a door/gate AND still open.
+            let blk;
+            try {
+                blk = bot.blockAt(new Vec3(target.x, target.y, target.z));
+            } catch (_) {
+                return; // chunk unloaded or lookup failed; try again next tick
+            }
+            if (!blk || !doorHelpers.isTrackable(blk.name)) {
+                const age_s = Math.floor((now - target.t) / 1000);
+                bot._openedDoors.splice(idx, 1);
+                recordDoorClose({ x: target.x, y: target.y, z: target.z,
+                    type: target.type, age_s, ok: false, reason: 'not-trackable' });
+                return;
+            }
+            if (!doorHelpers.isOpen(blk)) {
+                const age_s = Math.floor((now - target.t) / 1000);
+                bot._openedDoors.splice(idx, 1);
+                recordDoorClose({ x: target.x, y: target.y, z: target.z,
+                    type: target.type, age_s, ok: false, reason: 'already-closed' });
+                return;
+            }
+
+            if (skipReason) {
+                // Don't splice on player-nearby — try again next tick when they move.
+                const age_s = Math.floor((now - target.t) / 1000);
+                recordDoorClose({ x: target.x, y: target.y, z: target.z,
+                    type: target.type, age_s, ok: false, reason: skipReason });
+                return;
+            }
+
+            execute(this, agent, async () => {
+                const age_s = Math.floor((now - target.t) / 1000);
+                let ok = false;
+                try {
+                    await bot.activateBlock(blk);
+                    ok = true;
+                } catch (_) {
+                    ok = false;
+                }
+                const j = bot._openedDoors.indexOf(target);
+                if (j !== -1) bot._openedDoors.splice(j, 1);
+                recordDoorClose({ x: target.x, y: target.y, z: target.z,
+                    type: target.type, age_s, ok, reason: ok ? null : 'activate-threw' });
+            });
         }
     },
     {
