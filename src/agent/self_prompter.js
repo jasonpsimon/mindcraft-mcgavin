@@ -33,6 +33,12 @@ export class SelfPrompter {
         // only auto-resumes when stoppedReason === 'circuitBreaker'; explicit
         // user stops ('user') are respected and never auto-resumed.
         this.stoppedReason = null;
+
+        // --- #23 ChunkWait held-state edge-trigger flag ---
+        // Set true when the loop first observes chunk_wait.isHeld(); cleared
+        // on the first non-held tick. Used to log enter/exit transitions
+        // exactly once each instead of spamming on every poll.
+        this._heldLogged = false;
     }
 
     start(prompt) {
@@ -170,6 +176,31 @@ export class SelfPrompter {
         let no_command_count = 0;
         const MAX_NO_COMMAND = 3;
         while (!this.interrupt) {
+
+            // #23 ChunkWait held-state back-off.
+            // Why: when chunks aren't loaded or position is NaN, the LLM has
+            // nothing actionable to say. Inviting handleMessage anyway burns
+            // round-trips, returns no-command responses, and walks the
+            // no_command_count toward MAX_NO_COMMAND — firing the circuit
+            // breaker, setting state=STOPPED, and serializing self_prompt:null
+            // on the next history.save(). Net effect: goal lost on next
+            // restart. The fix is a no-op tick: poll quickly, skip the LLM
+            // call, do not advance the no-command counter.
+            if (this.agent?.chunk_wait?.isHeld?.()) {
+                if (!this._heldLogged) {
+                    const reason = (typeof this.agent.chunk_wait.lastReason === 'function')
+                        ? this.agent.chunk_wait.lastReason()
+                        : 'unknown';
+                    console.log(`[SelfPrompter] held — backing off (reason: ${reason})`);
+                    this._heldLogged = true;
+                }
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+            }
+            if (this._heldLogged) {
+                console.log('[SelfPrompter] hold released — resuming');
+                this._heldLogged = false;
+            }
 
             // --- Check persistent rules between iterations ---
             if (this.persistentRules.length > 0) {
