@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `0fc6195` on `origin/develop`. **Shipped today:** #22 escapeProtectedZone pre-move passability guard (`8c2b6fe`) and #28 mid-session in-zone re-fire on `forcedMove` (`f3bee88`). **Filed new:** #22b — BT-22 guard worked as designed (rejecting solid target blocks) but the bot still died from the same unknown-source 1.58–2.0-dmg/tick pattern at 17:50:37–50Z. Root cause is a second sub-failure: bot's *current* position ends up inside solids (e.g. spider-shove underground) and `bot.entity.position` goes NaN before the damage classifier can attribute a source. Guard only protects the commit point; it can't rescue a hitbox that's already wedged. Filed under ⏳ high-priority. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18). See Recently completed for per-item detail._
+_Last updated: 2026-04-19. HEAD `a08b178` on `origin/develop`. **In-progress:** #22b — NaN-position suffocation recovery (jump-spam + self-kill fallback) inside the existing health listener of `_installSpawnEscapeInstrumentation`. BT-22 (commit-point guard) closes sub-failure (a) but cannot rescue a hitbox already wedged in solids; #22b closes sub-failure (b) by detecting unknown-source rapid drops + NaN/held position and intervening before the bot dies (~13s death window). Recently shipped today: #22 pre-move passability guard (`8c2b6fe`) and #28 in-zone re-fire on `forcedMove` (`f3bee88`).
 
 ---
 
@@ -66,7 +66,35 @@ _Last updated: 2026-04-19. HEAD `0fc6195` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #28 shipped `f3bee88`; awaiting first natural in-zone forcedMove to verify re-fire path end-to-end.)_
+### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery
+
+**Status:** in-progress (code phase) • **Priority:** high (direct death cause — killed the bot 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification)
+
+**Problem.** BT-22's pre-move passability guard correctly rejects every solid target (perimeter held), but the bot can still die when its *current* hitbox lands inside solids — e.g. mob shove into an underground pocket, fall into a one-block hole, or pathfinder glitch dropping the bot at `y=31.75` between blocks. When `bot.entity.position` goes NaN, the damage classifier loses `pos`, so 11 ticks of 1.58-dmg suffocation read as `source:unknown pos:null` and no existing handler can react. Bot dies in ~13s from first suffocation tick.
+
+**Approach (v1 — jump-spam + self-kill fallback).** Extend the existing `health` listener in `_installSpawnEscapeInstrumentation`:
+1. **Detect:** on each health drop, query `damageStream.getLastDamage()`. If `source === 'unknown'` AND (position non-finite OR `chunkWait.isHeld()`), increment a suffocation-tick counter with a 2s rolling window.
+2. **Stage A (≥3 ticks within 2s):** cancel any pathfinder goal, clear all control states, pulse `bot.setControlState('jump', true)` for 2s. Sometimes pops the hitbox loose.
+3. **Stage B (≥3s persistent):** `bot.chat('/kill')` for clean respawn. Spawn-side `escapeProtectedZone` then runs cleanly. Items lost — acceptable cost vs. guaranteed death.
+4. **Recovery flag:** `_suffocRecovering` prevents re-entry during stage A; reset on `respawn`.
+5. **Position tracker:** `_lastGoodPos` sampled cheaply when handlers see a finite position (no new tick hook).
+
+**Files.**
+- `src/agent/library/skills.js` — extend `_installSpawnEscapeInstrumentation` health listener; module-state for tracker + counter + recovery flag.
+
+**Guardrails.**
+- Detection requires BOTH unknown source AND NaN/held — prevents stage A firing on normal mob hits.
+- 2s rolling window — single stray unknown-source ticks won't trigger.
+- Recovery flag prevents re-entry while jump-spam is active.
+- Stage B only after Stage A has had ≥3s to work.
+- Reset on respawn so the next session starts clean.
+
+**Rule 7 audit.** Single site (the existing `health` listener inside `_installSpawnEscapeInstrumentation`). No fan-out. `damageStream` is already a peer module — no new dependencies.
+
+**Open questions deferred.** `bot.dig` rescue (Stage A.5) skipped from v1 pending evidence it works during NaN. `/back` / op-status verification deferred — `/kill` is server-default and works for non-ops.
+
+**Verification signal.** Next NaN-suffocation event: `[SuffocationRecovery]` log lines (`detected` → `stage_a` → either `recovered` or `stage_b` self-kill). Either bot survives or telemetry tells us why not.
+
 
 
 
@@ -130,58 +158,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-### 22b. `escapeProtectedZone` current-position suffocation (NaN-pos recovery)
-
-**Status:** ⏳ not started • **Priority:** high (direct death cause — killed the bot today 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification)
-
-**Evidence.** After BT-22 + BT-28 shipped, bot restarted cleanly, escape ran 8 directions, reached ~239 blocks out. At some point pathfinder deposited the bot at `y=31.75` underground near `(195, 32, -38)`. `[Damage] source=spider pos=(195.3, 31.75, -38.7)` at 17:50:37 (normal mob hit). Then 11 consecutive `source:unknown pos=null` 1.58-dmg ticks while `[SpawnEscape][EVENT] health drop ... at (NaN, NaN, NaN)` — the ChunkWait/NaN signature. Bot died at 17:50:50. During this window the BT-22 guard was correctly rejecting every hop target (`[EscapeZone] -X hop 1: target (166, 32, -43) rejected — feet+head blocks solid...`) — the guard perimeter held, the bot died anyway.
-
-**Why BT-22 didn't save it.** The BT-22 guard only checks *target* positions before committing a pathfinder goal. It can't rescue a hitbox that's *currently* in solid material — e.g. after a mob shove, fall into a solid pocket, or pathfinder glitch. When `bot.entity.position` goes NaN, the damage classifier also loses `pos`, so the damage reads as `source:unknown pos:null` — the same signature that motivated BT-22, but a different sub-failure.
-
-**Two sub-failures in the "unknown-source suffocation" class:**
-- (a) pathfinder commits through solids → **closed by BT-22**
-- (b) bot's current position lands in solids + NaN window → **BT-22b**
-
-**Approach sketch (needs evaluation).**
-1. **Detect:** in the existing `health` listener inside `_installSpawnEscapeInstrumentation`, watch for: rapid small health drops (≤3 over <5 ticks) AND `source:unknown` AND (`pos=null` OR `_chunkWaitHeld=true`). Maintain a last-known-finite position (`_lastGoodPos`) via a position tracker.
-2. **Intervene (options, ranked by risk):**
-   - *Safe:* cancel any pathfinder goal, clear control states, start a vertical `jump` spam for 2s — sometimes unwedges when the block above is breakable or half-height.
-   - *Moderate:* try `bot.dig` at `_lastGoodPos + (0, 0, 0)` and `+(0, 1, 0)` head/feet blocks. Needs a non-NaN last-good pos; if none, skip.
-   - *Fallback:* if NaN damage persists >3s, chat-toss items + self-kill via walk-off / suicide. Items drop at the current tile; bot respawns at spawn and the spawn-side escape fires cleanly. Accept the cost — death is inevitable otherwise.
-3. **Instrument:** `[SuffocationRecovery]` log lines so we can see the intervention fire and measure rescue rate.
-
-**Files.**
-- `src/agent/library/skills.js` — extend the `health` listener in `_installSpawnEscapeInstrumentation` + add `_lastGoodPos` tracker.
-- Possibly new module `src/observability/stuck_recovery.js` if intervention grows beyond the listener.
-
-**Open questions.**
-- Does `bot.dig` work while position is NaN? (Probably not — pathfinder needs a valid entity.) If not, only the self-kill fallback is viable during a NaN window.
-- Is there a ChunkWait hook that fires when NaN is detected? (BT-1 StateTicker has the guard; we can check `_chunkWaitHeld`.)
-- Is there a server-side `/back` or `/spawn` we can op-chat? Need to verify op status and server config.
-
-**Success signal.** Either (a) `[SuffocationRecovery]` fires and health stabilizes — bot survives; or (b) death log shows we attempted recovery and it failed predictably — better telemetry for next iteration. Zero more "silent death while NaN" events.
-
-
-### 22. `escapeProtectedZone` suffocation trap
-
-**Status:** ⏳ not started • **Priority:** high (direct death cause — 2026-04-17 forensic incident)
-
-**Problem.** On 2026-04-17 at ~16:40:44Z, `escapeProtectedZone` recovery pathed the bot into a non-air block and the bot suffocated out over ~60 s. `data/damage-stream.jsonl` shows the signature clearly: repeated 1.18 damage/tick from `source=unknown`, `position=null`, `food=17` (not starvation), culminating in a lethal event at 16:41:45.040Z. StateTicker's last good position (16:40:44.075Z) has pathfinder active and `mutex=autoRecovery:inside_protected_zone` — one tick later, NaN position + ChunkWait hold. The escape goal itself succeeded in the "bot is no longer in the protected zone" sense, but the chosen step landed the bot's hitbox inside terrain.
-
-**Root cause.** `escapeProtectedZone` picks directional hops to walk the bot away from the zone center but does not validate that the target block at feet/head level is air before committing the pathfinder goal. No pre-move collision check. Bot happily steps into a block, its head is in solid material, suffocation fires every tick, and because the damage source is "inside a block" there's no hostile for `self_defense` to flee from.
-
-**Solution sketch.** In `escapeProtectedZone` (and the helper that picks the directional hop), before calling `pathfinder.setGoal` on the candidate target, read the two blocks at `(x, y, z)` and `(x, y+1, z)` via `bot.blockAt(...)`. If either is non-passable, reject the candidate and try the next direction. Secondary guard: if `self_preservation`'s head-in-block detector (#10 suffocation-escape, currently in the Partial bucket) ships first, it would also save us here — these two fixes are redundant in a good way.
-
-**Files.**
-- `src/agent/library/skills.js` — `escapeProtectedZone` and its phase-2 directional-hop helper.
-- Possibly `self_preservation.js` if we take the secondary-guard route.
-
-**Blast radius.** Localized to `escapeProtectedZone` and its call site in the spawn-event hook / AutoRecovery `inside_protected_zone` handler. Additive collision check; no change to existing success paths.
-
-**Success signal.** A replay of the 2026-04-17 scenario (bot entering the same chunk from the same approach angle) either (a) picks a different direction or (b) skips the unsafe step, and the bot does not take suffocation damage during escape. Look for a new `[SkillGuard]` / `[EscapeZone]` log line showing the rejected-candidate reason.
-
-**Philosophy alignment.** Rule 7 (complete the perimeter — every pathfinder commit point needs the same safety invariant). Principle 1 (mechanical decision; don't ask the LLM to notice it's suffocating).
 
 ### 23. Self-prompter ignores held state during ChunkWait/NaN windows
 
