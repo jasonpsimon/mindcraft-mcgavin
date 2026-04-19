@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `67d8d82` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`), and BT-7b (`67d8d82`) — new `placement_tracker` observability module + `cleanup_blocks` idle mode; bot now tracks its own placements, classifies them (intentional / pathfinder-scaffold / unknown-llm), and breaks incidental ones after 30s + 5-block departure. Nine items awaiting live verification (eight prior BTs + BT-7b); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `f5bea00` on `origin/develop`. **In-progress:** BT-7f — close doors/fence gates the bot opened (world-stewardship follow-up to BT-7b). JP observes bot pathfinding through doors/gates and leaving them open — base fills with open doors, mobs stream in at night. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`), BT-7b (`67d8d82`). Nine items awaiting live verification (eight prior BTs + BT-7b); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,56 @@ _Last updated: 2026-04-19. HEAD `67d8d82` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-7b shipped `67d8d82`; nine items awaiting live verification on next natural events.)_
+### BT-7f. Close doors/fence gates the bot opened
+
+**Status:** in-progress (code phase) • **Priority:** medium-high (mob ingress at night through doors bot left open)
+
+**Problem.** Pathfinder (and LLM `!activate`) opens wooden doors and fence gates so the bot can path through, but never closes them. Over a play session the base ends up with every door hanging open — cosmetic annoyance by day, survival hazard by night (mobs walk right in).
+
+**Scope.**
+- **In:** 11 wooden door variants (oak/spruce/birch/jungle/acacia/dark_oak/crimson/warped/mangrove/cherry/bamboo) + 8 fence-gate variants (oak/spruce/birch/jungle/acacia/dark_oak/crimson/warped/mangrove/cherry/bamboo — whichever exist in the running MC version).
+- **Out:** trapdoors (bot rarely uses them, different UX expectation), iron doors (need redstone, bot can't toggle anyway), player-opened doors (not flowing through `bot.activateBlock`).
+
+**Design (mirrors BT-7b pattern).**
+
+1. **Attribution via wrapper.** The new module monkey-patches `bot.activateBlock` at hook time. On call, if the target block is a door/gate AND it was closed (state flip → open), push `{x, y, z, type, t}` to `bot._openedDoors`. FIFO cap 50, cleared on death/respawn. This catches pathfinder auto-opens AND LLM-driven activations — player-opened doors are NOT tracked (they don't flow through `bot.activateBlock`).
+2. **Close mode** `close_doors` in modes.js, idle-only (`interrupts:[]`). Per tick:
+   - Find oldest entry where `distance(bot, door) > 3` AND no player entity within 3 blocks of the door (don't close in someone's face).
+   - Verify current block at coord still matches the tracked type AND is currently open.
+   - Skip if inside any `protectedZones` entry (defense-in-depth; player structures are hands-off).
+   - Call `bot.activateBlock(block)` to close, splice the entry. Max one close per tick.
+3. **Observability** — `data/door-stream.jsonl` with `event:"opened" | "closed" | "close-skipped"`. StateTicker snapshot: `openedDoors:{total, oldest_age_s}`.
+
+**Files.**
+- NEW `src/observability/door_tracker.js` — closure state + `configureDoorTracker()` + `hookDoorTracker(agent)` (idempotent via `bot._hookedDoorTracker` reference-identity gate) + `getDoorStats()` + `recordDoorClose()`. Mirrors `placement_tracker.js` shape exactly.
+- `src/agent/modes.js` — new `close_doors` mode appended (right before `cleanup_blocks` or alongside it), import `recordDoorClose`.
+- `src/agent/agent.js` — import + `hookDoorTracker(this)` after `hookPlacementTracker`, before `escapeProtectedZone`.
+
+**Blast radius.**
+- Module wraps one bot method (`activateBlock`). Wrapper is transparent: `await original.call(bot, ...args)` — no change to return value, no added latency beyond a state-diff check. Double-hook guarded by idempotency gate.
+- New mode: `interrupts:[]`, no preemption of running work.
+- No touch to pathfinder's own door handling (it keeps opening doors the way it always has).
+
+**Guardrails.**
+- Player-occupancy check before closing (skip if player entity within 3 blocks of the door).
+- Block-identity re-verification before closing (was this door mined out in the meantime? is it still open?).
+- Zone guard via `protectedZones` (defense-in-depth, even though bot shouldn't have opened those anyway).
+- FIFO cap 50 — old entries drop silently.
+- Death/respawn clears (stale coords post-world-transition are dangerous).
+
+**Rule 7 audit.** Single perimeter for the tracker module. Mode + agent wiring are parallel additions that meet only at `bot._openedDoors` (new field) and `recordDoorClose` (new export). No fan-out.
+
+**Skip (explicit).**
+- Retroactive closing of doors already open in the world pre-ship.
+- Trapdoors (can revisit if bot starts using them).
+- Iron doors (no toggle path exists for the bot).
+- Doors the PLAYER opened — not our problem.
+
+**Success signal (live verification).**
+- Bot pathfinds through a door — `opened` event in stream with `purpose`-like state flip captured.
+- Bot moves >3 blocks away, no player near — `closed` event in stream; door visually shuts in-world.
+- Player walks through door while bot is away — door stays open (not tracked, not closed).
+- Player standing next to a bot-opened door — `close-skipped` with reason `player-nearby`, door stays open until player leaves.
 
 
 ## Shipped — awaiting live verification
