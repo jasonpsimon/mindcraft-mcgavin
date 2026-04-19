@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `8c2b6fe` on `origin/develop`. **Shipped #22 escapeProtectedZone suffocation trap** — pre-move passability guard added inside `_escapeTryPath` (single commit point; Rule 7 perimeter closed across all 4 callers). Awaiting live verification: next natural escape event should emit `[EscapeZone]` log lines; success = no more unknown-source 2-dmg/tick suffocation. Prior in-progress blurb kept below for history-on-disk. — adding pre-move passability check inside `_escapeTryPath` so every hop (cached-exit, dir-hop, stuck-back, stuck-sidestep) rejects targets whose feet+head blocks are solid. 5 lethal unknown-source deaths today at 15:35–15:44Z confirm the failure pattern. Prior: filed **#27 legacy memory.json residue** under ⏳ (low-priority cleanup — D1 stopped writing the 500-char summary field but never wiped the already-persisted value; it rides along every save under ContextBuilder). Prior ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
+_Last updated: 2026-04-19. HEAD on `origin/develop`. **In-progress: #28 mid-session in-zone re-fire** — auto-trigger `escapeProtectedZone` when a `forcedMove` (server teleport or op `/tp`) drops the bot back inside the 250-block spawn zone. Also exercises the BT-22 guard on next escape. Prior ship: **#22 escapeProtectedZone suffocation trap** — pre-move passability guard added inside `_escapeTryPath` (single commit point; Rule 7 perimeter closed across all 4 callers). Awaiting live verification: next natural escape event should emit `[EscapeZone]` log lines; success = no more unknown-source 2-dmg/tick suffocation. Prior in-progress blurb kept below for history-on-disk. — adding pre-move passability check inside `_escapeTryPath` so every hop (cached-exit, dir-hop, stuck-back, stuck-sidestep) rejects targets whose feet+head blocks are solid. 5 lethal unknown-source deaths today at 15:35–15:44Z confirm the failure pattern. Prior: filed **#27 legacy memory.json residue** under ⏳ (low-priority cleanup — D1 stopped writing the 500-char summary field but never wiped the already-persisted value; it rides along every save under ContextBuilder). Prior ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
 
 ---
 
@@ -66,7 +66,25 @@ _Last updated: 2026-04-19. HEAD `8c2b6fe` on `origin/develop`. **Shipped #22 esc
 
 ## In-progress
 
-_(empty — #22 shipped `8c2b6fe`; awaiting live verification on next natural escape event.)_
+### 28. Mid-session in-zone re-fire on `forcedMove`
+
+**Status:** in-progress (code phase) • **Priority:** medium (closes a real gap — teleports strand the bot; also unblocks live verification of BT-22)
+
+**Problem.** `escapeProtectedZone` only runs on spawn/login. If a server teleport or op `/tp` drops the bot inside the 250-block spawn zone mid-session, the bot is stranded: destructive actions are blocked inside the zone, and no signal triggers a re-escape. Observed today when JP `/tp`'d the bot to spawn to exercise BT-22 — bot sat idle at `(-21.2, 91, -29.9)`, `mutex:null`, no escape fired.
+
+**Approach.** In the existing `forcedMove` listener (`_installSpawnEscapeInstrumentation`), schedule a 500ms-debounced check. If bot position is inside the zone, not dead, and the mutex is not already held by `escapeProtectedZone`/`escapeSpawnZone`, call `_impl_escapeProtectedZone(bot)` with a 30s cooldown to prevent re-fire storms during the escape itself.
+
+**Files.**
+- `src/agent/library/skills.js` — `_installSpawnEscapeInstrumentation` (forcedMove handler) + import `botMutex` from `../bot_mutex.js`.
+
+**Guardrails.**
+- Debounce: 500ms after forcedMove so burst teleport corrections coalesce into a single check.
+- Mutex guard: skip if `escapeProtectedZone` or `escapeSpawnZone` already holding.
+- Cooldown: 30s between re-fires — prevents re-entry if escape itself triggers more forcedMoves.
+- Dead/NaN-position guard: skip if not finite or `health<=0`.
+
+**Rule 7 audit.** Single event site (`bot.on('forcedMove', ...)`). No fan-out.
+
 
 
 
