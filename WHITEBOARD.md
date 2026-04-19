@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `e2b680b` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`), and OPT-J (`e2b680b`) — added `lava`, `campfire`, `soul_campfire` to pathfinder `blocksToAvoid` (prevents 'discovered the floor was lava' deaths). Nine items awaiting live verification (eight BTs + OPT-I); OPT-H and OPT-J are pure correctness (no live verify needed). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `04a6a49` on `origin/develop`. **OPT-I live verified** (`94442d2`, 2026-04-19 20:26): two `defendSelf` invocations 19s apart (4020ms + 2001ms, both `outcome:success`) against a pair of zombies post-restart — confirms self_defense mode re-fires after completion instead of staying paused. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`), OPT-J (`e2b680b`). Eight BTs awaiting live verification; OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -70,31 +70,6 @@ _(empty — OPT-J shipped `e2b680b`; nine items awaiting live verification on ne
 
 
 ## Shipped — awaiting live verification
-
-### OPT-I. `_impl_defendSelf` try/finally unpause — fix one-hit-then-die combat bug (`94442d2`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs bot to engage a hostile mob during an active goal; expect sustained combat, not one hit then silence)
-
-**Symptom.** JP observed: bot says "Fighting zombie!", hits once, then takes lethal damage with zero retaliation.
-
-**Root cause.** `_impl_defendSelf` paused `self_defense` + `cowardice` at entry but never unpaused. The modes controller only auto-unpauses when `_agent.isIdle()`; during any active goal (e.g. "make 64 torches") the agent is never idle, so after `defendSelf`'s while-loop exits (mob drifts >8 blocks during knockback → loop ends), both modes stay paused for the rest of the goal. The mode that would re-invoke `defendSelf` on the next hit can no longer fire. Bot is defenseless.
-
-**Change.** Single function edit in `src/agent/library/skills.js`. Wrapped the body of `_impl_defendSelf` in `try { ... } finally { bot.modes.unpause('self_defense'); bot.modes.unpause('cowardice'); }`. Every exit path (normal return, `bot.interrupt_code` early return, thrown error) now runs the unpause. Added a leading comment block explaining the invariant so future edits don't re-introduce the bug.
-
-**Blast radius.** Single function, single perimeter. The unpause is the direct complement of the pause calls at 458–459. No touch to mode controller, `bot.pvp`, or other `defend*` helpers.
-
-**Forensic evidence of the bug pre-fix.**
-- 2026-04-19 20:05:32–38: zombie 20→8, unk 8→6→4→2→0 LETHAL over 6s. skill-stream: `defendSelf outcome:success ms:3570` at 20:05:32.8, NO re-entry.
-- 2026-04-19 18:34:35–45: zombie 20→18, 9 sequential 'unknown' hits over 10s. `defendSelf outcome:abort ms:12590` post-mortem.
-
-**Verification signals to watch.**
-- Next combat encounter: expect multiple `bot.pvp.attack` bursts per engagement, NOT a single burst. Mob dies OR bot dies after sustained fight (not silent absorption).
-- After `defendSelf` completes, `bot.modes.getStr()` should show `self_defense(ON)` and `cowardice(ON)` (not paused).
-- `skill-stream.jsonl` `defendSelf` records remain the same shape — behavioral change is at the *mode* layer, not the skill layer. What should differ is the count of `defendSelf` invocations per goal: many instead of one.
-
-**Rule 7 audit.** Single function, single perimeter. Pause at entry is now balanced by unpause in finally. No fan-out.
-
-**Companion finding (deferred, separate ship).** `_impl_goToPlayer` (skills.js 3836) has the same pattern: `pause('self_defense') + pause('cowardice')` at entry, no unpause. Same risk class — will fix when JP prioritizes (lower urgency because goToPlayer is typically short-lived).
 
 
 ### 7c. Heuristic auto-detection of player-built structures (`0ff5c29`, 2026-04-19)
@@ -615,6 +590,33 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### OPT-I. `_impl_defendSelf` try/finally unpause — fix one-hit-then-die combat bug (`94442d2`, 2026-04-19)
+
+**Status:** ✅ completed — **live verified 2026-04-19 20:26** (two `defendSelf` fires 19s apart against two zombies; 0 post-combat damage, bot killed both mobs)
+
+**Symptom.** JP observed: bot says "Fighting zombie!", hits once, then takes lethal damage with zero retaliation.
+
+**Root cause.** `_impl_defendSelf` paused `self_defense` + `cowardice` at entry but never unpaused. The modes controller only auto-unpauses when `_agent.isIdle()`; during any active goal (e.g. "make 64 torches") the agent is never idle, so after `defendSelf`'s while-loop exits (mob drifts >8 blocks during knockback → loop ends), both modes stay paused for the rest of the goal. The mode that would re-invoke `defendSelf` on the next hit can no longer fire. Bot is defenseless.
+
+**Change.** Single function edit in `src/agent/library/skills.js`. Wrapped the body of `_impl_defendSelf` in `try { ... } finally { bot.modes.unpause('self_defense'); bot.modes.unpause('cowardice'); }`. Every exit path (normal return, `bot.interrupt_code` early return, thrown error) now runs the unpause. Added a leading comment block explaining the invariant so future edits don't re-introduce the bug.
+
+**Blast radius.** Single function, single perimeter. The unpause is the direct complement of the pause calls at 458–459. No touch to mode controller, `bot.pvp`, or other `defend*` helpers.
+
+**Forensic evidence of the bug pre-fix.**
+- 2026-04-19 20:05:32–38: zombie 20→8, unk 8→6→4→2→0 LETHAL over 6s. skill-stream: `defendSelf outcome:success ms:3570` at 20:05:32.8, NO re-entry.
+- 2026-04-19 18:34:35–45: zombie 20→18, 9 sequential 'unknown' hits over 10s. `defendSelf outcome:abort ms:12590` post-mortem.
+
+**Verification signals to watch.**
+- Next combat encounter: expect multiple `bot.pvp.attack` bursts per engagement, NOT a single burst. Mob dies OR bot dies after sustained fight (not silent absorption).
+- After `defendSelf` completes, `bot.modes.getStr()` should show `self_defense(ON)` and `cowardice(ON)` (not paused).
+- `skill-stream.jsonl` `defendSelf` records remain the same shape — behavioral change is at the *mode* layer, not the skill layer. What should differ is the count of `defendSelf` invocations per goal: many instead of one.
+
+**Rule 7 audit.** Single function, single perimeter. Pause at entry is now balanced by unpause in finally. No fan-out.
+
+**Companion finding (deferred, separate ship).** `_impl_goToPlayer` (skills.js 3836) has the same pattern: `pause('self_defense') + pause('cowardice')` at entry, no unpause. Same risk class — will fix when JP prioritizes (lower urgency because goToPlayer is typically short-lived).
+
+
 
 ### OPT-J. Added `lava`, `campfire`, `soul_campfire` to pathfinder `blocksToAvoid` (`e2b680b`, 2026-04-19)
 
