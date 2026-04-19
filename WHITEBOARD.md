@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `f158838` on `origin/develop`. **In-progress:** BT-10c — suffocation escape (sub-item of #10 survival hardening). Existing `fall_blocks` branch handles sand/gravel ABOVE the bot before they collapse, but if collapse already happened (or any solid block intersects the head hitbox via griefing/world-edit/cave-in), bot takes 1 dmg/tick and has no escape. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b. Twelve items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `4fb5a2e` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (`4fb5a2e`) — suffocation escape: head-in-solid-block detection via `blockAbove.boundingBox === 'block'` → `breakBlockAt(y+1)` dig-up with latch hysteresis. Thirteen items awaiting live verification (eight prior BTs + BT-7b + BT-7f + BT-10a/b/c); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,52 +66,63 @@ _Last updated: 2026-04-19. HEAD `f158838` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10c. Suffocation escape (sub-item of #10 survival hardening)
-
-**Status:** in-progress (code phase) • **Priority:** medium-high (slow-bleed death; bot takes 1 dmg/tick while head is in a solid block, dies in ~10s without intervention)
-
-**Problem.** `self_preservation` already prevents sand/gravel COLLAPSE-from-above via the `fall_blocks` branch (matches blockAbove name then `moveAway(2)`). But once a solid block is intersecting the head hitbox — sand finished collapsing, gravel falling, world-edit drop, mob pushing bot into a wall, cave-in — there's no recovery. Bot stands and takes ticks of suffocation damage until the existing low-HP retreat fires (and even then it just walks sideways into more block).
-
-**Design (extend existing `self_preservation`).**
-
-1. **New branch placed BEFORE the existing `fall_blocks` preempt.** Order matters: if head is already buried, we need to dig up FIRST, not moveAway (which can't escape because head is stuck in block).
-2. **Gate:** `blockAbove.boundingBox === 'block'` AND `blockAbove.name` not in `{'air', 'cave_air', 'void_air', 'water', 'lava'}` AND `!bot._suffocationEscapeActive`. The `boundingBox === 'block'` filter excludes leaves, fences, slabs (partial), and other passable-but-named blocks.
-3. **Action:**
-   - Set `bot._suffocationEscapeActive = true` latch.
-   - Log `[Survival] suffocation-escape type=<blockAbove.name>`.
-   - `say(agent, 'Suffocating — digging up!')`.
-   - `execute()` → `skills.breakBlockAt(bot, x, y+1, z)` against the head block.
-4. **Latch clear:** add to top-of-update latch-clear group (alongside `_lowHpRetreatActive`): if `_suffocationEscapeActive` AND head block is now clear (passable), clear the latch + log.
-
-**Files.**
-- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. No new imports.
-
-**Blast radius.**
-- One mode, one `update()`. `interrupts:['all']` already set.
-- Reuses `skills.breakBlockAt` which already honors spawn-zone tripwire (250-block protection). Inside spawn zone, dig will no-op silently — acceptable trade for honoring the destructive-action invariant.
-- Reuses `skills.breakBlockAt` which uses safe `Movements` config — no straight-down-shaft risk.
-
-**Guardrails.**
-- `boundingBox === 'block'` filter prevents false-positive on leaves/fences/slabs.
-- Explicit name allowlist of passable blocks (air/water/lava handled — lava-as-head-block is the lava branch's job, not ours).
-- Latch prevents re-firing the dig every tick; cleared the moment head clears.
-- `breakBlockAt` failure leaves the latch set; the top-of-update clear will reset it once head clears via any means (player-rescue, mob-push, etc.).
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. New state `bot._suffocationEscapeActive` joins `_lavaEscapeActive`/`_lavaEdgeBackoffActive`/`_lowHpRetreatActive` already on the bot for this mode. No fan-out.
-
-**Skip (explicit).**
-- Detecting suffocation purely via damage-event signature (the head-block check is more direct and fires faster).
-- Crawling/swimming-out-of-1-block-gap (different escape primitive; this dig-up handles the common cases).
-- Auto-prevent-suffocation by avoiding paths that would bury the bot (pathfinder-side concern; out of scope).
-
-**Success signal (live verification).**
-- Bot's head is in a sand block (collapse, world-edit, etc.) → `[Survival] suffocation-escape type=sand` line; `Suffocating — digging up!` chat; bot digs the block above; suffocation stops.
-- Bot's head is in leaves → branch does NOT fire (`boundingBox` is not `block` for leaves).
-- Bot's head is in lava → lava branches handle it; suffocation branch does NOT fire (lava in the explicit-skip name set).
-- After dig, head clears → `[Survival] suffocation-escape cleared` log; latch cleared.
+_(empty — BT-10c shipped `4fb5a2e`; thirteen items awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### BT-10c. Suffocation escape (`4fb5a2e`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot to end up with head inside a solid bounding-box block — sand/gravel/cave-in/world-edit drop; then observe the dig-up + latch clear)
+
+**What shipped.** Two new code paths inside `self_preservation.update()` in `src/agent/modes.js`. Zero new imports.
+
+**1. Suffocation latch-clear (top of update, after BT-10b latch-clear).**
+```js
+if (bot._suffocationEscapeActive) {
+    const passable = ['air', 'cave_air', 'void_air', 'water', 'lava'];
+    const headClear = !blockAbove || passable.includes(blockAbove.name)
+                       || blockAbove.boundingBox !== 'block';
+    if (headClear) {
+        console.log('[Survival] suffocation-escape cleared');
+        bot._suffocationEscapeActive = false;
+    }
+}
+```
+
+**2. Suffocation trigger (before fall_blocks branch).** Fires when `blockAbove.boundingBox === 'block'` AND name not in `{air, cave_air, void_air, water, lava}` AND latch not set. Sets the latch, logs `[Survival] suffocation-escape type=<X>`, says the chat line, `execute()` → `skills.breakBlockAt(bot, floor(x), floor(y)+1, floor(z))`.
+
+**Branch ordering rationale.** Placed BEFORE `fall_blocks` because once the head is ALREADY buried, `moveAway` can't escape (head is stuck in block). Dig-up has to run first. The `fall_blocks` branch is now the pre-collapse early-warning (sand ABOVE head but not yet fallen); the suffocation branch is the post-collapse recovery.
+
+**boundingBox filter.** Using `blockAbove.boundingBox === 'block'` excludes leaves, fences, slabs, carpets, and other partial-collision or passable-named blocks. Only full-block collision triggers the dig.
+
+**Lava-as-head-block exclusion.** `lava` is in the passable allowlist for this branch specifically so the existing lava branches (BT-10a + original) handle it. Suffocation and burning are different failure modes with different correct responses.
+
+**Blast radius.**
+- `self_preservation.update()` only. No touch to combat, pathfinder, skills, or any other mode.
+- `skills.breakBlockAt` already honors the 250-block spawn-zone tripwire — inside spawn zone the dig will no-op silently. Acceptable: suffocation inside spawn zone is an extreme edge case; honoring the destructive-action invariant takes precedence.
+- `skills.breakBlockAt` uses safe `Movements` config (no straight-down-shaft risk) — inherits Stage 1 of #12 automatically.
+
+**Guardrails.**
+- boundingBox filter: no false-positive on leaves/fences/slabs.
+- Passable allowlist including `water` and `lava` for graceful hand-off to specialized branches.
+- Latch gate: one dig attempt per episode.
+- Clear on ANY head-clear path: dig success, player rescue, mob dislodge — all unblock the latch via the top-of-update check.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._suffocationEscapeActive` joins the other bot-owned mode-state fields (`_lavaEscapeActive`, `_lavaEdgeBackoffActive`, `_lowHpRetreatActive`). No fan-out.
+
+**Skip (explicit).**
+- Detecting suffocation via damage-event pattern (slower, less direct).
+- Crawling / 1-block-gap swimming (different escape primitive; dig-up handles the common cases).
+- Pathfinder-side prevention of suffocation-risk paths (separate concern).
+
+**Verification signals to watch.**
+- **Trigger:** bot's head ends up inside a sand/dirt/stone block (world-edit, cave-in, griefer) → `[Survival] suffocation-escape type=<name>` line; `Suffocating — digging up!` chat; bot digs block above; suffocation damage stops.
+- **Clear:** after dig, head clears → `[Survival] suffocation-escape cleared` line; latch reset.
+- **Leaves non-trigger:** bot stands under leaf canopy → branch does NOT fire (`boundingBox` not `block` for leaves).
+- **Lava hand-off:** bot's head is in lava → lava branches handle it; suffocation branch does NOT fire (lava in passable allowlist for this branch's purposes).
+- **Spawn-zone no-op:** bot somehow suffocates inside 250-block spawn zone → trigger fires, latch sets, but `breakBlockAt` no-ops due to tripwire; latch stays set until external rescue clears the head. Logged as `[ProtectedZone] breakBlockAt blocked — within spawn zone`.
+
 
 ### BT-10b. Proactive low-HP mob retreat (`e633301`, 2026-04-19)
 
