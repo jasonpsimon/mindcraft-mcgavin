@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `4f5141e` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), and OPT-H (`4f5141e`) — removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (no collision box; closing the half-shipped intent of `d1df31f` which only updated the comment). Eight BTs awaiting live verification; OPT-H is pure correctness (no live verify needed). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `9deb408` on `origin/develop`. **In-progress:** OPT-I — combat bug: `_impl_defendSelf` pauses `self_defense`+`cowardice` at entry but never unpauses. Modes controller only auto-unpauses when agent is idle; during an active goal (e.g. 'make 64 torches') agent is never idle, so `self_defense` stays paused for the rest of the goal after one combat burst — bot hits mob once, mode never re-fires, bot dies silently. Forensic signature confirmed in damage-stream.jsonl (deaths at 20:05:38 and 18:34:45). Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,49 @@ _Last updated: 2026-04-19. HEAD `4f5141e` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — OPT-H shipped `4f5141e`; eight BTs shipped today awaiting live verification on next natural events.)_
+### OPT-I. Combat bug: `defendSelf` leaves `self_defense`+`cowardice` paused forever (one-hit-then-die)
+
+**Status:** in-progress (code phase) • **Priority:** HIGH (bot dies to mobs it notices and 'fights')
+
+**Symptom (JP observed live).** Bot says "Fighting zombie!", hits the mob one time, then stops attacking and takes lethal damage with zero retaliation.
+
+**Forensic evidence.**
+- 2026-04-19 20:05:32–38 (damage-stream.jsonl): zombie 20→8, then unk 8→6, 6→4, 4→2, 2→0 LETHAL over 6s.
+- 2026-04-19 18:34:35–45: zombie 20→18, then 9 sequential 'unknown' hits over 10s, defendSelf reported `outcome:abort ms:12590` post-mortem.
+- skill-stream.jsonl: defendSelf fires once (`outcome:success ms:3570` at 20:05:32.8) then no re-entry despite sustained damage.
+
+**Root cause.** `_impl_defendSelf` (skills.js line 449) entry:
+
+```js
+bot.modes.pause('self_defense');
+bot.modes.pause('cowardice');
+```
+
+No matching unpause anywhere in the body (3 return paths, all leave them paused).
+
+**Why that kills the bot.** The modes controller (modes.js line 432) only calls `unPauseAll()` when `_agent.isIdle()`:
+
+```js
+async update() {
+    if (_agent.isIdle()) this.unPauseAll();
+    // ...
+}
+```
+
+During any active goal (like JP's "make 64 torches"), the agent is never idle. Once `defendSelf`'s while-loop exits (zombie drifts >8 blocks during knockback → `getNearestEntityWhere` returns null → loop ends), `self_defense` mode stays paused for the rest of the goal's runtime. The mode that would re-trigger `defendSelf` on the next combat event can no longer fire. Bot is defenseless.
+
+**Fix.** Wrap body in `try { ... } finally { bot.modes.unpause('self_defense'); bot.modes.unpause('cowardice'); }` so unpause always runs, regardless of return path or thrown error. Mirror the correct pattern already present in `collectBlock` (skills.js 3891–3898, 3904–3912).
+
+**Files.**
+- `src/agent/library/skills.js` — single function `_impl_defendSelf`, add try/finally wrapper.
+
+**Blast radius.** Single function, single pattern. The unpause is the complement of the existing pause at entry — restoring the invariant that already documents itself elsewhere in the file. No other function's state is touched.
+
+**Companion finding (deferred).** `_impl_goToPlayer` (skills.js 3836) has the same bug: pauses `self_defense`+`cowardice` at entry, never unpauses. Same risk class (invoked during LLM-directed movement, which is not idle). Noted here so it doesn't stay invisible — separate ship.
+
+**Rule 7 audit.** Single function, single perimeter. The pause calls at 458–459 are balanced by the unpause in finally. No touch to mode controller, no touch to `bot.pvp`, no touch to other `defend*` helpers.
+
+**Success signal.** Next time bot engages a mob during an active goal: expect sustained attacks (multiple `bot.pvp.attack` bursts, mob dies OR bot kills it over several seconds of combat), NOT a single hit followed by silence. After combat, `bot.modes.getStr()` should show `self_defense` and `cowardice` as unpaused.
 
 
 ## Shipped — awaiting live verification
