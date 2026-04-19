@@ -2213,13 +2213,81 @@ function _installSpawnEscapeInstrumentation(bot) {
     console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners)');
 }
 
+// -----------------------------------------------------------------------------
+// #22 escapeProtectedZone suffocation trap — pre-move passability guard
+// -----------------------------------------------------------------------------
+// Why: pathfinder.GoalNear(tx, ty, tz, 2) stops the bot within 2 blocks of the
+// target, but a target Y that sits inside terrain still causes the chosen path
+// to deposit the bot's hitbox in solid material. On 2026-04-19 at 15:35–15:44Z
+// we observed 5 lethal unknown-source 2-dmg/tick suffocation sequences during
+// escapeProtectedZone recovery — the exact signature described in the #22
+// whiteboard ticket. Fix is a minimal pre-move check at the single commit
+// point (_escapeTryPath, 4 callers): if the feet+head blocks at the proposed
+// target are known-solid, nudge Y within ±3 to find a passable pair; if
+// nothing is passable, skip the hop and let the caller's stuck/next-direction
+// logic fire.
+//
+// Unknown (chunk-not-loaded) blocks return null from bot.blockAt; we treat
+// that as "defer to pathfinder" — we only REJECT known-solid targets. This
+// preserves all currently-working paths through unloaded terrain.
+//
+// Rule 7 audit: every call to _escapeTryPath now inherits this guard:
+//   - cached-exit path     (_impl_escapeSpawnZone)
+//   - dir-hop path         (_commitToDirection)
+//   - stuck-back path      (_executeStuckManeuver)
+//   - stuck-sidestep path  (_executeStuckManeuver)
+
+function _isTargetPassable(bot, x, y, z) {
+    try {
+        const feet = bot.blockAt(new Vec3(x, y, z));
+        const head = bot.blockAt(new Vec3(x, y + 1, z));
+        if (!feet || !head) return null;  // chunk not loaded — unknown
+        const isAir = (b) => b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air';
+        if (isAir(feet) && isAir(head)) return true;
+        return false;
+    } catch (_) {
+        return null;
+    }
+}
+
+// Candidate Y offsets tried in order. Capped at ±3 — larger adjustments would
+// drag the hop too far off its intended drift-from-center path and defeat the
+// escape's directional logic.
+const _ESCAPE_Y_OFFSETS = [0, -1, 1, -2, 2, -3, 3];
+
+// Returns adjusted ty, or null if every offset in ±3 is known-solid.
+// If the requested ty returns null (unknown), we return it unchanged so the
+// pathfinder still attempts the hop — we only REJECT known-solid targets.
+function _findPassableY(bot, tx, ty, tz) {
+    const first = _isTargetPassable(bot, tx, ty, tz);
+    if (first === true || first === null) return ty;
+    for (const dy of _ESCAPE_Y_OFFSETS) {
+        if (dy === 0) continue;
+        if (_isTargetPassable(bot, tx, ty + dy, tz) === true) return ty + dy;
+    }
+    return null;
+}
+
 // Race goToGoal against a hard timeout. Returns when either completes.
 // Exceptions are caught and logged; callers should re-check position.
 // On timeout, explicitly cancel any in-flight pathfinder goal so that
 // subsequent hop attempts start from a clean state (otherwise the
 // pathfinder can keep ticking the bot into unstable / NaN positions
 // while we try to issue new goals).
+//
+// #22 guard: before committing the pathfinder goal, verify the target's
+// feet+head blocks are passable (or unknown). See _isTargetPassable header.
 async function _escapeTryPath(bot, tx, ty, tz, timeoutMs, label) {
+    const adjustedY = _findPassableY(bot, tx, ty, tz);
+    if (adjustedY === null) {
+        console.warn(`[EscapeZone] ${label}: target (${tx}, ${ty}, ${tz}) rejected — feet+head blocks solid at every Y within ±3`);
+        return;  // caller re-checks position; stuck/next-direction logic fires
+    }
+    if (adjustedY !== ty) {
+        console.log(`[EscapeZone] ${label}: target Y adjusted ${ty} → ${adjustedY} (original feet/head solid)`);
+        ty = adjustedY;
+    }
+
     let timeoutHandle;
     const attempt = goToGoal(bot, new pf.goals.GoalNear(tx, ty, tz, 2));
     const timeout = new Promise((_, reject) => {
