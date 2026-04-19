@@ -2177,6 +2177,9 @@ function _configureTerrainSafeMovements(bot, movements) {
         'fire',                 // already in default, belt + suspenders
         'soul_fire',            // high damage fire variant
         'powder_snow',          // can trap bot, slow freeze damage
+        'lava',                 // OPT-J: floor-was-lava deaths at low Y
+        'campfire',             // 1 HP/tick when standing on
+        'soul_campfire',        // 2 HP/tick when standing on
     ];
     for (const name of hazards) {
         const block = bot.registry.blocksByName[name];
