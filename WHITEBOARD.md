@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `0b2e0df` on `origin/develop`. **Shipped today:** #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), #22b NaN-position suffocation recovery (`d921016`), #23 self-prompter held-state back-off (`933ee16`), and #24 player-chat yield before self-prompt (`0b2e0df`). #23 + #24 together close the self-prompter loop-awareness gap: the loop no longer walks into STOPPED during NaN windows (#23) and no longer lets a stuck command pattern roll past fresh player chat (#24). Five BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `410e90d` on `origin/develop`. **In-progress:** #29 — extend `autoBreakStuckPlant` neighbor scan above head and below feet so bot can free itself from tree canopies + low leaf ceilings inside spawn zone. Motivated live 2026-04-19 ≈19:15Z: bot spawned on top of tree at y=80, `autoBreakStuckPlant` found only `oak_log` adjacent (correctly skipped); leaves at y=79 were below the scan range, pathfinder has `canDig=false` in spawn zone → bot stranded. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,35 @@ _Last updated: 2026-04-19. HEAD `0b2e0df` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #24 shipped `0b2e0df`; five BTs shipped today all awaiting live verification on next natural events.)_
+### 29. `autoBreakStuckPlant` vertical-scan extension — break leaves above head / below feet
+
+**Status:** in-progress (code phase) • **Priority:** high (bot stranding reproduced live 2026-04-19 ≈19:15Z on tree-canopy spawn)
+
+**Problem.** `autoBreakStuckPlant` scans 16 offsets — 8 horizontal neighbors at feet level (dy=0) and 8 at head level (dy=1). When the bot spawns ON TOP of a tree canopy, the block it's standing on (dy=-1) is out of scan range. If the bot's horizontal neighbors are all logs (tree-part, correctly skipped in spawn zone), the scan finds no breakable candidates and the skill aborts. Pathfinder has `canDig=false` inside spawn zone, so it can't plan a downward dig either. Result: bot stranded on canopy, escape-zone hops fail because "feet+head blocks solid at every Y within ±3" for every candidate target. Observed 2026-04-19 ≈19:15Z at (-84, 80, 61).
+
+**Approach.** Extend the offsets array in `_impl_autoBreakStuckPlant` (src/agent/library/skills.js ≈line 1967) to include:
+- `dy=-1`: 9 offsets (directly below feet + 8 diagonal below) — catches bot standing on leaf canopy.
+- `dy=2`: 9 offsets (directly above head + 8 diagonal above) — catches bot stuck under leaf ceiling.
+
+Total scan: 16 → 34 offsets. Same allowlist (PLANT_LIKE_PATTERN, TREE_PART_PATTERN, MOVEMENT_BLOCKING_PLANTS — shipped `d051ab1`). Same zone-aware branching — leaves/plants/movement-blockers OK to break in spawn zone; logs/wood/structural tree parts still skipped. Same blacklist cooldown (30s per failed dig).
+
+**Why this is the surgical fix.**
+- Reactive, not proactive — only fires when pathfinder already reports stuck. Can't chew leaves during normal travel.
+- Reuses the existing allowlist shipped in `d051ab1` — zero new classification code.
+- Complementary to the `d051ab1` layer, which already allows leaves; this just extends the scan geometry.
+- Alternative considered: pathfinder-level `canDig=true` + `safeToBreak` override inside spawn zone. Rejected as higher blast radius — pathfinder would proactively plan leaf-chewing paths during normal in-zone travel, not just when stuck.
+
+**Files.**
+- `src/agent/library/skills.js` — `_impl_autoBreakStuckPlant` offsets array only.
+
+**Guardrails.**
+- `SOLID_GROUND_BLOCKS.has()` hard-skip already covers the "bot standing on dirt" case — dy=-1 to a grass_block / dirt / stone returns before the plant-check.
+- Existing per-block 30s blacklist unchanged — failed-dig retries still throttled.
+- Zone-aware logic (tree-part inside zone → skip) unchanged.
+
+**Rule 7 audit.** Scope is a single offsets array inside a single function. No new sites, no cross-module fan-out.
+
+**Success signal.** Next tree-canopy spawn: `[AutoBreakPlant] Breaking movement-blocking oak_leaves inside spawn zone at (x, y-1, z)` → bot falls → scan repeats if still inside canopy → bot lands at ground level → escape-zone hops resume normally.
 
 
 ## Shipped — awaiting live verification
