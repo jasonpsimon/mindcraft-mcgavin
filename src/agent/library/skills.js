@@ -2164,6 +2164,86 @@ function _installSpawnEscapeInstrumentation(bot) {
     // #28 re-fire state — debounce + cooldown so bursts don't spam escape calls.
     let _fmReFireScheduled = false;
     let _fmLastReFireMs = 0;
+
+    // #22b NaN-position suffocation recovery state.
+    // Why: BT-22's pre-move guard rejects solid TARGETS, but a hitbox already
+    // wedged in solids (mob shove, fall into pocket, pathfinder glitch) reads
+    // as `source:unknown pos:null` for ~13s before the bot dies. We detect
+    // the NaN-position-during-health-drop signature and intervene.
+    let _suffocLastGoodPos = null;
+    let _suffocFirstTickMs = 0;
+    let _suffocTickCount = 0;
+    let _suffocStageARan = false;
+    let _suffocStageBRan = false;
+    let _suffocJumpTimer = null;
+
+    const _suffocReset = (reason) => {
+        if (_suffocTickCount > 0 || _suffocStageARan || _suffocStageBRan) {
+            console.log(`[SuffocationRecovery] reset (${reason})`);
+        }
+        _suffocFirstTickMs = 0;
+        _suffocTickCount = 0;
+        _suffocStageARan = false;
+        _suffocStageBRan = false;
+        if (_suffocJumpTimer) {
+            clearInterval(_suffocJumpTimer);
+            _suffocJumpTimer = null;
+        }
+    };
+
+    const _suffocStageA = () => {
+        _suffocStageARan = true;
+        console.log('[SuffocationRecovery] stage_a — cancelling pathfinder + jump-spam 2s');
+        try {
+            if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
+                bot.pathfinder.setGoal(null);
+            }
+            if (bot.pathfinder && typeof bot.pathfinder.stop === 'function') {
+                bot.pathfinder.stop();
+            }
+        } catch (err) {
+            console.warn(`[SuffocationRecovery] pathfinder stop failed: ${err && err.message ? err.message : err}`);
+        }
+        try { if (typeof bot.clearControlStates === 'function') bot.clearControlStates(); } catch (_) {}
+        let pulses = 0;
+        _suffocJumpTimer = setInterval(() => {
+            pulses++;
+            try {
+                bot.setControlState('jump', true);
+                setTimeout(() => { try { bot.setControlState('jump', false); } catch (_) {} }, 100);
+            } catch (_) {}
+            if (pulses >= 8) {
+                clearInterval(_suffocJumpTimer);
+                _suffocJumpTimer = null;
+            }
+        }, 250);
+    };
+
+    const _suffocStageB = () => {
+        _suffocStageBRan = true;
+        const lgp = _suffocLastGoodPos
+            ? `(${_suffocLastGoodPos.x.toFixed(1)}, ${_suffocLastGoodPos.y.toFixed(1)}, ${_suffocLastGoodPos.z.toFixed(1)})`
+            : '(unknown)';
+        console.log(`[SuffocationRecovery] stage_b — self-kill via /kill (last good pos: ${lgp})`);
+        try {
+            bot.chat('/kill');
+        } catch (err) {
+            console.warn(`[SuffocationRecovery] /kill chat failed: ${err && err.message ? err.message : err}`);
+        }
+    };
+
+    const _suffocSamplePos = () => {
+        const pp = bot.entity?.position;
+        if (pp && Number.isFinite(pp.x) && Number.isFinite(pp.y) && Number.isFinite(pp.z)) {
+            // Only update if meaningfully different (avoid object churn each tick).
+            if (!_suffocLastGoodPos
+                || Math.abs(_suffocLastGoodPos.x - pp.x) > 0.5
+                || Math.abs(_suffocLastGoodPos.y - pp.y) > 0.5
+                || Math.abs(_suffocLastGoodPos.z - pp.z) > 0.5) {
+                _suffocLastGoodPos = { x: pp.x, y: pp.y, z: pp.z };
+            }
+        }
+    };
     bot.on('forcedMove', () => {
         const p = bot.entity?.position;
         const now = Date.now();
@@ -2222,6 +2302,9 @@ function _installSpawnEscapeInstrumentation(bot) {
 
     bot.on('respawn', () => {
         console.log(`[SpawnEscape][EVENT] respawn (health=${bot.health}, food=${bot.food}) at ${posStr()}`);
+        // #22b reset: respawn clears any pending suffocation recovery state.
+        _suffocReset('respawn');
+        _suffocLastGoodPos = null;
     });
 
     bot.on('death', () => {
@@ -2231,11 +2314,51 @@ function _installSpawnEscapeInstrumentation(bot) {
     bot.on('health', () => {
         // Only log damage events, not heals
         if (typeof bot._lastHealthLogged !== 'number') bot._lastHealthLogged = bot.health;
-        if (bot.health < bot._lastHealthLogged) {
+        const dropped = bot.health < bot._lastHealthLogged;
+        if (dropped) {
             console.log(`[SpawnEscape][EVENT] health drop ${bot._lastHealthLogged.toFixed(1)} → ${bot.health.toFixed(1)} at ${posStr()}`);
         }
+
+        // #22b suffocation detector. The signature: health drop while
+        // bot.entity.position is non-finite (NaN window). Damage classifier
+        // also loses pos in this state so the source reads as "unknown" —
+        // a NaN-position drop is an unambiguous hitbox-in-solids signal.
+        if (dropped) {
+            const pp = bot.entity?.position;
+            const naN = !pp || !Number.isFinite(pp.x) || !Number.isFinite(pp.y) || !Number.isFinite(pp.z);
+            if (naN && bot.health > 0) {
+                const now = Date.now();
+                if (_suffocTickCount === 0) {
+                    _suffocFirstTickMs = now;
+                    console.log('[SuffocationRecovery] detected — NaN-position health drop (tick 1)');
+                }
+                _suffocTickCount++;
+                const elapsedMs = now - _suffocFirstTickMs;
+
+                // Stage A: ≥3 NaN-drops within 2s, stage A not yet run.
+                if (!_suffocStageARan && _suffocTickCount >= 3 && elapsedMs <= 2000) {
+                    _suffocStageA();
+                }
+
+                // Stage B: stage A ran AND NaN damage persists ≥3s from first tick.
+                if (_suffocStageARan && !_suffocStageBRan && elapsedMs >= 3000) {
+                    _suffocStageB();
+                }
+            } else if (!naN && (_suffocTickCount > 0 || _suffocStageARan)) {
+                // Position is finite again — either stage A worked or natural recovery.
+                console.log('[SuffocationRecovery] recovered — position finite, health stable enough to log');
+                _suffocReset('position_finite');
+            }
+        }
+
+        // Sample last-good pos opportunistically on every health tick (cheap).
+        _suffocSamplePos();
         bot._lastHealthLogged = bot.health;
     });
+
+    // Cheap position sampler at physics tick rate — keeps _suffocLastGoodPos
+    // fresh without a custom interval. Idempotent via _spawnEscapeInstrumented set.
+    bot.on('physicsTick', _suffocSamplePos);
 
     // Chat-style server messages — filter for teleport/kick/setblock keywords
     bot.on('message', (jsonMsg) => {
@@ -2245,7 +2368,7 @@ function _installSpawnEscapeInstrumentation(bot) {
         }
     });
 
-    console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners; #28 in-zone re-fire enabled)');
+    console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners; #28 in-zone re-fire enabled; #22b NaN-suffocation recovery enabled)');
 }
 
 // -----------------------------------------------------------------------------
