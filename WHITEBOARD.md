@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `4788f5f` on `origin/develop`. **In-progress:** #24 — self-prompter yields to queued player chat before its next self-prompt. Closes the "player chat invisible to a stuck bot" failure observed live 2026-04-17 (`!addRule` chat received but never acted on; LLM pattern-completed past it). Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`) — all awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `0b2e0df` on `origin/develop`. **Shipped today:** #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), #22b NaN-position suffocation recovery (`d921016`), #23 self-prompter held-state back-off (`933ee16`), and #24 player-chat yield before self-prompt (`0b2e0df`). #23 + #24 together close the self-prompter loop-awareness gap: the loop no longer walks into STOPPED during NaN windows (#23) and no longer lets a stuck command pattern roll past fresh player chat (#24). Five BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,34 +66,38 @@ _Last updated: 2026-04-19. HEAD `4788f5f` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### 24. Self-prompter doesn't interrupt stuck loops for player chat
-
-**Status:** in-progress (code phase) • **Priority:** high (player-chat-invisible failure observed live 2026-04-17)
-
-**Problem.** `SelfPrompter.startLoop` drains `_playerMsgQueue` AFTER each LLM round-trip. So when a player sends chat mid-generation (or during the cooldown sleep), the LLM that just generated `!digDown` has zero visibility into what they said relative to what it was already doing. Pattern-completion wins: stuck dig-loop continues, player message drained as a separate `handleMessage` call but the goal-state LLM is the one that already decided. On 2026-04-17 ≈19:00Z this killed `!addRule(...)` chat in a `!digDown(10)` loop — message received in tmux, never acted on, zero `[PersistentRule]` logs.
-
-**Approach.** Add a top-of-loop drain (after the #23 ChunkWait gate, before persistent-rules check). If `_playerMsgQueue` has anything, drain it via `handleMessage(username, msg)` BEFORE building the next self-prompt. Each player message gets a dedicated LLM turn with `source=username` (not `'system'`). Reset `no_command_count` and `_consecutiveNoProgress` after draining so player turns don't walk us toward the circuit-breaker. `continue` to skip the self-prompt this tick.
-
-**Files.**
-- `src/agent/self_prompter.js` — top-of-loop drain block in `startLoop` while-body.
-
-**What this does NOT change.**
-- Existing bottom-of-loop drain stays — catches messages that arrive during the LLM self-prompt round-trip itself.
-- `agent.js` untouched — `_playerMsgQueue` and `_processingPlayerMsg` flag already exist.
-- No chat-aware prompt prefix (deferred unless verify shows it's needed). Player message becomes its own history entry; LLM should see it on next self-prompt naturally.
-- No stuck-loop detection (#10 territory).
-
-**Guardrails.**
-- Re-entry gated by existing `_processingPlayerMsg` flag (also used by bottom drain).
-- Optional chaining (`this.agent._playerMsgQueue?.length`) keeps the check safe before agent finishes init.
-- Counter reset after drain prevents the player-chat path from feeding into #23's circuit-breaker concern.
-
-**Rule 7 audit.** Single site (top of `startLoop` while-body, just after #23 ChunkWait gate). All downstream LLM calls in this loop sit under it. Player-chat handlers OUTSIDE this loop (the immediate-response path in `agent.js:respondFunc`) are unchanged — they were never the bug.
-
-**Success signal.** Bot in a repeating `!digDown` failure pattern; player sends `!addRule(...)`. Expect `[SelfPrompter] yielding to player message from <user>` → `!addRule` executes → `[PersistentRule] Added rule #1 …` → next self-prompt-generated command happens AFTER, not before.
+_(empty — #24 shipped `0b2e0df`; five BTs shipped today all awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### 24. Self-prompter yields to queued player chat before next self-prompt (`0b2e0df`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs a natural stuck-command pattern + concurrent player chat to fire; can also be smoke-tested by JP sending chat during any active self-prompt goal)
+
+**Change.** Added a top-of-loop drain block in `SelfPrompter.startLoop` (src/agent/self_prompter.js), positioned after the #23 ChunkWait gate and before the persistent-rules check. If `_playerMsgQueue` has anything, each message is drained via `handleMessage(username, msg)` in sequence — each gets a dedicated LLM turn with `source=username` rather than `'system'`. After draining, `no_command_count` and `_consecutiveNoProgress` are reset and the loop `continue`s (skipping the self-prompt this tick). Log: `[SelfPrompter] yielding to player message from <user>`. Re-entry is guarded by the existing `_processingPlayerMsg` flag.
+
+**Why this closes the gap.** Before this change, `_playerMsgQueue` was drained AFTER the self-prompt LLM call. So when a player spoke mid-generation (or during the cooldown sleep), the in-flight LLM had zero visibility into what they said relative to the stuck pattern it was already pattern-completing. Net effect on 2026-04-17 ≈19:00Z: bot was in `!digDown(10)` → "dangerous drop ahead, 0 blocks dug" loop; JP sent `!addRule(...)` chat via `Bones_McGavin`; chat received in tmux but never acted on, zero `[PersistentRule]` logs, `memory.json persistent_rules: []` after the save. With top-of-loop drain, the rule message would have been the NEXT LLM turn (as a player message, not a system self-prompt), the LLM would have executed `!addRule`, and the rule would have been added before any new dig-down ran.
+
+**Guardrails.**
+- Optional chaining (`this.agent._playerMsgQueue?.length`) safe if queue isn't initialized yet.
+- `_processingPlayerMsg` flag prevents re-entry if the bottom drain is still running.
+- Counter resets prevent any cascade into #23's circuit-breaker STOPPED-with-null-self_prompt path — player turns are first-class, not just noise to be counted against the self-prompt.
+- Existing bottom-of-loop drain kept as a safety net for messages that arrive during the LLM self-prompt round-trip itself. Both drains shift the same queue; no double-processing.
+
+**Rule 7 audit.** Single site (top of `startLoop` while-body, immediately after the #23 gate's "hold released" log block). All downstream LLM calls in this loop (persistent-rules check, self-prompt `handleMessage`, no-command counter) sit under it. Player-chat handlers OUTSIDE this loop (`agent.js:respondFunc` immediate-response path and the queuing path when `prompter.awaiting_response`) are intentionally unchanged — those were never the bug.
+
+**Verification signals to watch.**
+- Next time JP sends chat while self-prompter is ACTIVE mid-goal: `[SelfPrompter] yielding to player message from Bones_McGavin` in tmux before any new self-prompt LLM call.
+- `!addRule` / `!goal` / player-requested command actually appears in the rotated history file AND executes (look for `[PersistentRule]` / `[Goal]` logs).
+- No `[Goal] event=end ... reason=circuit_breaker` fires from player-chat-only turns — counters reset correctly.
+
+**Companion ship.** #23 (`933ee16`) closed the goal-loss path during NaN windows. #24 closes the player-ignored path during stuck-command patterns. Together the self-prompter loop now: (a) backs off when it has nothing actionable to say, (b) yields cleanly when the player has something to say, (c) keeps counters sane so neither path walks into the circuit-breaker.
+
+**Deferred (may promote later).**
+- Chat-aware prompt prefix ("A player just said: X — address it before continuing."). Probably unnecessary — player message is already in history as its own turn. Revisit only if verify shows LLM still pattern-completes past the player turn on stuck goals.
+- Stuck-loop detection (same command N times in a row). Different bug class — belongs with #10 survival hardening.
+
 
 ### 23. Self-prompter held-state back-off during ChunkWait/NaN windows (`933ee16`, 2026-04-19)
 
