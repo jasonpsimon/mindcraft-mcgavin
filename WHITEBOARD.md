@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD on `origin/develop`. **In-progress: #22 escapeProtectedZone suffocation trap** — adding pre-move passability check inside `_escapeTryPath` so every hop (cached-exit, dir-hop, stuck-back, stuck-sidestep) rejects targets whose feet+head blocks are solid. 5 lethal unknown-source deaths today at 15:35–15:44Z confirm the failure pattern. Prior: filed **#27 legacy memory.json residue** under ⏳ (low-priority cleanup — D1 stopped writing the 500-char summary field but never wiped the already-persisted value; it rides along every save under ContextBuilder). Prior ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
+_Last updated: 2026-04-19. HEAD `8c2b6fe` on `origin/develop`. **Shipped #22 escapeProtectedZone suffocation trap** — pre-move passability guard added inside `_escapeTryPath` (single commit point; Rule 7 perimeter closed across all 4 callers). Awaiting live verification: next natural escape event should emit `[EscapeZone]` log lines; success = no more unknown-source 2-dmg/tick suffocation. Prior in-progress blurb kept below for history-on-disk. — adding pre-move passability check inside `_escapeTryPath` so every hop (cached-exit, dir-hop, stuck-back, stuck-sidestep) rejects targets whose feet+head blocks are solid. 5 lethal unknown-source deaths today at 15:35–15:44Z confirm the failure pattern. Prior: filed **#27 legacy memory.json residue** under ⏳ (low-priority cleanup — D1 stopped writing the 500-char summary field but never wiped the already-persisted value; it rides along every save under ContextBuilder). Prior ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
 
 ---
 
@@ -66,22 +66,24 @@ _Last updated: 2026-04-19. HEAD on `origin/develop`. **In-progress: #22 escapePr
 
 ## In-progress
 
-### 22. `escapeProtectedZone` suffocation trap — pre-move passability check
-
-**Status:** in-progress (code phase) • **Priority:** high (direct death cause — 5 lethal events today 2026-04-19 15:35–15:44Z)
-
-**Evidence refresh (this session).** `damage-stream.jsonl` shows 476 `source:"unknown"` events total; 5 lethal unknown-source sequences today alone (15:35:49, 15:36:07, 15:37:06, 15:39:02, 15:44:58Z) with the exact 2-dmg/tick suffocation signature (`source=unknown, pos=null, food≥17`). At 15:44:57–58Z state-stream shows `held:true reason:chunk_wait`; one tick later pathfinder resumes with `mutex.holder: "escapeProtectedZone"` heading to `(-7, 91, -64)` from `(-34.5, 91, -35.5)` — a Y=91-to-Y=91 hop through uneven terrain that put the bot's hitbox inside a block.
-
-**Approach.** Pre-move passability guard inside `_escapeTryPath` (single commit point, Rule 7 perimeter closed for all 4 callers: cached-exit, dir-hop, stuck-back, stuck-sidestep). For each candidate `(tx, ty, tz)`: read `bot.blockAt` at feet + head. If both are known-air, commit. If either is known-solid, try Y-adjustments ±1, ±2, ±3. If nothing passable, skip the hop with a `[EscapeZone]` log line and let the caller's stuck maneuver / next-direction logic fire. Null `bot.blockAt` (unloaded chunk) defers to pathfinder as today — we only reject KNOWN-unsafe targets.
-
-**Files.**
-- `src/agent/library/skills.js` — `_escapeTryPath` (add guard + Y-adjust loop).
-
-**Rule 7 audit (to include in commit message).** `grep -nE '_escapeTryPath' src/agent/library/skills.js` — 4 callers, all now covered via the single guard inside `_escapeTryPath`.
+_(empty — #22 shipped `8c2b6fe`; awaiting live verification on next natural escape event.)_
 
 
 
 ## Shipped — awaiting live verification
+
+### 22. `escapeProtectedZone` suffocation trap — pre-move passability guard (`8c2b6fe`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification**
+
+**Change.** Two helpers (`_isTargetPassable`, `_findPassableY`) + a guard block at the top of `_escapeTryPath` in `src/agent/library/skills.js`. Before committing `GoalNear`, check feet+head blocks at the target; if both known-solid, try Y offsets `[0, -1, +1, -2, +2, -3, +3]`. If nothing passable in ±3, log `[EscapeZone] <label>: target ... rejected` and return so the caller's stuck/next-direction logic fires. Unknown (unloaded-chunk) blocks return `null` and defer to pathfinder — we only reject KNOWN-solid targets, preserving all currently-working paths.
+
+**Rule 7 perimeter.** One guard, four callers: cached-exit (`_impl_escapeSpawnZone`), dir-hop (`_commitToDirection`), stuck-back + stuck-sidestep (`_executeStuckManeuver`). `grep -nE '_escapeTryPath' src/agent/library/skills.js` → 4 callers, all covered.
+
+**Evidence that motivated the fix.** 5 lethal unknown-source 2-dmg/tick suffocation sequences on 2026-04-19 between 15:35:49–15:44:58Z. At 15:44:57–58Z: `held:true reason:chunk_wait` → next tick `mutex.holder:"escapeProtectedZone"` heading `(-34.5, 91, -35.5)` → `(-7, 91, -64)`. Y=91 hop through uneven terrain deposited the hitbox inside solid material.
+
+**Verification signal to watch.** After next natural escape event: `[EscapeZone]` log lines in tmux, zero `source:"unknown"` lethal sequences in `data/damage-stream.jsonl`. Guard currently idle because bot spawned outside the protected zone.
+
 
 Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
 
