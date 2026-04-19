@@ -202,6 +202,36 @@ export class SelfPrompter {
                 this._heldLogged = false;
             }
 
+            // #24 Player-chat yield — drain queued player messages BEFORE
+            // the next self-prompt. Why: the existing bottom-of-loop drain
+            // runs AFTER the LLM has already pattern-completed its self-
+            // prompt response, so a player message that arrived during the
+            // round-trip can't influence the in-flight decision — the bot
+            // continues its stuck pattern and the player feels ignored
+            // (observed live 2026-04-17 with !addRule chat). Draining at
+            // the top gives each player message a dedicated LLM turn with
+            // source=username (not 'system') before any new self-prompt.
+            // Reset circuit-breaker counters so player turns can't cascade
+            // into the #23 STOPPED-with-null-self_prompt path.
+            if (this.agent._playerMsgQueue?.length > 0 && !this.agent._processingPlayerMsg) {
+                this.agent._processingPlayerMsg = true;
+                let drained = 0;
+                while (this.agent._playerMsgQueue.length > 0) {
+                    const { username, message } = this.agent._playerMsgQueue.shift();
+                    console.log(`[SelfPrompter] yielding to player message from ${username}`);
+                    await this.agent.handleMessage(username, message);
+                    drained++;
+                }
+                this.agent._processingPlayerMsg = false;
+                if (drained > 0) {
+                    no_command_count = 0;
+                    this._consecutiveNoProgress = 0;
+                    this.cooldown = this.baseCooldown;
+                    await new Promise(r => setTimeout(r, this.cooldown));
+                    continue;
+                }
+            }
+
             // --- Check persistent rules between iterations ---
             if (this.persistentRules.length > 0) {
                 await this.checkPersistentRules();
