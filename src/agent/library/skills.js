@@ -848,6 +848,12 @@ async function _impl_placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontC
      * await skills.placeBlock(bot, "oak_log", p.x + 2, p.y, p.x);
      * await skills.placeBlock(bot, "torch", p.x + 1, p.y, p.x, 'side');
      **/
+    // BT-7b (2026-04-19): mark intent so placement_tracker can distinguish
+    // LLM-driven !placeBlock calls (intentional — never cleaned up) from
+    // pathfinder scaffolding / confusion placements (unknown-llm — eligible).
+    // Flag is cleared in finally to survive all return paths and any throw.
+    bot._placeIntent = 'intentional';
+    try {
     const placeZone = _isInAnyProtectedZone(bot, x, y, z);
     if (placeZone) {
         const label = placeZone.type === 'spawn' ? 'spawn' : `protected structure '${placeZone.name}'`;
@@ -1029,6 +1035,11 @@ async function _impl_placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontC
     } catch (err) {
         log(bot, `Failed to place ${blockType} at ${target_dest}.`);
         return false;
+    }
+    } finally {
+        // BT-7b: clear the intent flag on every exit path so the next
+        // blockPlaced event (if it wasn't ours) doesn't inherit it.
+        bot._placeIntent = null;
     }
 }
 

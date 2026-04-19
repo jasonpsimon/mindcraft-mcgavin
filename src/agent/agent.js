@@ -28,6 +28,7 @@ import { StateTicker } from '../observability/state_ticker.js';
 import { captureBootSnapshot } from '../observability/boot_snapshot.js';
 import { DamageStream } from '../observability/damage_stream.js';
 import { hookPathTelemetry, configurePathTelemetry } from '../observability/path_telemetry.js';
+import { hookPlacementTracker, configurePlacementTracker } from '../observability/placement_tracker.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -325,6 +326,21 @@ export class Agent {
                     }
                 } catch (ptErr) {
                     console.warn('[Path] failed to start:', ptErr.message);
+                }
+
+                // BT-7b (2026-04-19): placement tracker — mirrors PathTelemetry
+                // lifecycle. Idempotent via bot-reference gate; safe on soft
+                // reconnect. Must land BEFORE escapeProtectedZone so the escape
+                // walk is itself observable (scaffolding during escape is the
+                // most common confusion case).
+                try {
+                    const plSettings = settings.placement_tracker || {};
+                    configurePlacementTracker(plSettings);
+                    if (plSettings.enabled !== false) {
+                        hookPlacementTracker(this);
+                    }
+                } catch (plErr) {
+                    console.warn('[Placement] failed to start:', plErr.message);
                 }
 
                 // Vacate any protected zone before anything else happens.

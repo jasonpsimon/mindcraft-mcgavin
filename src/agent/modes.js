@@ -5,6 +5,9 @@ import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
 import { withBotLock } from './bot_mutex.js';
+// BT-7b: cleanup_blocks mode records each cleanup into the placement stream.
+import { recordCleanup } from '../observability/placement_tracker.js';
+import { Vec3 } from 'vec3';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -307,6 +310,83 @@ const modes_list = [
                 }
                 this.next_change = Date.now() + Math.random() * 10000 + 2000;
             }
+        }
+    },
+    {
+        // BT-7b (2026-04-19): self-cleanup of incidental block placements.
+        // Reads bot._placedBlocks (populated by placement_tracker module),
+        // breaks eligible entries one at a time when the bot is idle.
+        //
+        // Eligibility (all must hold):
+        //   - entry.purpose !== 'intentional'  (LLM !placeBlock never cleaned)
+        //   - age >= 30s                        (give the bot time to finish using it)
+        //   - distance(bot, block) > 5          (don't break what we might still be standing on)
+        //   - block at coord still matches entry.type (world may have already changed)
+        //
+        // interrupts:[] + no active-goal check in execute means this will NEVER
+        // preempt running work; the controller only invokes update() on idle modes.
+        name: 'cleanup_blocks',
+        description: 'When idle, break blocks the bot placed incidentally (scaffolding, LLM confusion).',
+        interrupts: [],
+        on: true,
+        active: false,
+        min_age_ms: 30 * 1000,
+        min_distance: 5,
+        update: async function (agent) {
+            const bot = agent.bot;
+            if (!Array.isArray(bot._placedBlocks) || bot._placedBlocks.length === 0) return;
+
+            const now = Date.now();
+            const bpos = bot.entity && bot.entity.position;
+            if (!bpos) return;
+
+            let target_idx = -1;
+            let target = null;
+            for (let i = 0; i < bot._placedBlocks.length; i++) {
+                const e = bot._placedBlocks[i];
+                if (!e || e.purpose === 'intentional') continue;
+                if (now - e.t < this.min_age_ms) continue;
+                const dx = bpos.x - (e.x + 0.5);
+                const dy = bpos.y - (e.y + 0.5);
+                const dz = bpos.z - (e.z + 0.5);
+                if ((dx*dx + dy*dy + dz*dz) <= (this.min_distance * this.min_distance)) continue;
+                target_idx = i;
+                target = e;
+                break;
+            }
+            if (target_idx === -1) return;
+
+            // Verify the block is still what we placed — the world may have changed.
+            try {
+                const blk = bot.blockAt(new Vec3(target.x, target.y, target.z));
+                if (!blk || blk.name !== target.type) {
+                    // Block no longer matches — forget about it silently.
+                    bot._placedBlocks.splice(target_idx, 1);
+                    recordCleanup({
+                        x: target.x, y: target.y, z: target.z,
+                        type: target.type, purpose: target.purpose,
+                        age_s: Math.floor((now - target.t) / 1000),
+                        ok: false,
+                    });
+                    return;
+                }
+            } catch (_) {
+                return; // chunk unloaded or lookup failed; try again next tick
+            }
+
+            execute(this, agent, async () => {
+                const age_s = Math.floor((now - target.t) / 1000);
+                const ok = await skills.breakBlockAt(bot, target.x, target.y, target.z);
+                // Always splice — either we broke it (ok) or the zone/perm blocked us
+                // (ok=false) and we don't want to retry the same block every tick.
+                const idx = bot._placedBlocks.indexOf(target);
+                if (idx !== -1) bot._placedBlocks.splice(idx, 1);
+                recordCleanup({
+                    x: target.x, y: target.y, z: target.z,
+                    type: target.type, purpose: target.purpose,
+                    age_s, ok: !!ok,
+                });
+            });
         }
     },
     {
