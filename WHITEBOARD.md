@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-18. HEAD `5f274f1` on `origin/develop`. Latest ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
+_Last updated: 2026-04-19. HEAD `022fbd6` on `origin/develop`. Filed **#27 legacy memory.json residue** under ⏳ (low-priority cleanup — D1 stopped writing the 500-char summary field but never wiped the already-persisted value; it rides along every save under ContextBuilder). Prior ship: **Self-prompter recoverable circuit-breaker** — 44-line additive fix to `src/agent/self_prompter.js` closing the "bot goes idle for hours after 3 consecutive no-command LLM responses" failure mode observed 2026-04-18. Introduces `stoppedReason` attribution (`'user'` vs `'circuitBreaker'`), emits `[Goal] event=end reason=circuit_breaker ms=<n>` on breaker trip, and adds a 3-minute watchdog in `update()` that auto-resumes with `[Goal] event=resume reason=circuit_breaker_watchdog` — user stops never auto-resume. Boot-verified; live circuit-breaker exercise deferred until the 3-no-command path naturally fires. **Observability migration phase fully closed** on 2026-04-17: BT-1 through BT-12, BT-bundle(a/b/c), BT-3b, and BT-7b all shipped same day — uniform `[Skill]` telemetry across 42 public skill exports, uniform `[LLM]` telemetry across every adapter in `src/models/*.js`. #26 phantom `self_defense` (shipped 2026-04-17, `df9b737`) is the first migration-discovered bug fix. See Recently completed for per-item detail._
 
 ---
 
@@ -379,6 +379,28 @@ Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and c
 **Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
 
 Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
+
+
+### 27. Legacy `memory.json` residue under ContextBuilder
+
+**Status:** ⏳ not started • **Priority:** low (cosmetic/forensic — no behavior impact)
+
+**Problem.** `bots/<profile>/memory.json` `memory` field still carries the legacy `"…(Memory truncated to 500 chars. Compress it more next time)"` residue tail. D1 (commit `7ee597e`) stopped the *producer* (`promptMemSaving()` skipped when `use_context_builder` is true) but never *cleared* what was already persisted. The string rides along in every `history.save()` forever — under CB-on there is no path that overwrites it.
+
+**Root cause.** D1 was a surgical producer-side skip. The consumer-side cleanup — wipe the persisted field on load when CB is on — was never shipped. Principle 5 violation we inherited quietly: migration finished the write path but left a read-path residue.
+
+**Solution sketch.** On `history.load()`, if `use_context_builder` is true, clear `memory` to empty string (or strip the legacy truncation marker). Alternatively a one-shot manual wipe across the active `memory.json` files. Producer-side skip is correct — this is consumer-side hygiene.
+
+**Files.**
+- `src/agent/history.js` — load path (conditional field clear under CB).
+- One-time wipe of `bots/*/memory.json` `memory` fields.
+
+**Blast radius.** Nil. Field is dead under CB — no caller reads it when ContextBuilder is active.
+
+**Success signal.** Fresh `memory.json` saves under CB show `"memory": ""` (or equivalent) instead of the frozen legacy snippet.
+
+**Philosophy alignment.** Principle 5 (finish migrations, kill redundancy). Rule 4 (root cause not symptom — the wipe closes the class, not just the instance).
+
 
 
 ---
