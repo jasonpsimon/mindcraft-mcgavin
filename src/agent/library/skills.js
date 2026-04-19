@@ -1961,12 +1961,34 @@ async function _impl_autoBreakStuckPlant(bot) {
         }
 
         const pos = bot.entity.position.floored();
-        // Cardinal + diagonal neighbors at feet and head level (8 around feet, 8 around head)
+        // Neighbors at four Y layers relative to the bot:
+        //   dy=-1 (below feet)  — catches bot standing on a tree canopy
+        //                          whose only escape is to break the leaves
+        //                          under it and drop (#29, motivated by the
+        //                          2026-04-19 tree-top spawn stranding).
+        //   dy= 0 (feet level)  — original 8 horizontal neighbors.
+        //   dy= 1 (head level)  — original 8 horizontal neighbors.
+        //   dy= 2 (above head)  — catches bot stuck under a low leaf ceiling.
+        // SOLID_GROUND_BLOCKS hard-skip covers the "standing on dirt" case
+        // so dy=-1 on a grass_block / dirt / stone returns before the
+        // plant-check. Zone-aware allowlist (shipped d051ab1) ensures
+        // structural tree parts (logs/wood) remain protected inside zones.
         const offsets = [
+            // Below feet (dy=-1) — including directly below (the block
+            // the bot is standing on).
+            [0, -1, 0],
+            [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1],
+            [1, -1, 1], [1, -1, -1], [-1, -1, 1], [-1, -1, -1],
+            // Feet level (dy=0).
             [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
             [1, 0, 1], [1, 0, -1], [-1, 0, 1], [-1, 0, -1],
+            // Head level (dy=1).
             [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
             [1, 1, 1], [1, 1, -1], [-1, 1, 1], [-1, 1, -1],
+            // Above head (dy=2) — including directly above.
+            [0, 2, 0],
+            [1, 2, 0], [-1, 2, 0], [0, 2, 1], [0, 2, -1],
+            [1, 2, 1], [1, 2, -1], [-1, 2, 1], [-1, 2, -1],
         ];
         for (const [dx, dy, dz] of offsets) {
             const p = pos.offset(dx, dy, dz);
