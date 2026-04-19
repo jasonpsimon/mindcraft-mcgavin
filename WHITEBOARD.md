@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `fcfb17b` on `origin/develop`. **In-progress:** OPT-H — remove `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (no collision box). Audit found `d1df31f` (2026-04-16) titled 'remove sugar_cane from MOVEMENT_BLOCKING_PLANTS' only updated a comment — the Set still contains `sugar_cane`. Closing the half-shipped fix. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `4f5141e` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), and OPT-H (`4f5141e`) — removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (no collision box; closing the half-shipped intent of `d1df31f` which only updated the comment). Eight BTs awaiting live verification; OPT-H is pure correctness (no live verify needed). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,29 +66,7 @@ _Last updated: 2026-04-19. HEAD `fcfb17b` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### OPT-H. Remove `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (half-shipped fix from `d1df31f`)
-
-**Status:** in-progress (code phase) • **Priority:** medium (correctness — sugar_cane has no collision box in modern Minecraft)
-
-**Problem.** `MOVEMENT_BLOCKING_PLANTS` Set in `src/agent/library/skills.js` (line 2263) lists `'sugar_cane'` with inline comment `// solid hitbox`. Both are wrong: sugar_cane has no collision box in 1.14+, the bot walks through it freely, and it never blocks movement.
-
-**History audit.** Commit `d1df31f` (2026-04-16) is titled `fix(skills): remove sugar_cane from MOVEMENT_BLOCKING_PLANTS — no collision box` but the diff only touched a docblock comment — the actual Set entry was left in place. No later commits modified `sugar_cane` in this file. The intended removal was half-shipped.
-
-**Fix.** Delete the `'sugar_cane',             // solid hitbox` line from the Set. Leave `PLANT_LIKE_PATTERN` regex (line 2248) alone — sugar_cane should still match plant-like detection elsewhere; it just shouldn't be in the movement-blocking allowlist.
-
-**Files.**
-- `src/agent/library/skills.js` — single-line removal in `MOVEMENT_BLOCKING_PLANTS` Set.
-
-**Blast radius.** One line. Only callers of `MOVEMENT_BLOCKING_PLANTS` are `_impl_autoBreakStuckPlant` (stuck-recovery scan around the bot, lines ~2342 + 2357). Removing means: when pathfinder reports stuck, the scan no longer treats sugar_cane as a candidate to break. Correct — the bot can never be stuck on sugar_cane in the first place because it has no collision.
-
-**Guardrails.**
-- No-op for the existing tree-part allowlist (sugar_cane was never in TREE_PART_PATTERN).
-- No-op for the spawn-zone breakable allowlist (sugar_cane wasn't a special case there either).
-- PLANT_LIKE_PATTERN regex still includes `sugar_cane` so other "is this a plant?" checks still classify it correctly.
-
-**Rule 7 audit.** Single-line deletion in single Set. No fan-out. Closes the half-shipped intent of `d1df31f` without re-opening any related debates.
-
-**Success signal.** No new logs expected on healthy paths — the only behavioral difference is `[AutoBreakPlant]` will no longer log `Breaking movement-blocking sugar_cane at (...)` because that case can no longer fire (the regex match in the scan still classifies it as a plant, but the `MOVEMENT_BLOCKING_PLANTS.has()` filter that gates the in-zone case now returns false). Outside spawn zone, sugar_cane was never a candidate to begin with.
+_(empty — OPT-H shipped `4f5141e`; eight BTs shipped today awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
@@ -611,6 +589,21 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### OPT-H. Removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (`4f5141e`, 2026-04-19)
+
+**Status:** ✅ completed (pure correctness — no live verification needed).
+
+**Change.** Single-line deletion in `src/agent/library/skills.js` `MOVEMENT_BLOCKING_PLANTS` Set. Closes the half-shipped intent of commit `d1df31f` (2026-04-16) which was titled "remove sugar_cane from MOVEMENT_BLOCKING_PLANTS — no collision box" but only updated a docblock comment, leaving the Set entry in place.
+
+**Why.** Sugar cane has no collision box in modern Minecraft (1.14+). The bot walks through it freely and it never blocks movement. The entry + `// solid hitbox` inline comment were both wrong.
+
+**Behavioral difference.** `autoBreakStuckPlant` scan inside spawn zone no longer treats `sugar_cane` as a candidate to break. Correct — the bot could never have been stuck on sugar_cane in the first place, so this branch could only ever fire as a false positive. Outside spawn zone, `sugar_cane` was never a breakable candidate anyway.
+
+**Preserved.** `PLANT_LIKE_PATTERN` regex (line 2248) still matches `sugar_cane` so any "is this a plant?" classifier path elsewhere still returns true for it.
+
+**Rule 7 audit.** Single-line deletion, single Set. No fan-out, no touch to dispatch or other plant-classification paths.
+
 
 ### 2026-04-18 — Self-prompter recoverable circuit-breaker + stop attribution + telemetry ✅
 
