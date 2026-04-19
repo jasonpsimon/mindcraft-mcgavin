@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `e47d489` on `origin/develop`. **In-progress:** BT-10a — lava avoidance reflex (sub-item of #10 survival hardening). Existing `self_preservation` only checks `block.name === 'lava'` under the bot; misses `bot.entity.isInLava` (swimming in lava with torso submerged but feet-block sampled as `air` due to lava-column geometry) and has no preemptive edge-detection. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`), BT-7b (`67d8d82`), BT-7f (`6c18197`). Ten items awaiting live verification; OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `3c31b78` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`), BT-7b (`67d8d82`), BT-7f (`6c18197`), and BT-10a (`3c31b78`) — lava avoidance reflex (sub-item of #10): `bot.entity.isInLava` short-circuit with continuous jump + forward-toward-non-lava + water-bucket attempt, plus preemptive step-back when idle and lava is XZ-adjacent. Eleven items awaiting live verification (eight prior BTs + BT-7b + BT-7f + BT-10a); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,53 +66,53 @@ _Last updated: 2026-04-19. HEAD `e47d489` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10a. Lava avoidance reflex (sub-item of #10 survival hardening)
-
-**Status:** in-progress (code phase) • **Priority:** high (single-mistake death risk — lava = instant fatal damage stream)
-
-**Problem.** Existing `self_preservation` mode has lava handling, but only checks `block.name === 'lava' || blockAbove.name === 'lava'` at `bot.entity.position`. Known gaps:
-1. **`bot.entity.isInLava` ignored.** Mineflayer sets this flag when the entity is submerged; it's the authoritative signal. Current logic misses cases where the bot's feet are in a flowing-lava column but the sampled feet-block resolves to `air` (bounding-box quirks).
-2. **No preemptive edge-detection.** Bot can be standing safely on stone with lava one block to the side; no reaction until it's already burning.
-3. **No continuous-escape control.** Placing water bucket is a one-shot execute() — if placement fails (protected zone, e.g.) the bot just stands in lava.
-
-**Design (extend existing `self_preservation` — do NOT create a new mode).**
-
-1. **Lava-escape branch (top priority).** Before the existing `block.name === 'lava'` check, short-circuit on `bot.entity.isInLava`:
-   - Hold `jump=true` continuously (lift out of lava column).
-   - Scan 4 cardinal XZ neighbors at feet level; find first non-lava, non-void block with air above. `setControlState('forward', true)` + `bot.lookAt(target)` toward it.
-   - Try water-bucket placement (existing code path) as parallel action.
-   - Log `[Survival] lava-escape dir=<N/S/E/W> has_water=<bool>` once per trigger (dedup on `bot._lavaEscapeActive` flag; clear on exit).
-2. **Preemptive edge check.** Add a step AFTER the lava/fire branch but before low-health retreat: if bot is NOT in lava but any of the 4 cardinal XZ neighbors at feet level is `lava`, and bot is idle / not pathfinding, call `skills.moveAway(bot, 2)`. One-shot via `execute()`.
-3. **Preserve existing behavior.** Keep water-bucket branch and `blockAbove === 'lava'` branch intact — they still cover surface-splash and ceiling-drip cases.
-
-**Files.**
-- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. Add two new branches before the existing lava branch; no imports needed (Vec3 already imported via BT-7f).
-
-**Blast radius.**
-- Zero outside `self_preservation` mode. Mode already `interrupts:['all']` so combat/pathing yields correctly.
-- No new module, no new hook, no new stream. Just a smarter reflex.
-- Bot has `_lavaEscapeActive` guard flag so the "lava-escape" log line fires once per episode, not 20 Hz.
-
-**Guardrails.**
-- Escape branch uses `setControlState`, not `pathfinder.setGoal` — direct motor control only, no goal mutation.
-- Scan skips any neighbor whose block-above isn't air (can't step into a 1-block gap with a ceiling).
-- Edge-check only fires when `agent.isIdle()` to avoid preempting active work the user asked for.
-- `bot._lavaEscapeActive` cleared on tick where `!bot.entity.isInLava`.
-
-**Rule 7 audit.** Single perimeter for this change: `self_preservation.update()`. No fan-out. Does not touch pathfinder, combat, or any other mode.
-
-**Skip (explicit).**
-- Pathfinder cost-penalty for lava (that's a separate #10 sub-item — `Movements` tuning).
-- Magma-block damage avoidance (needs different heuristic; out of scope for BT-10a).
-- Memory-of-prior-lava-deaths (long-term #10 item).
-
-**Success signal (live verification).**
-- Bot accidentally steps into lava → `[Survival] lava-escape` log fires, bot jumps out, lava damage stops.
-- Bot stands adjacent to lava while idle → `[Survival] lava-adjacent moving away` log + bot steps away.
-- Bot takes mild lava-splash damage → existing branch still fires (regression check).
+_(empty — BT-10a shipped `3c31b78`; eleven items awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### BT-10a. Lava avoidance reflex (`3c31b78`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot to step into lava OR stand adjacent to a lava tile while idle; then observe the escape log + motor behavior)
+
+**What shipped.** Single-site enhancement to `self_preservation` mode in `src/agent/modes.js`. Three new code paths, all gated inside the existing `update()` body; zero new imports, no new module, no other file touched.
+
+**1. Primary lava-escape branch (`bot.entity.isInLava`).** Short-circuits BEFORE the existing `block.name === 'lava'` branch. On first entry:
+- Sets `bot._lavaEscapeActive` latch (dedup for the log line).
+- Scans 4 cardinals at feet level (`position.offset(±1, 0, 0)` and `±z`); picks first neighbor whose feet-block is NOT `lava/fire/void_air` AND whose head-block is `air/cave_air`.
+- Logs `[Survival] lava-escape dir=<N/S/E/W|none> has_water=<bool>`.
+- `say(agent, 'Lava! Getting out!')`.
+- `bot.lookAt(target, true)` toward chosen direction.
+Every tick while submerged: `setControlState('jump', true)` + `setControlState('forward', true)`. Parallel: `execute()` to `skills.placeBlock(bot, 'water_bucket', ...)` if inventory has one, with try/catch so placement failure doesn't block the motor escape.
+
+**2. Preemptive edge-detect.** After the existing lava/fire branch closes, a new branch fires only when `agent.isIdle() && !bot._lavaEdgeBackoffActive`. Checks 4 XZ cardinals at feet level for `lava` or `fire` names; if found:
+- Sets `_lavaEdgeBackoffActive` latch (clears in the execute() cleanup).
+- Logs `[Survival] lava-adjacent moving away`.
+- `say(agent, 'Too close to lava — backing up.')`.
+- `execute(this, agent, async () => { await skills.moveAway(bot, 2); })`.
+
+**3. Latch cleanup.** The idle branch at the bottom of `update()` now clears `_lavaEscapeActive` when `!bot.entity.isInLava` so future lava episodes trigger the log fresh.
+
+**Blast radius.**
+- One file, one mode, one `update()` function. No touch to pathfinder, combat, other modes, or skills.js.
+- Mode was already `interrupts:['all']` so combat/pathing yields to lava-escape automatically.
+- Existing lava/fire branches preserved verbatim for the surface-splash and ceiling-drip cases.
+
+**Verification signals to watch.**
+- **isInLava trigger:** bot falls into a lava column → `[Survival] lava-escape dir=<X> has_water=<bool>` line appears in stdout; bot jumps, faces chosen direction, walks out. Log fires once per episode (not per tick).
+- **Edge-detect trigger:** bot stands idle with lava in an adjacent block → `[Survival] lava-adjacent moving away` fires, bot moves 2 blocks away.
+- **Existing behavior preserved:** bot takes a lava-splash on the head (no `isInLava`) → `I'm on fire!` say + water-bucket/moveAway path still runs.
+- **Latch reset:** after escape, bot idles on safe ground → `_lavaEscapeActive` clears (verifiable on next lava entry, log fires again).
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No parallel sites, no fan-out. Sole state introduced lives on the bot: `_lavaEscapeActive` + `_lavaEdgeBackoffActive`, both owned by this mode.
+
+**Skip (explicit).**
+- Pathfinder `Movements` cost-penalty for lava (separate #10 sub-item).
+- Magma-block damage reflex (different heuristic — non-burning contact damage).
+- Memory of prior lava-death locations (long-term #10 item; needs persistence design).
+
+**Companion gap (deferred).** Water-bucket placement inside the escape branch still respects the existing `skills.placeBlock` zone-guard — inside spawn protection the placement will no-op silently. Motor escape (jump + forward) runs regardless, so the bot still gets out; it just doesn't get the free water-cooling effect. Acceptable.
+
 
 ### BT-7f. Close doors/fence gates the bot opened (`6c18197`, 2026-04-19)
 
