@@ -59,6 +59,64 @@ const modes_list = [
                     await skills.moveAway(bot, 2);
                 });
             }
+            // BT-10a (2026-04-19): primary lava reflex — `bot.entity.isInLava`
+            // is the authoritative signal from mineflayer. Catches flowing-lava
+            // columns where the feet-block resolves to `air` due to bounding-box
+            // geometry. Hold jump, step toward the first non-lava cardinal
+            // neighbor, and parallel-attempt water-bucket placement. Dedup the
+            // log via `bot._lavaEscapeActive` so the line fires once per episode.
+            else if (bot.entity.isInLava) {
+                if (!bot._lavaEscapeActive) {
+                    bot._lavaEscapeActive = true;
+                    const hasWater = !!bot.inventory.findInventoryItem('water_bucket');
+                    // Scan 4 cardinals at feet level for an escape tile.
+                    const dirs = [
+                        { dx: 1,  dz: 0,  name: 'E' },
+                        { dx: -1, dz: 0,  name: 'W' },
+                        { dx: 0,  dz: 1,  name: 'S' },
+                        { dx: 0,  dz: -1, name: 'N' },
+                    ];
+                    let chosen = null;
+                    for (const d of dirs) {
+                        try {
+                            const feet = bot.blockAt(bot.entity.position.offset(d.dx, 0, d.dz));
+                            const head = bot.blockAt(bot.entity.position.offset(d.dx, 1, d.dz));
+                            if (!feet || !head) continue;
+                            if (feet.name === 'lava' || feet.name === 'fire' || feet.name === 'void_air') continue;
+                            // Need an air (or walkable) head and a non-passable feet-block to stand on,
+                            // OR a non-lava feet tile we can scramble into.
+                            if (head.name === 'air' || head.name === 'cave_air') {
+                                chosen = d;
+                                break;
+                            }
+                        } catch (_) { /* ignore */ }
+                    }
+                    console.log(`[Survival] lava-escape dir=${chosen ? chosen.name : 'none'} has_water=${hasWater}`);
+                    say(agent, 'Lava! Getting out!');
+                    if (chosen) {
+                        try {
+                            const tgt = bot.entity.position.offset(chosen.dx, 0, chosen.dz);
+                            bot.lookAt(tgt, true).catch(() => {});
+                        } catch (_) { /* ignore */ }
+                    }
+                }
+                // Every tick while submerged: continuous jump + forward toward chosen dir.
+                bot.setControlState('jump', true);
+                bot.setControlState('forward', true);
+                // Parallel: try water bucket once (execute() wrapper handles re-entry guard).
+                const waterBucket = bot.inventory.findInventoryItem('water_bucket');
+                if (waterBucket) {
+                    execute(this, agent, async () => {
+                        const wb = bot.inventory.findInventoryItem('water_bucket');
+                        if (!wb) return;
+                        try {
+                            const success = await skills.placeBlock(bot, 'water_bucket',
+                                block.position.x, block.position.y, block.position.z);
+                            if (success) say(agent, 'Water placed, cooling off!');
+                        } catch (_) { /* ignore — we'll still be stepping out */ }
+                    });
+                }
+            }
             else if (block.name === 'lava' || block.name === 'fire' ||
                 blockAbove.name === 'lava' || blockAbove.name === 'fire') {
                 say(agent, 'I\'m on fire!');
@@ -89,6 +147,31 @@ const modes_list = [
                     });
                 }
             }
+            // BT-10a (2026-04-19): preemptive lava-adjacency step-back. Fires
+            // only when idle — don't preempt user-requested work. One-shot
+            // moveAway so we don't oscillate against pathfinder goals.
+            else if (agent.isIdle() && !bot._lavaEdgeBackoffActive) {
+                let lavaAdj = false;
+                try {
+                    const adj = [[1,0],[-1,0],[0,1],[0,-1]];
+                    for (const [dx, dz] of adj) {
+                        const nb = bot.blockAt(bot.entity.position.offset(dx, 0, dz));
+                        if (nb && (nb.name === 'lava' || nb.name === 'fire')) {
+                            lavaAdj = true;
+                            break;
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+                if (lavaAdj) {
+                    bot._lavaEdgeBackoffActive = true;
+                    console.log('[Survival] lava-adjacent moving away');
+                    say(agent, 'Too close to lava — backing up.');
+                    execute(this, agent, async () => {
+                        try { await skills.moveAway(bot, 2); } catch (_) { /* ignore */ }
+                        bot._lavaEdgeBackoffActive = false;
+                    });
+                }
+            }
             else if (Date.now() - bot.lastDamageTime < 3000 && (bot.health < 5 || bot.lastDamageTaken >= bot.health)) {
                 say(agent, 'I\'m dying!');
                 execute(this, agent, async () => {
@@ -96,6 +179,10 @@ const modes_list = [
                 });
             }
             else if (agent.isIdle()) {
+                // BT-10a: clear the lava-escape latch when we're out of lava.
+                if (bot._lavaEscapeActive && !bot.entity.isInLava) {
+                    bot._lavaEscapeActive = false;
+                }
                 bot.clearControlStates(); // clear jump if not in danger or doing anything else
             }
         }
