@@ -2260,7 +2260,6 @@ const TREE_PART_PATTERN = /(^|_)(log|wood|sapling|propagule|hyphae)$|^(bamboo_bl
 const MOVEMENT_BLOCKING_PLANTS = new Set([
     'sweet_berry_bush',       // solid hitbox + damages on contact
     'vine',                   // dense wall vines block pathing
-    'sugar_cane',             // solid hitbox
     'big_dripleaf',           // solid platform
     'mangrove_roots',         // solid hitbox, blocks movement
     'muddy_mangrove_roots',   // solid hitbox, blocks movement
