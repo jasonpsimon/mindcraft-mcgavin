@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `54a31b9` on `origin/develop`. **In-progress:** BT-10b — low-HP mob retreat (sub-item of #10 survival hardening, companion to BT-10a). Existing low-HP branch only fires within 3s of a damage event; doesn't cover the case where a hostile is chasing the bot but hasn't landed a hit yet, or where HP is critical and damage-cooldown elapsed. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a. Eleven items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `e633301` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b (`e633301`) — proactive low-HP mob retreat: `health<6` + hostile within 12 blocks → `moveAwayFromEntity` with hysteresis clear at HP≥14 or no-hostile. Twelve items awaiting live verification (eight prior BTs + BT-7b + BT-7f + BT-10a + BT-10b); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,61 +66,62 @@ _Last updated: 2026-04-19. HEAD `54a31b9` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10b. Low-HP mob retreat (sub-item of #10 survival hardening)
-
-**Status:** in-progress (code phase) • **Priority:** high (single-encounter death risk — bot can get run down by a chasing mob before a damage event lands, or burn through regen while mid-task)
-
-**Problem.** Existing low-HP branch in `self_preservation` only fires when:
-```js
-Date.now() - bot.lastDamageTime < 3000 && (bot.health < 5 || bot.lastDamageTaken >= bot.health)
-```
-Gaps:
-1. **Pre-damage chase.** Zombie horde bearing down on bot at HP=4; bot hasn't been hit in 3s because the mobs are just out of melee range — existing branch won't fire.
-2. **No hostile-directional retreat.** Current logic does `moveAway(bot, 20)` in a random safe direction; can retreat directly AT another mob.
-3. **No persistence.** One-shot retreat; if bot stops in open terrain and hostiles close again, no re-trigger until next hit.
-
-**Design (extend existing `self_preservation`).**
-
-1. **New branch placed AFTER the existing damage-based low-HP branch.**
-2. **Gate:** `bot.health < 6` AND `!bot._lowHpRetreatActive` AND a hostile exists within 12 blocks (via `world.getNearestEntityWhere(bot, mc.isHostile, 12)`).
-3. **Action:**
-   - Set `bot._lowHpRetreatActive = true` latch.
-   - Log `[Survival] low-hp-retreat hp=<X> hostile=<type> dist=<Y>`.
-   - `say(agent, 'Low HP — retreating!')`.
-   - `execute()` → compute retreat direction = bot.position minus hostile.position (normalized), scaled to 16 blocks; pass to `skills.moveAwayFromEntity(bot, hostile, 16)` if available, else `skills.moveAway(bot, 16)`.
-   - In the execute() cleanup, DO NOT clear the latch — leave it to a separate re-check branch.
-4. **Latch clear:** add a short pre-branch at the top of `update()`: if `bot._lowHpRetreatActive` AND (`bot.health >= 14` OR no hostile within 12 blocks), clear the latch. Log `[Survival] low-hp-retreat cleared hp=<X>`.
-
-**Files.**
-- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. Uses already-imported `mc.isHostile` and `world.getNearestEntityWhere`. No new imports.
-
-**Blast radius.**
-- One mode, one `update()` function. `interrupts:['all']` already set.
-- No touch to combat (`self_defense`), pathfinder, or any skill.
-- Latch on the bot (`_lowHpRetreatActive`) owned solely by this mode.
-- While latched, the branch won't re-fire even if HP drops further — but the existing `moveAway` execute() is already in flight, so we're not racing.
-
-**Guardrails.**
-- HP threshold of 6 (3 hearts) is aggressive but reflects the #10 spec. High enough to trigger before a single mob hit finishes the bot; low enough not to panic on minor damage during normal combat.
-- HP regen threshold of 14 (7 hearts) gives a clear hysteresis band so the bot doesn't oscillate.
-- Hostile-directional retreat (not random moveAway) is the main improvement over the existing branch — retreating toward safety, not sideways.
-- `mc.isHostile` explicitly excludes iron_golem / snow_golem so allied tamed mobs don't trigger retreat.
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No fan-out. No changes to combat mode, which continues to engage as usual at higher HP.
-
-**Skip (explicit).**
-- Separate "find shelter" behavior (tree/hill/safe-spot seek). That's #10 memory-based safe-pathing sub-item.
-- Eat-food-while-retreating (auto-eat already shipped; food handling belongs with the food/sleep loop item).
-- Ranged-attacker special case (that's a separate #10 sub-item — BT-10c candidate).
-
-**Success signal (live verification).**
-- Bot at HP<6 with a zombie within 12 blocks → `[Survival] low-hp-retreat hp=X hostile=zombie dist=Y` fires; bot moves 16 blocks AWAY from zombie.
-- After regen to HP≥14 OR hostile wanders off → `[Survival] low-hp-retreat cleared hp=X` fires; latch cleared; bot resumes normal work.
-- HP drops below 6 with no hostiles in range → branch does NOT fire (no retreat needed from environment).
-- Existing damage-based branch preserved — still fires under its original conditions.
+_(empty — BT-10b shipped `e633301`; twelve items awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### BT-10b. Proactive low-HP mob retreat (`e633301`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot at HP<6 with a hostile mob within 12 blocks; observe retreat log + directional movement away from hostile)
+
+**What shipped.** Two new code paths inside `self_preservation.update()` in `src/agent/modes.js`. Zero new imports (`mc.isHostile`, `world.getNearestEntityWhere`, `skills.moveAwayFromEntity` already available).
+
+**1. Latch-clear (top of update).** Runs before any other branch:
+```js
+if (bot._lowHpRetreatActive) {
+    const h = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
+    if (bot.health >= 14 || !h) {
+        console.log(`[Survival] low-hp-retreat cleared hp=${bot.health.toFixed(1)}`);
+        bot._lowHpRetreatActive = false;
+    }
+}
+```
+
+**2. Retreat trigger (after existing damage-based branch).** Fires when `bot.health < 6 && !bot._lowHpRetreatActive` AND a hostile is within 12 blocks. Sets the latch, logs `[Survival] low-hp-retreat hp=X hostile=<type> dist=Y`, says a retreat line in-chat, then `execute()` → `skills.moveAwayFromEntity(bot, target, 16)`.
+
+**Hysteresis design.**
+- **Set** at HP<6 (3 hearts) to catch pre-damage chase scenarios.
+- **Clear** at HP≥14 (7 hearts) OR no hostile in 12-block radius. Two-sided clear prevents oscillation: if we retreat and regen finishes the job, we exit cleanly; if hostiles give up the chase and wander off, we also exit even if HP hasn't fully regenerated.
+- Latch lives on the bot (`bot._lowHpRetreatActive`) and is owned solely by this mode.
+
+**Attribution.** `world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12)` gives the closest hostile. `mc.isHostile` excludes iron_golem / snow_golem (allied). `skills.moveAwayFromEntity` computes the vector and hands it to pathfinder — so the bot retreats in a direction AWAY FROM the mob, not a random `moveAway` direction.
+
+**Blast radius.**
+- `self_preservation.update()` only. No touch to `self_defense`, combat skills, pathfinder, or any other mode.
+- `interrupts:['all']` already set on the mode; high-HP combat yields to the retreat path automatically when HP crosses the threshold.
+- Existing damage-based branch (`lastDamageTime < 3000 && health < 5`) preserved verbatim — it still fires under its original narrow conditions, and this new branch covers the pre-damage-chase and damage-cooldown-elapsed gaps.
+
+**Guardrails.**
+- Latch-gated: only one `execute()` retreat fires per episode.
+- Hostile captured at trigger tick (target-of-retreat frozen) — no mid-flight re-target.
+- `moveAwayFromEntity` catches its own errors; latch stays set so the top-of-update clear handles exit.
+- Try/catch around `world.getNearestEntityWhere` in both paths — world lookups are resilient to chunk-unload transients.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No new module, no new export, no cross-file state. Two new branches added to one function that already owns all related state (`lastDamageTime`, `lastDamageTaken`, `_lavaEscapeActive`, `_lavaEdgeBackoffActive` — now `_lowHpRetreatActive` joins that list).
+
+**Skip (explicit).**
+- Finding cover / hiding in a structure (long-term #10 safe-pathing sub-item; needs memory + heuristics).
+- Eating food mid-retreat (auto-eat already shipped separately).
+- Ranged-attacker special case (strafe + shield + close-distance vs arrows) — that's BT-10c candidate.
+
+**Verification signals to watch.**
+- **Trigger:** bot at HP<6 with a zombie within 12 blocks → `[Survival] low-hp-retreat hp=4.0 hostile=zombie dist=7.2` line appears; bot says "Low HP — retreating from zombie!"; pathfinder sets goal 16 blocks away from zombie.
+- **Hysteresis clear:** after retreating and regenerating to HP≥14 → `[Survival] low-hp-retreat cleared hp=14.0`; latch cleared; bot resumes normal work.
+- **Wander-off clear:** hostile gives up and walks away (12-block check fails) → same cleared log fires even if HP is still below 14.
+- **Non-trigger:** HP drops below 6 while mining alone (no hostiles) → branch does NOT fire. No log, no retreat.
+- **Existing branch preserved:** bot takes a heavy hit at HP<5 → original `I'm dying!` line + `moveAway(20)` still fires (different log line, different code path).
+
 
 ### BT-10a. Lava avoidance reflex (`3c31b78`, 2026-04-19)
 
