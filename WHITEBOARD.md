@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `f0454d6` on `origin/develop`. **In-progress:** #7c — heuristic auto-detection of player-built structures (new `detectNearbyPlayerStructures` skill + periodic scanner). Complements #7's village detector: scans chunks for clusters of player-characteristic blocks (stone bricks, wool, concrete, redstone mechanisms, banners, beds, etc.), auto-registers `player_base` protected zones. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `0ff5c29` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), and #7c (`0ff5c29`) — heuristic player-structure detector (new `detectNearbyPlayerStructures` skill + 30s scanner, auto-registers `player_base` protected zones from clusters of stone-bricks/wool/concrete/redstone/banners/beds/doors/glass-panes). Complements #7 village detector; closes the gap where player builds had to be manually added to `player_structures.json`. Eight BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,61 +66,66 @@ _Last updated: 2026-04-19. HEAD `f0454d6` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### 7c. Heuristic auto-detection of player-built structures
-
-**Status:** in-progress (code phase) • **Priority:** medium (complements #7 village detector; closes the player-base gap)
-
-**Problem.** Post-#7, the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages (villagers + workstations + bells). It does NOT auto-detect player-built bases. If JP builds a shelter or farm anywhere, the bot can still break blocks in it until JP manually adds it to `player_structures.json`.
-
-**Approach.** Mirror the village-detector pattern. New scanner scans chunks around the bot for clusters of "strongly player-characteristic" blocks; clusters above a signal threshold → auto-register a `player_base` protected zone.
-
-**Defaults (approved by JP).**
-- Scan radius: 64 blocks (horizontal, centered on bot)
-- Y range: bot.y-20 to bot.y+30 (captures basements + tall builds)
-- Cluster radius: 12 blocks (greedy clustering)
-- Min signals per cluster: 6 (higher than village's 3 — player-characteristic blocks are rarer and stronger signal per block)
-- Protect radius: 40 blocks (XZ from cluster center)
-- Initial delay: 10s (chunks must load)
-- Scan cadence: 30s (same as village scanner)
-- Dedup radius: 30 blocks (don't re-register nearby cluster as new zone)
-- Zone type: `player_base`; zone name: `player_base_<x>_<z>`
-
-**Block list (curated — strongly player-characteristic).**
-- Stone bricks family: `stone_bricks`, `mossy_stone_bricks`, `cracked_stone_bricks`, `chiseled_stone_bricks`, `polished_granite`, `polished_diorite`, `polished_andesite`, `polished_blackstone`, `polished_blackstone_bricks`
-- All wood doors + `iron_door`: `oak_door`, `spruce_door`, `birch_door`, `jungle_door`, `acacia_door`, `dark_oak_door`, `mangrove_door`, `cherry_door`, `bamboo_door`, `crimson_door`, `warped_door`, `iron_door`
-- Glass panes: `glass_pane` + all 16 `<color>_stained_glass_pane`
-- All 16 `<color>_wool`
-- All 16 `<color>_concrete`
-- Redstone mechanisms: `redstone_lamp`, `redstone_torch`, `repeater`, `comparator`, `piston`, `sticky_piston`, `observer`, `hopper`, `dispenser`, `dropper`, `lever`, `note_block`
-- All 16 `<color>_banner`
-- All 16 `<color>_bed`
-
-**Deliberately excluded** (villages, too generic, or different bug class):
-- Torches, crafting_tables, chests, furnaces — village detector handles these
-- Item frames — entities, not blocks (different scan path, belongs with a future OPT)
-- Stairs/slabs — too generic (wood slabs show up in trees, stone stairs in mineshafts)
-
-**Files.**
-- `src/agent/library/skills.js` — new `PLAYER_CHARACTERISTIC_BLOCKS` Set, new `_impl_detectNearbyPlayerStructures(bot)`, new `startPlayerStructureScanner(bot)`, both exports. Inserted right after the village detector block.
-- `src/agent/commands/../agent.js` (agent.js main spawn path) — wire `startPlayerStructureScanner` right after the village scanner, same interval-cleanup pattern (`clearInterval(this._playerStructureScanInterval); this._playerStructureScanInterval = skills.startPlayerStructureScanner(this.bot);`).
-
-**Blast radius.** Pure addition. No changes to existing village scanner, zone dispatch, or spawn logic. New scanner runs independently and writes to the same `bot.protectedZones` array.
-
-**Guardrails.**
-- Dedup via `_playerBaseAlreadyRegistered(bot, x, z, 30)` mirroring village dedup — no zone churn on re-scan.
-- Reuses `_clusterPositions(positions, 12)` helper from village detector (same greedy clustering).
-- Initial 10s delay lets spawn chunks load before first scan (avoids false negative on fresh world).
-- Per-cluster `log(bot, ...)` on registration so JP can see what triggered each zone.
-- No scanner restart on reconnect — interval-guard pattern prevents double-scheduling.
-
-**Rule 7 audit.** Single scanner, single new skill in skills.js, single wiring site in agent.js. No touch to existing village detector, no touch to dispatch. Block allowlist lives inside the skill module, not leaked.
-
-**Philosophy alignment.** Principle 1 (don't ask the LLM to notice player builds — scan mechanically). Principle 2 (observability-first: log every registration). Rule 9 (minimum code — mirror the proven village pattern, don't invent new infrastructure).
-
-**Success signal.** JP builds a shelter with ≥6 player-characteristic blocks within 12 blocks of each other; within 40s (10s delay + 30s cadence worst-case) expect `[PlayerStructureScan] Detected player-built cluster at (x, z) — N signals; registering zone player_base_<x>_<z> (radius 40)`. Subsequent scans dedup (no re-registration). `bot.protectedZones` now contains the new zone; next breakBlockAt / placeBlock inside it is refused by the zone guard.
+_(empty — #7c shipped `0ff5c29`; eight BTs shipped today all awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### 7c. Heuristic auto-detection of player-built structures (`0ff5c29`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs JP to build a structure with ≥6 player-characteristic blocks within 12 blocks of each other AND for the bot to be within 64 blocks during a scan pass; can be smoke-tested by placing a quick test cluster near the bot)
+
+**Change.** Three additions, all mirroring the village-detector pattern:
+
+1. **New module block in `src/agent/library/skills.js`** (inserted after the village exports). Declares `PLAYER_CHARACTERISTIC_BLOCKS` (curated allowlist) + six tunable constants (`PLAYER_SCAN_RADIUS=64`, `PLAYER_CLUSTER_RADIUS=12`, `PLAYER_MIN_SIGNALS=6`, `PLAYER_PROTECT_RADIUS=40`, `PLAYER_Y_BELOW=20`, `PLAYER_Y_ABOVE=30`, `PLAYER_DEDUP_RADIUS=30`). Helpers: `_playerBaseAlreadyRegistered`, `_playerBaseZoneFromCenter`. Main function `detectNearbyPlayerStructures(bot)`:
+   - Resolves block-name allowlist → numeric id Set (skips blocks missing from this mineflayer data version).
+   - `bot.findBlocks(matching: idSet, maxDistance: 64, count: 512)` → candidate positions.
+   - Reuses `_clusterPositions(positions, 12)` helper from the village detector (no duplication).
+   - For each cluster with count ≥6 and not already registered within 30 blocks: pushes zone `{name: 'player_base_<x>_<z>', type: 'player_base', x, z, radius: 40, yMin: y-20, yMax: y+30, source: 'auto-detect (<N> signals)'}` to `bot.protectedZones`, logs the registration.
+
+2. **New scanner `startPlayerStructureScanner(bot)`** — 10s initial delay (longer than village's 5s because player-characteristic blocks live deeper in chunk data and first-pass chunk load may not include far blocks), then 30s `setInterval`. Wrapped in try/catch on both fire paths. Exports: `detectNearbyPlayerStructures`, `startPlayerStructureScanner`.
+
+3. **Wiring in `src/agent/agent.js`** — right after the village-scanner startup block, same shape: `clearInterval(this._playerStructureScanInterval)` guard then `this._playerStructureScanInterval = skills.startPlayerStructureScanner(this.bot)`. Error log tagged `[PlayerStructureScan]`.
+
+**Block allowlist (curated).**
+- Stone bricks family + polished stones (stone_bricks + 3 variants + polished_granite/diorite/andesite/blackstone/blackstone_bricks)
+- All wood doors (11 variants) + iron_door
+- Glass panes: glass_pane + 16 stained_glass_panes
+- All 16 wool colors
+- All 16 concrete colors
+- Redstone mechanisms: redstone_lamp, redstone_torch, repeater, comparator, piston, sticky_piston, observer, hopper, dispenser, dropper, lever, note_block
+- All 16 banner colors
+- All 16 bed colors
+
+**Deliberately excluded:** torches / crafting_tables / chests / furnaces (village detector's workstation signal handles these — player-built kitchens next to a villager-workstation would double-fire otherwise). Item frames (entities, not blocks — different scan path). Stairs/slabs (too generic — stone stairs appear in strongholds, wood slabs in witch huts).
+
+**Why this closes the gap.** Post-#7, `player_structures.json` is still manual. JP has to remember to add every build by hand — and the bot keeps trying to mine blocks in a base JP just built until that file is updated and the bot is restarted. With #7c, any substantial player build (6+ signals within 12 blocks — i.e. a wool-floored shelter, a stone-brick tower, a redstone contraption) is auto-registered within 40s worst case (10s initial + 30s cadence) once the bot comes within 64 blocks.
+
+**Guardrails.**
+- Curated allowlist is strongly-player-characteristic (min signals = 6, not 3) — reduces false positives. Stone bricks + wool + redstone cluster does not appear in vanilla terrain.
+- Dedup radius 30 blocks (larger than protect radius 40 might seem to imply, but the dedup is center-to-center — this prevents registering overlapping player_base zones for adjacent rooms of one base).
+- Initial delay 10s (vs. village's 5s) because player-characteristic blocks live in chunk block-data rather than entity data — chunk population on spawn can lag.
+- Try/catch around `bot.findBlocks` and the full scan — no throw propagates.
+- Interval-cleanup guard in agent.js — soft reconnects don't leak timers.
+- Allowlist resolved to id Set once per scan — `findBlocks` filter is O(1) lookup.
+
+**Rule 7 audit.** Single new module block in skills.js, single new wiring site in agent.js. Reuses existing `_clusterPositions` helper rather than redefining. All tunables live at the top of the new block, not leaked. No touch to village detector, no touch to zone-dispatch, no touch to spawn-escape logic. Exports follow the same `export { ... }` shape as village scanner.
+
+**Verification signals to watch.**
+- After bot spawns, expect within 40s (first scan at 10s + 30s periodic) one of:
+  - No logs (scan ran, no clusters above threshold — the 99% case for wilderness spawns).
+  - `[PlayerStructureScan] Detected player-built cluster at (x, z) — N signals; registering zone player_base_<x>_<z> (radius 40)` — each time a new cluster qualifies.
+- Next breakBlockAt / placeBlock attempt by LLM or pathfinder inside a newly-registered `player_base` zone — expect the existing zone guard to refuse.
+- Re-scans of the same area should produce ZERO `Detected` logs after the first hit (dedup holds).
+
+**Companion ship.** Complementary to #7 (village auto-detect) — villages handled via entities + workstations + bells; player bases now handled via block-cluster signature. Between the two, `bot.protectedZones` populates automatically for both vanilla and player-built protectables.
+
+**Deferred (may promote later).**
+- Tuning pass: if false positives appear (e.g. rare stone-brick ruin with 6+ signals auto-registering) bump `PLAYER_MIN_SIGNALS` to 8 or narrow allowlist. Wait for observed data.
+- Item-frame signal: strong player marker but needs `bot.entities` scan, not `findBlocks`. Cleaner to add as a second signal source in a follow-up if cluster-from-blocks alone misses decorated-but-sparse bases.
+- Zone retirement: if JP demolishes a player base, the zone stays registered forever. Belongs with a periodic zone-health-check task (would verify the signal cluster still exists on each scan tick and retire zones when signal count drops below threshold) — separate BT.
+- Auto-persist to `player_structures.json` so restarts don't re-scan: intentionally NOT added. Scan is cheap (30s cadence, O(512) findBlocks budget), and auto-rescan means a newly-placed structure is protected even without restart.
+
 
 ### 25. `!addRule` armor/durability pattern + `replaceBrokenArmor` skill (`4cae55d`, 2026-04-19)
 
