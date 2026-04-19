@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `4cae55d` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), and #25 (`4cae55d`) — `!addRule` armor/durability pattern + new `replaceBrokenArmor` skill (in-inventory swap with same-tier craft fallback). Closes JP's 2026-04-17 "if any part of your diamond armor breaks, make a replacement and equip it" rule — was previously falling through to a wrong default ore-search. Seven BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `f0454d6` on `origin/develop`. **In-progress:** #7c — heuristic auto-detection of player-built structures (new `detectNearbyPlayerStructures` skill + periodic scanner). Complements #7's village detector: scans chunks for clusters of player-characteristic blocks (stone bricks, wool, concrete, redstone mechanisms, banners, beds, etc.), auto-registers `player_base` protected zones. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,58 @@ _Last updated: 2026-04-19. HEAD `4cae55d` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #25 shipped `4cae55d`; seven BTs shipped today all awaiting live verification on next natural events.)_
+### 7c. Heuristic auto-detection of player-built structures
+
+**Status:** in-progress (code phase) • **Priority:** medium (complements #7 village detector; closes the player-base gap)
+
+**Problem.** Post-#7, the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages (villagers + workstations + bells). It does NOT auto-detect player-built bases. If JP builds a shelter or farm anywhere, the bot can still break blocks in it until JP manually adds it to `player_structures.json`.
+
+**Approach.** Mirror the village-detector pattern. New scanner scans chunks around the bot for clusters of "strongly player-characteristic" blocks; clusters above a signal threshold → auto-register a `player_base` protected zone.
+
+**Defaults (approved by JP).**
+- Scan radius: 64 blocks (horizontal, centered on bot)
+- Y range: bot.y-20 to bot.y+30 (captures basements + tall builds)
+- Cluster radius: 12 blocks (greedy clustering)
+- Min signals per cluster: 6 (higher than village's 3 — player-characteristic blocks are rarer and stronger signal per block)
+- Protect radius: 40 blocks (XZ from cluster center)
+- Initial delay: 10s (chunks must load)
+- Scan cadence: 30s (same as village scanner)
+- Dedup radius: 30 blocks (don't re-register nearby cluster as new zone)
+- Zone type: `player_base`; zone name: `player_base_<x>_<z>`
+
+**Block list (curated — strongly player-characteristic).**
+- Stone bricks family: `stone_bricks`, `mossy_stone_bricks`, `cracked_stone_bricks`, `chiseled_stone_bricks`, `polished_granite`, `polished_diorite`, `polished_andesite`, `polished_blackstone`, `polished_blackstone_bricks`
+- All wood doors + `iron_door`: `oak_door`, `spruce_door`, `birch_door`, `jungle_door`, `acacia_door`, `dark_oak_door`, `mangrove_door`, `cherry_door`, `bamboo_door`, `crimson_door`, `warped_door`, `iron_door`
+- Glass panes: `glass_pane` + all 16 `<color>_stained_glass_pane`
+- All 16 `<color>_wool`
+- All 16 `<color>_concrete`
+- Redstone mechanisms: `redstone_lamp`, `redstone_torch`, `repeater`, `comparator`, `piston`, `sticky_piston`, `observer`, `hopper`, `dispenser`, `dropper`, `lever`, `note_block`
+- All 16 `<color>_banner`
+- All 16 `<color>_bed`
+
+**Deliberately excluded** (villages, too generic, or different bug class):
+- Torches, crafting_tables, chests, furnaces — village detector handles these
+- Item frames — entities, not blocks (different scan path, belongs with a future OPT)
+- Stairs/slabs — too generic (wood slabs show up in trees, stone stairs in mineshafts)
+
+**Files.**
+- `src/agent/library/skills.js` — new `PLAYER_CHARACTERISTIC_BLOCKS` Set, new `_impl_detectNearbyPlayerStructures(bot)`, new `startPlayerStructureScanner(bot)`, both exports. Inserted right after the village detector block.
+- `src/agent/commands/../agent.js` (agent.js main spawn path) — wire `startPlayerStructureScanner` right after the village scanner, same interval-cleanup pattern (`clearInterval(this._playerStructureScanInterval); this._playerStructureScanInterval = skills.startPlayerStructureScanner(this.bot);`).
+
+**Blast radius.** Pure addition. No changes to existing village scanner, zone dispatch, or spawn logic. New scanner runs independently and writes to the same `bot.protectedZones` array.
+
+**Guardrails.**
+- Dedup via `_playerBaseAlreadyRegistered(bot, x, z, 30)` mirroring village dedup — no zone churn on re-scan.
+- Reuses `_clusterPositions(positions, 12)` helper from village detector (same greedy clustering).
+- Initial 10s delay lets spawn chunks load before first scan (avoids false negative on fresh world).
+- Per-cluster `log(bot, ...)` on registration so JP can see what triggered each zone.
+- No scanner restart on reconnect — interval-guard pattern prevents double-scheduling.
+
+**Rule 7 audit.** Single scanner, single new skill in skills.js, single wiring site in agent.js. No touch to existing village detector, no touch to dispatch. Block allowlist lives inside the skill module, not leaked.
+
+**Philosophy alignment.** Principle 1 (don't ask the LLM to notice player builds — scan mechanically). Principle 2 (observability-first: log every registration). Rule 9 (minimum code — mirror the proven village pattern, don't invent new infrastructure).
+
+**Success signal.** JP builds a shelter with ≥6 player-characteristic blocks within 12 blocks of each other; within 40s (10s delay + 30s cadence worst-case) expect `[PlayerStructureScan] Detected player-built cluster at (x, z) — N signals; registering zone player_base_<x>_<z> (radius 40)`. Subsequent scans dedup (no re-registration). `bot.protectedZones` now contains the new zone; next breakBlockAt / placeBlock inside it is refused by the zone guard.
 
 
 ## Shipped — awaiting live verification
@@ -285,16 +336,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-### 7c. Heuristic auto-detection of player-built structures
-
-**Status:** ⏳ not started • **Priority:** medium (complements the #7 village detector; catches player bases)
-
-Current state (post-#7): the bot protects user-managed zones from `player_structures.json` and auto-detects vanilla villages via villager/workstation/bell signals. It does NOT auto-detect player-built bases.
-
-**Approach**: scan chunks for clusters of "strongly player-characteristic" blocks — stone_bricks + polished stones, doors, glass panes, wool, concrete, redstone components, banners, item frames, beds (outside villages), crafted stairs/slabs. ≥5 clustered within ~10 blocks → propose a protected zone with type='player_base'. False-positive mitigation: list curated to exclude ambiguous blocks (torches, crafting_tables, chests, furnaces — these cluster in villages too and the village detector already handles those).
-
-**Deferred decisions:** exact threshold (5? 8?), cluster radius (10? 16?), block list tuning. Start conservative, tune from observed false-positives.
 
 ### 7b. Self-cleanup of incidental block placements
 
