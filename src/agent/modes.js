@@ -42,6 +42,22 @@ const modes_list = [
             let blockAbove = bot.blockAt(bot.entity.position.offset(0, 1, 0));
             if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
             if (!blockAbove) blockAbove = {name: 'air'};
+
+            // BT-10b (2026-04-19): low-HP-retreat latch clear. Runs at the top
+            // of every tick so we exit retreat promptly once HP recovers or
+            // hostiles disperse. Hysteresis: set at HP<6, clear at HP>=14 OR
+            // no hostile within 12. This keeps the bot from oscillating.
+            if (bot._lowHpRetreatActive) {
+                let hostileNearby = false;
+                try {
+                    const h = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
+                    hostileNearby = !!h;
+                } catch (_) { /* ignore */ }
+                if (bot.health >= 14 || !hostileNearby) {
+                    console.log(`[Survival] low-hp-retreat cleared hp=${bot.health.toFixed(1)}`);
+                    bot._lowHpRetreatActive = false;
+                }
+            }
             // Drowning check: head in water OR oxygen dropping while submerged.
             // Always hold jump when drowning, even during an active pathfind —
             // mineflayer tolerates setControlState('jump', true) while pathfinder
@@ -177,6 +193,33 @@ const modes_list = [
                 execute(this, agent, async () => {
                     await skills.moveAway(bot, 20);
                 });
+            }
+            // BT-10b (2026-04-19): proactive low-HP mob retreat. Fires when HP
+            // is critical AND a hostile is in range, even if no damage event in
+            // the last 3s (catches chase-but-not-hit scenarios). Latched so we
+            // don't retrigger every tick; cleared at top of update() via
+            // _lowHpRetreatActive. Retreats directly away from the nearest
+            // hostile (via moveAwayFromEntity) instead of a random moveAway
+            // direction.
+            else if (bot.health < 6 && !bot._lowHpRetreatActive) {
+                let hostile = null;
+                try {
+                    hostile = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
+                } catch (_) { /* ignore */ }
+                if (hostile) {
+                    bot._lowHpRetreatActive = true;
+                    const dist = bot.entity.position.distanceTo(hostile.position);
+                    console.log(`[Survival] low-hp-retreat hp=${bot.health.toFixed(1)} hostile=${hostile.name} dist=${dist.toFixed(1)}`);
+                    say(agent, `Low HP — retreating from ${hostile.name}!`);
+                    // Capture hostile at this tick; moveAwayFromEntity handles
+                    // the vector math + pathfinder goal internally.
+                    const target = hostile;
+                    execute(this, agent, async () => {
+                        try {
+                            await skills.moveAwayFromEntity(bot, target, 16);
+                        } catch (_) { /* ignore — latch stays set until HP recovers */ }
+                    });
+                }
             }
             else if (agent.isIdle()) {
                 // BT-10a: clear the lava-escape latch when we're out of lava.
