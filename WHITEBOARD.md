@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `0ff5c29` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), and #7c (`0ff5c29`) — heuristic player-structure detector (new `detectNearbyPlayerStructures` skill + 30s scanner, auto-registers `player_base` protected zones from clusters of stone-bricks/wool/concrete/redstone/banners/beds/doors/glass-panes). Complements #7 village detector; closes the gap where player builds had to be manually added to `player_structures.json`. Eight BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `fcfb17b` on `origin/develop`. **In-progress:** OPT-H — remove `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (no collision box). Audit found `d1df31f` (2026-04-16) titled 'remove sugar_cane from MOVEMENT_BLOCKING_PLANTS' only updated a comment — the Set still contains `sugar_cane`. Closing the half-shipped fix. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,29 @@ _Last updated: 2026-04-19. HEAD `0ff5c29` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #7c shipped `0ff5c29`; eight BTs shipped today all awaiting live verification on next natural events.)_
+### OPT-H. Remove `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` (half-shipped fix from `d1df31f`)
+
+**Status:** in-progress (code phase) • **Priority:** medium (correctness — sugar_cane has no collision box in modern Minecraft)
+
+**Problem.** `MOVEMENT_BLOCKING_PLANTS` Set in `src/agent/library/skills.js` (line 2263) lists `'sugar_cane'` with inline comment `// solid hitbox`. Both are wrong: sugar_cane has no collision box in 1.14+, the bot walks through it freely, and it never blocks movement.
+
+**History audit.** Commit `d1df31f` (2026-04-16) is titled `fix(skills): remove sugar_cane from MOVEMENT_BLOCKING_PLANTS — no collision box` but the diff only touched a docblock comment — the actual Set entry was left in place. No later commits modified `sugar_cane` in this file. The intended removal was half-shipped.
+
+**Fix.** Delete the `'sugar_cane',             // solid hitbox` line from the Set. Leave `PLANT_LIKE_PATTERN` regex (line 2248) alone — sugar_cane should still match plant-like detection elsewhere; it just shouldn't be in the movement-blocking allowlist.
+
+**Files.**
+- `src/agent/library/skills.js` — single-line removal in `MOVEMENT_BLOCKING_PLANTS` Set.
+
+**Blast radius.** One line. Only callers of `MOVEMENT_BLOCKING_PLANTS` are `_impl_autoBreakStuckPlant` (stuck-recovery scan around the bot, lines ~2342 + 2357). Removing means: when pathfinder reports stuck, the scan no longer treats sugar_cane as a candidate to break. Correct — the bot can never be stuck on sugar_cane in the first place because it has no collision.
+
+**Guardrails.**
+- No-op for the existing tree-part allowlist (sugar_cane was never in TREE_PART_PATTERN).
+- No-op for the spawn-zone breakable allowlist (sugar_cane wasn't a special case there either).
+- PLANT_LIKE_PATTERN regex still includes `sugar_cane` so other "is this a plant?" checks still classify it correctly.
+
+**Rule 7 audit.** Single-line deletion in single Set. No fan-out. Closes the half-shipped intent of `d1df31f` without re-opening any related debates.
+
+**Success signal.** No new logs expected on healthy paths — the only behavioral difference is `[AutoBreakPlant]` will no longer log `Breaking movement-blocking sugar_cane at (...)` because that case can no longer fire (the regex match in the scan still classifies it as a plant, but the `MOVEMENT_BLOCKING_PLANTS.has()` filter that gates the in-zone case now returns false). Outside spawn zone, sugar_cane was never a candidate to begin with.
 
 
 ## Shipped — awaiting live verification
@@ -353,14 +375,6 @@ JP observed the bot placing vertical/horizontal columns of resource blocks (cobb
 2. Categorize purpose: `pathfinder-scaffold`, `spawn-block`, `unknown-llm` (cleanup-eligible) vs `intentional`/`torch`/`functional` (excluded).
 3. New low-priority `cleanup_blocks` mode in `modes.js`, fires when idle: walks through eligible entries; if bot is now >5 blocks away AND block still exists, break it and remove from list.
 4. Cap list size (200, FIFO). Clear on bot death/respawn.
-
-### OPT-H. Verify sugar_cane in MOVEMENT_BLOCKING_PLANTS — possible regression
-
-**Status:** ⏳ not started • **Priority:** medium (correctness — sugar_cane has no collision box in Minecraft)
-
-Earlier session work explicitly removed `sugar_cane` from `MOVEMENT_BLOCKING_PLANTS` because it has no collision box and the bot walks through it. Current code (line ~1909 in skills.js) still lists it. Either the removal was never committed or a later change reintroduced it.
-
-**Fix:** Check git log for the removal. If it was removed and reintroduced, revert. If it was never committed, remove it. Sugar cane does not impede movement — it should not be in a movement-blocking allowlist.
 
 ### 21. L1 cleanup bundle (low-priority nits)
 
