@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `4a3d236` on `origin/develop`. **In-progress:** #23 — self-prompter backs off during ChunkWait hold. Prevents the auto-stop circuit-breaker from firing while position is NaN / chunks aren't loaded (burned LLM round-trips → no-command responses → STOPPED → goal serialized as null on next save). Shipped today: #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), #22b NaN-position suffocation recovery (`d921016`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `933ee16` on `origin/develop`. **Shipped today:** #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), #22b NaN-position suffocation recovery (`d921016`), and #23 self-prompter held-state back-off (`933ee16`). The suffocation-death class is now fully guarded at both commit-point and current-position layers (#22 + #22b); the self-prompter no longer walks the circuit-breaker into `STOPPED` during ChunkWait holds, preserving goals across NaN windows (#23). All four awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,26 +66,34 @@ _Last updated: 2026-04-19. HEAD `4a3d236` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### 23. Self-prompter ignores held state during ChunkWait/NaN windows
-
-**Status:** in-progress (code phase) • **Priority:** high (goal-loss + wasted LLM calls + spurious auto-stop)
-
-**Problem.** `SelfPrompter.startLoop` has no signal for "world is frozen." During a ChunkWait hold (NaN position / chunks not loaded), the loop keeps inviting LLM responses every `cooldown` ms. The LLM can't act on a frozen world, so each response lacks a command → `no_command_count` ticks toward `MAX_NO_COMMAND=3` → circuit-breaker fires → `state = STOPPED` → next `history.save()` serializes `self_prompt: null`. On restart the bot loads the null and the goal is lost. Persistence worked correctly — the bug is upstream loop-awareness.
-
-**Approach.** Gate the loop body on `chunk_wait.isHeld()` at the very top of `startLoop`'s while-body. When held, sleep 1s and `continue` — skip the persistent-rules check, the LLM `handleMessage` call, and the `no_command_count` increment. Log once on enter/exit transitions so we can see the gate firing live.
-
-**Files.**
-- `src/agent/self_prompter.js` — add held check at top of `startLoop` while-body; `_heldLogged` state var in constructor for edge-triggered logging.
-
-**Guardrails.**
-- Optional chaining (`this.agent?.chunk_wait?.isHeld?.()`) — safe if `chunk_wait` initialized late or missing.
-- 1s poll during hold (vs. the 2–10s self-prompter cooldown) — resumes quickly when hold releases.
-- `_heldLogged` flag prevents log-spam; only logs on enter/exit transitions.
-
-**Rule 7 audit.** Single site (top of `startLoop` while-body). All three things that mattered — LLM round-trip, no-command counter, persistent-rule actions — sit downstream of the gate. Player-chat and system-event `handleMessage` calls outside this loop are not affected (that's #24's territory).
+_(empty — #23 shipped `933ee16`; four BTs shipped today all awaiting live verification on next natural ChunkWait hold / suffocation / forcedMove-into-zone / escape event.)_
 
 
 ## Shipped — awaiting live verification
+
+### 23. Self-prompter held-state back-off during ChunkWait/NaN windows (`933ee16`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs the next natural ChunkWait hold while self-prompter is ACTIVE — suffocation recovery, reconnect window, or any NaN-position event)
+
+**Change.** `SelfPrompter.startLoop` (src/agent/self_prompter.js) now gates its while-body on `this.agent.chunk_wait.isHeld()`. While held, the loop sleeps 1s and `continue`s — skipping the persistent-rules check, the LLM `handleMessage` call, and the `no_command_count` increment. Added `_heldLogged` flag in the constructor for edge-triggered logging: `[SelfPrompter] held — backing off (reason: ...)` on enter, `[SelfPrompter] hold released — resuming` on exit. No log spam during the hold window.
+
+**Why this closes the gap.** On 2026-04-17 during a 60s ChunkWait hold, the loop fired 3+ `handleMessage` calls with no valid world state to reason about. Each returned no command → `no_command_count` reached `MAX_NO_COMMAND=3` → circuit-breaker fired → `state = STOPPED` → `history.save()` serialized `self_prompt: null`. Next restart loaded the null and the "mine 64 ancient debris" goal was gone. Persistence was working correctly; the bug was upstream. With this gate in place, the counter stays frozen for the duration of the hold, `state` stays `ACTIVE`, and the goal survives the NaN window intact.
+
+**Guardrails.**
+- Optional chaining (`this.agent?.chunk_wait?.isHeld?.()`) keeps the check safe if `chunk_wait` isn't initialized yet or is missing entirely.
+- 1s poll during hold vs. the 2–10s self-prompter cooldown — resumes quickly once chunks load / position becomes finite.
+- `_heldLogged` flag ensures exactly one enter/exit log per hold, not one per poll tick.
+
+**Rule 7 audit.** Single site: top of `startLoop` while-body. All three failure modes (LLM round-trip, no-command counter advance, persistent-rule action) sit downstream of the gate. Player-chat and system-event `handleMessage` calls that don't route through this loop are intentionally unaffected — those are #24's territory (stuck-loop interruption on player chat).
+
+**Verification signal to watch.** Next ChunkWait hold with self-prompter active:
+- `[ChunkWait] ENTER held state` → `[SelfPrompter] held — backing off (reason: ...)`.
+- Zero `handleMessage` or `[LLM]` round-trips during the hold window.
+- `state` stays `ACTIVE`; `memory.json` save during the window still reflects the active goal (`self_prompt` non-null, `self_prompting_state: 1`).
+- `[ChunkWait] EXIT held state` → `[SelfPrompter] hold released — resuming` → loop returns to normal cadence.
+
+**Companion ships.** #22 (`8c2b6fe`) + #22b (`d921016`) close the death path during NaN windows; #23 closes the goal-loss path. Together they mean the bot can now survive AND retain its goal through a ChunkWait hold.
+
 
 ### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery (`d921016`, 2026-04-19)
 
