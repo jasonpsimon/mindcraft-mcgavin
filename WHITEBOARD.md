@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `a6a3e9b` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), and #29 (`a6a3e9b`) — `autoBreakStuckPlant` scan extended from 16 → 34 offsets across four Y layers (dy=-1/0/1/2). Closes the tree-canopy stranding observed live 2026-04-19 ≈19:15Z at (-84, 80, 61): bot spawned on top of a tree, only `oak_log` adjacent at feet/head (correctly skipped), leaves at y=79 below the scan range, pathfinder `canDig=false` in zone → stuck. Six BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `6ddfbef` on `origin/develop`. **In-progress:** #25 — `!addRule` armor/durability pattern + `replaceBrokenArmor` skill with in-inventory-swap + same-tier craft fallback. Closes JP's 2026-04-17 "if any part of your diamond armor breaks, make a replacement and equip it" request — previously fell through to `conditionFn = () => true` + wrong ore-search action. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,43 @@ _Last updated: 2026-04-19. HEAD `a6a3e9b` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #29 shipped `a6a3e9b`; six BTs shipped today all awaiting live verification on next natural events.)_
+### 25. `!addRule` armor/durability pattern + `replaceBrokenArmor` skill
+
+**Status:** in-progress (code phase) • **Priority:** medium (unlocks the class of rules JP actually requested 2026-04-17 — "if any part of your diamond armor breaks, make a replacement and equip it")
+
+**Problem.** `!addRule` in `src/agent/commands/actions.js` has no keyword case for armor or durability. JP's 2026-04-17 chat for a diamond-armor-break rule would (even if the LLM had correctly emitted `!addRule(...)`) fall through to `conditionFn = () => true` (fires every tick) + `action = '!searchForBlock("diamond_ore", 64)'` (completely wrong). Unusable.
+
+**Approach.** Three coordinated additions:
+
+1. **New skill `replaceBrokenArmor(bot)`** in `src/agent/library/skills.js`. Scans equipped armor slots (5 helmet / 6 chestplate / 7 leggings / 8 boots). For each piece at <20% durability:
+   - Search main inventory for a same-or-better-tier replacement (leather < chainmail < iron < golden < diamond < netherite) that is itself >20% durability. If found, `bot.equip(item, bodyPart)`.
+   - Else: attempt `craftRecipe(bot, '<tier>_<piece>', 1)` for the same tier, then equip if the craft succeeded. Crafting failures log and exit gracefully (no throw).
+   - Re-entry throttle via `bot._lastArmorReplace` (5s) so the rule firing every self-prompter tick doesn't spam craft attempts.
+
+2. **Register `!replaceBrokenArmor` command** in `actions.js` (no args, calls `skills.replaceBrokenArmor(agent.bot)`).
+
+3. **Add armor/durability case to `!addRule.perform`** dispatch (both the `conditionFn` block and the `action` block), keyed on `armor|armour|durability`:
+   - Condition: any equipped armor piece at <20% durability → return true.
+   - Action: `!replaceBrokenArmor`.
+
+**Files.**
+- `src/agent/library/skills.js` — new `_impl_replaceBrokenArmor` + export.
+- `src/agent/commands/actions.js` — new `!replaceBrokenArmor` command + new `!addRule` case.
+
+**Blast radius.** Additive case in the existing if/else chain inside `!addRule`. New skill + command are pure additions. No changes to rules dispatch model, no touch to existing cases.
+
+**Guardrails.**
+- Re-entry throttle (5s cooldown on `bot._lastArmorReplace`) to prevent craft-loop spam when the rule fires every self-prompter iteration.
+- Per-piece try/catch around `bot.equip` — mineflayer throws on mid-swap contention.
+- Craft fallback in its own try/catch — missing-ingredient / no-crafting-table failures log but don't throw.
+- Replacement-search skips items at <20% durability themselves — no swapping broken-for-broken.
+- Equipped slot (5/6/7/8) excluded from replacement scan so we can't "equip" the already-equipped broken item.
+
+**Rule 7 audit.** Single dispatch case in `!addRule`, single new skill, single new command registration. Tier-ranking table lives inside the new skill, not leaked. No cross-module fan-out.
+
+**Philosophy alignment.** Principle 1 (durability is mechanical — don't ask the LLM to notice). Rule 9 (minimum code — one dispatch case, one skill; defer any rules-API redesign until a second use case shows up).
+
+**Success signal.** JP chats: `!addRule("if any part of your diamond armor breaks, make a replacement and equip it")` → rule registers with condition fn (scans slots 5-8) + action `!replaceBrokenArmor`. Equipped diamond chestplate at 15% durability → rule fires → `[ReplaceArmor] chestplate at 15% durability — looking for replacement` → inventory search → equip spare OR craft `diamond_chestplate` OR log "missing ingredients". No dispatch spam (5s cooldown holds).
 
 
 ## Shipped — awaiting live verification
@@ -245,110 +281,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-### 25. `!addRule` has no armor/durability pattern
-
-**Status:** ⏳ not started • **Priority:** medium (would unlock the class of rules JP actually requested 2026-04-17)
-
-**Problem.** `!addRule` at `src/agent/commands/actions.js:419` uses hardcoded description-matching to pick a `conditionFn` and `action`. Current cases (2026-04-17): diamond ore, iron ore, inventory full / clean inventory, low health / heal, generic "ore + collect", plus a default for ore/coal/gold/inventory-full/low-health actions. **No armor or durability trigger.**
-
-JP's 2026-04-17 chat "add a new rule, if any part of your diamond armor breaks, make a replacement corresponding diamond armor and equip it" describes exactly this class. Even if the LLM had responded with `!addRule(...)`, the description would fall through to `conditionFn = () => true` (fires every tick forever) and `action = '!searchForBlock("diamond_ore", 64)'` — completely wrong. Rule would spam and never do the right thing.
-
-**Root cause.** The pattern dictionary in `!addRule.perform` was seeded from early-development examples (ore / inventory / health) and hasn't kept up with the equipment-management category. Equipment durability isn't a first-class concept in the current rules dispatch.
-
-**Solution sketch.** Add a case:
-
-```js
-} else if (descLower.includes('armor') || descLower.includes('armour') || descLower.includes('broken') || descLower.includes('durability')) {
-    conditionFn = (agent) => {
-        try {
-            const slots = agent.bot.inventory.slots;
-            // equipment slots in mineflayer: 5 (helmet), 6 (chest), 7 (leggings), 8 (boots)
-            for (const slotIdx of [5, 6, 7, 8]) {
-                const item = slots[slotIdx];
-                if (!item) continue;
-                const maxDur = item.maxDurability || 0;
-                const dur = maxDur - (item.durabilityUsed || 0);
-                if (maxDur > 0 && dur / maxDur < 0.2) return true; // <20% durability
-            }
-            return false;
-        } catch { return false; }
-    };
-    // action: auto-craft and equip best-tier replacement
-    action = '!craftRecipe("diamond_chestplate", 1)'; // default — see note
-}
-```
-
-Note: the action for this rule is harder than the condition. "Make a replacement corresponding diamond armor and equip it" requires figuring out WHICH slot is broken, checking whether a replacement of the matching tier exists in inventory, crafting it if not, then equipping. That's multi-step and probably needs a new `!replaceBrokenArmor` skill or a chain of commands. For the minimum viable rule, action `!equipBestArmor` (if that exists) or `!craftRecipe("diamond_chestplate", 1)` as a placeholder until a real replacement skill exists.
-
-Broader question surfaced by this: `!addRule`'s one-line-action model is too narrow for "detect X, do multi-step Y." Either (a) allow compound actions (array of commands), (b) allow rule action to be a skill-function name rather than a command string, or (c) accept this limitation and scope rules to single-command responses only.
-
-**Files.**
-- `src/agent/commands/actions.js` — new case in `!addRule.perform`.
-- Possibly `src/agent/library/skills.js` — new `replaceBrokenArmor(bot)` skill if we go the multi-step route.
-
-**Blast radius.** Additive case in the if/else chain. Low risk unless we expand the action model (which would touch everywhere rules are fired).
-
-**Success signal.** JP's original chat — "add a new rule, if any part of your diamond armor breaks..." — results in a registered rule with a condition that correctly fires when any equipped armor piece drops below 20% durability, and an action that's at least plausibly corrective.
-
-**Philosophy alignment.** Principle 1 (durability is a mechanical signal — don't ask the LLM to notice). Rule 9 (minimum code — start with one case in the chain; don't redesign the whole rules API until there's a second real use case).
-
-### F. Long-term memory population audit
-
-**Status:** ⏳ not started • **Priority:** **HIGH — promoted 2026-04-15 after audit confirmed subsystem is frozen** (biggest leverage for "gemma-4 punches above its weight")
-
-**Audit update 2026-04-15 (L5.3 + L4):** the investigation this item called for was done during `/mindcraft-audit` and confirmed the suspicion. Static grep across `src/`: zero `long_term_memory.store` / `longTermMemory.store` / `.add()` callsites outside `src/memory/seed_memory.js:237`. Runtime log tail (500 lines of active play): zero `[LongTermMemory] Stored` lines. Index file entry count: ~39, matching the seed count exactly. LongTermMemory is frozen at seed; the fork's cross-session learning story is currently aspirational. Status moved from "investigation needed" to "integration needed" — first concrete migration target (spawn-escape path) remains the right starting point, see below.
-
-The mcgavin fork includes `LongTermMemory` — a Vectra-indexed persistent knowledge store. `seed_memory.js` populates 46 Minecraft-fundamental facts at startup. Beyond the seed, the system is only populated by explicit `agent.long_term_memory.store(text, category, metadata)` calls from gameplay code — and there's no evidence any gameplay path actually calls it. Investigation needed: is `store()` called anywhere outside the seed? If not, long-term memory is frozen at 46 facts forever and the fork's cross-session learning story is aspirational.
-
-**Audit steps:**
-1. `grep -rn 'long_term_memory.store\|longTermMemory.store' src/` — enumerate every call site.
-2. Trace each call to the trigger event — is it actually fired during normal play?
-3. If empty or sparse: design store-on-event hooks. Candidates:
-   - **Spawn-escape paths (first concrete migration target)** — `skills.js escapeSpawnZone` currently caches successful exit directions in `bot.escapeMemory` (in-process Map, 90s timeout, keyed by spawn coord). Every restart discards this and the bot rediscovers via the 8-direction search. Migrate to LongTermMemory: on successful escape, `store("Spawn escape from (x,y,z): direction D, N hops, resolved @(x',y',z')", category: "place", metadata: {spawn_xyz, success_xyz, direction})`. On next spawn, query for `"escape spawn zone from (x,y,z)"` — if a match comes back, try that direction first before the 8-way search. Keeps the 90s in-process cache for hot retries, adds cross-session persistence as the fallback tier.
-   - New player preferences (JP said "X") → store as `category: player`
-   - Discovered landmarks (found village, diamond vein @X,Y,Z) → store as `category: place`
-   - Death causes (died to lava at Y=-12) → store as `category: strategy`
-   - Successful crafting plans (iron_pickaxe via crafting_table + 3 iron + 2 stick) → store as `category: strategy`
-   - Failed approaches (tried to smelt coal_ore directly, rejected) → store as `category: fact`
-4. Verify retrieval: during prompt building, does `ContextBuilder` actually surface the right long-term facts for the current context? Check semantic query quality (`_getContextQuery` in prompter.js).
-
-**Success signal:** after a play session, `longterm_index/` grows beyond seed count. After a death, next restart bot "remembers" the danger (avoids lava based on stored event). After a successful spawn-escape, subsequent restarts from the same spawn coord pick the proven direction on the first try without re-searching. Cross-session continuity measurable.
-
-**Why this matters for #9:** this is the highest-leverage place in the codebase to make the 4B model appear smarter. Every stored fact becomes "knowledge" the LLM doesn't have to re-derive from context each turn.
-
-### OPT-A. Delete safeToss — complete the safeTossBatch migration
-
-**Status:** ⏳ not started • **Priority:** high (Principle 5 — kill redundancy; ~150 lines of duplicated disposal logic)
-
-**Root cause:** `safeTossBatch` was built to solve the N-tunnels-for-N-items problem. `safeToss` is the old single-item path that should have been removed when batch landed. It wasn't — an unfinished migration. Both functions share nearly identical tunnel validation, direction checking, walk-dig loops, surface hole logic, and fallback patterns.
-
-`withBotLock` is reentrant (uses `AsyncLocalStorage` — nested calls detect the held token and run directly), so there is no deadlock barrier to consolidation. The lock was never a reason to keep both.
-
-**Fix:** Delete `safeToss` entirely. Update every callsite to use `safeTossBatch` with a single-item array. Check whether any caller passes meaningful `metadata` — if so, add metadata support to `safeTossBatch`. This also resolves Finding G (`discard` calling `safeToss` per stack) — once `safeToss` is gone, `discard` naturally routes through batch.
-
-**Blast radius (to verify at implementation time):** grep every `safeToss` callsite in `src/`, confirm each can be converted to the `safeTossBatch` `{type, count, name}` shape. Verify `discard` function in skills.js, `autoDiscard` and `autoDiscardAllJunk` in inventory_utils.js.
-
-### G. Procedural memory / ConfidenceEngine activation audit
-
-**Status:** ⏳ not started • **Priority:** medium-high (complementary to F; actionable in one line of config once BT-4 + #20 instrumentation are both in place)
-
-**Scope narrowed 2026-04-16:** G's original audit step 1 (adding `ConfidenceEngine.evaluate()` logging) was absorbed into BT-4 (Memory retrieval visibility). G is now a pure threshold-tuning item that runs once BT-4 has shipped the evaluation logs. Re-numbered steps below reflect this.
-
-**Audit update 2026-04-15 (L4.1 + L5.2):** live data now available. `ConfidenceEngine` is firing 24× in 500 log lines — every repeat command comes back at **92-93% confidence**. `highThreshold` in `src/memory/confidence_engine.js` is `0.98`. Gap is 3-5 percentage points. The engine is ready to bypass; the threshold is miscalibrated. Static `procedural_memory.json` inspection shows max stored confidence of 0.68, so the 0.98 threshold has never fired historically either. **Quick win: lower `highThreshold` to 0.95 and monitor for false-positive bypasses** — should unlock HIGH-tier bypasses on established patterns immediately. If none appear in a week of play, consider 0.90. Depends on #20 (write-side, shipped) + BT-4 (read-side, pending) for the full distribution picture.
-
-`ProceduralMemory` tracks action-context pairs with Wilson-score confidence. `ConfidenceEngine.evaluate()` decides HIGH (≥0.85, bypass LLM) / MEDIUM (0.5-0.84, suggest) / LOW (<0.5, full reasoning). The audit question: what's the actual distribution? If the engine always falls through to LOW (cold-start with no data), procedural memory is collecting metrics nobody reads and the entire bypass mechanism is inert.
-
-**Prerequisite:** BT-4 ships `[MemoryRecall]` + ConfidenceEngine evaluation logs, giving the distribution data this tuning needs.
-
-**Audit steps (post-BT-4):**
-1. Analyze: confidence distribution across commands, bypass hit rate, how many unique contexts seen.
-2. If cold-start dominates: consider seeding `procedural_memory.json` with hand-curated high-confidence patterns (e.g., `"equip pickaxe before mine stone" → confidence 1.0`).
-3. If already firing at reasonable rate: adjust thresholds if false positives / false negatives appear.
-
-**Success signal:** measurable fraction of commands bypass the LLM via HIGH confidence — speeds up the bot and reduces hallucination risk. Procedural memory grows session-over-session.
-
-**Why this matters for #9:** bypassing the LLM entirely for routine actions is the purest expression of "let the LLM do what it's good at, program everything else."
 
 ### 7c. Heuristic auto-detection of player-built structures
 
