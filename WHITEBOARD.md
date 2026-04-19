@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `94442d2` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), and OPT-I (`94442d2`) — `_impl_defendSelf` now wraps body in try/finally so `self_defense`+`cowardice` always unpause on exit (fixes one-hit-then-die combat bug: bot hit mob once, mode stayed paused, bot died silently). Nine BTs awaiting live verification (eight BTs + OPT-I); OPT-H is pure correctness (no live verify needed). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `96af610` on `origin/develop`. **In-progress:** OPT-J — add `lava`, `campfire`, `soul_campfire` to `_configureTerrainSafeMovements` hazards list. Last death (2026-04-19 20:19:26Z at (-107, 7, -149)) was 'discovered the floor was lava'; pathfinder walked bot into lava because lava isn't on the explicit avoid list. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,36 @@ _Last updated: 2026-04-19. HEAD `94442d2` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — OPT-I shipped `94442d2`; nine items awaiting live verification on next natural events.)_
+### OPT-J. Add `lava`, `campfire`, `soul_campfire` to pathfinder hazards avoid list
+
+**Status:** in-progress (code phase) • **Priority:** HIGH (last death was walking into lava — Y=7 mining hazard, will recur)
+
+**Problem.** `_configureTerrainSafeMovements` (skills.js line 2169) populates `movements.blocksToAvoid` with 8 hazards: sweet_berry_bush, pointed_dripstone, cactus, wither_rose, magma_block, fire, soul_fire, powder_snow. Missing: **lava** (biggest gap), **campfire**, **soul_campfire**. Pathfinder happily routes bot into lava pools.
+
+**Evidence.** Last death 2026-04-19 20:19:26Z at (-107.28, 7.18, -149.04) — MC death message "discovered the floor was lava". Initial 8.37 HP spike followed by 0.78 HP fire-damage ticks to zero. Bot was pathing to target (-122, 6, -147) for deep-iron mining.
+
+**Fix.** Three-line addition to the `hazards` array. No other logic changes — the existing resolve-name-to-id loop handles the rest.
+
+**Files.**
+- `src/agent/library/skills.js` — `_configureTerrainSafeMovements` hazards array: append `'lava'`, `'campfire'`, `'soul_campfire'`.
+
+**Blast radius.** Single array, single function. All `Movements` instances in the codebase route through `createMovements()` (verified: no raw `new pf.Movements(bot)` outside this factory). The change applies universally the moment the next `Movements` instance is created.
+
+**Behavioral difference.**
+- Pathfinder will refuse to generate moves that pass through lava blocks. Deep-Y targets near lava pools become unreachable until JP manually bridges or the bot places a block above the lava — acceptable trade (better unreachable than dead).
+- Campfire + soul_campfire: bot won't walk onto them. Matters near villages (campfires are common decoration).
+
+**Guardrails.**
+- `magma_block` already present — no double-add concern (Set deduplicates).
+- `fire` and `soul_fire` already present — this adds the campfire variants which have independent block IDs.
+- Skipped: `flowing_lava` — in modern mineflayer block data, lava flow is represented as `lava` with a level property; no separate block name.
+- Skipped: `lava_cauldron` — bot can't stand on one (fluid content doesn't collide), unneeded.
+
+**Rule 7 audit.** Single array, single perimeter. No fan-out.
+
+**Companion gap (deferred).** Pathfinder's `blocksToAvoid` only prevents the bot from *pathing through* these blocks. It does NOT prevent the bot from standing on a block *adjacent to* lava (e.g. the edge of a lava pool). The autoBreakStuckPlant and self_preservation reflexes handle mid-action recovery from contact damage — those are separate layers and are already wired. OPT-J closes the path-planning hole only.
+
+**Success signal.** Bot will not die to "discovered the floor was lava" again on normal pathfinding operations (collectBlock, goToPlayer, goToPosition, wander). Manual `!placeBlock` next to lava or falling in via dig-down is a separate hole (out of scope).
 
 
 ## Shipped — awaiting live verification
