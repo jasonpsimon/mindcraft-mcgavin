@@ -455,40 +455,52 @@ async function _impl_defendSelf(bot, range=9) {
      * @example
      * await skills.defendSelf(bot);
      * **/
+    // OPT-I (2026-04-19): pause modes so defendSelf doesn't re-enter via
+    // self_defense while we're already fighting. The try/finally guarantees
+    // unpause on every exit path (normal return, early `interrupt_code` return,
+    // or a thrown error) — the modes controller only auto-unpauses when the
+    // agent is idle, and during an active goal the agent is never idle, so
+    // without this the mode stays paused for the rest of the goal's runtime
+    // (bot hits mob once, then can't re-engage, dies silently).
     bot.modes.pause('self_defense');
     bot.modes.pause('cowardice');
-    let attacked = false;
-    let enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
-    while (enemy) {
-        await equipHighestAttack(bot);
-        if (bot.entity.position.distanceTo(enemy.position) >= 4 && enemy.name !== 'creeper' && enemy.name !== 'phantom') {
-            try {
-                bot.pathfinder.setMovements(createMovements(bot));
-                await bot.pathfinder.goto(new pf.goals.GoalFollow(enemy, 3.5), true);
-            } catch (err) {/* might error if entity dies, ignore */}
+    try {
+        let attacked = false;
+        let enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
+        while (enemy) {
+            await equipHighestAttack(bot);
+            if (bot.entity.position.distanceTo(enemy.position) >= 4 && enemy.name !== 'creeper' && enemy.name !== 'phantom') {
+                try {
+                    bot.pathfinder.setMovements(createMovements(bot));
+                    await bot.pathfinder.goto(new pf.goals.GoalFollow(enemy, 3.5), true);
+                } catch (err) {/* might error if entity dies, ignore */}
+            }
+            if (bot.entity.position.distanceTo(enemy.position) <= 2) {
+                try {
+                    bot.pathfinder.setMovements(createMovements(bot));
+                    let inverted_goal = new pf.goals.GoalInvert(new pf.goals.GoalFollow(enemy, 2));
+                    await bot.pathfinder.goto(inverted_goal, true);
+                } catch (err) {/* might error if entity dies, ignore */}
+            }
+            bot.pvp.attack(enemy);
+            attacked = true;
+            await new Promise(resolve => setTimeout(resolve, 500));
+            enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
+            if (bot.interrupt_code) {
+                bot.pvp.stop();
+                return false;
+            }
         }
-        if (bot.entity.position.distanceTo(enemy.position) <= 2) {
-            try {
-                bot.pathfinder.setMovements(createMovements(bot));
-                let inverted_goal = new pf.goals.GoalInvert(new pf.goals.GoalFollow(enemy, 2));
-                await bot.pathfinder.goto(inverted_goal, true);
-            } catch (err) {/* might error if entity dies, ignore */}
-        }
-        bot.pvp.attack(enemy);
-        attacked = true;
-        await new Promise(resolve => setTimeout(resolve, 500));
-        enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
-        if (bot.interrupt_code) {
-            bot.pvp.stop();
-            return false;
-        }
+        bot.pvp.stop();
+        if (attacked)
+            log(bot, `Successfully defended self.`);
+        else
+            log(bot, `No enemies nearby to defend self from.`);
+        return attacked;
+    } finally {
+        bot.modes.unpause('self_defense');
+        bot.modes.unpause('cowardice');
     }
-    bot.pvp.stop();
-    if (attacked)
-        log(bot, `Successfully defended self.`);
-    else
-        log(bot, `No enemies nearby to defend self from.`);
-    return attacked;
 }
 export const defendSelf = wrapSkill('defendSelf', _impl_defendSelf);
 
