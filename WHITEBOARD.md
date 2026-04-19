@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `6ddfbef` on `origin/develop`. **In-progress:** #25 — `!addRule` armor/durability pattern + `replaceBrokenArmor` skill with in-inventory-swap + same-tier craft fallback. Closes JP's 2026-04-17 "if any part of your diamond armor breaks, make a replacement and equip it" request — previously fell through to `conditionFn = () => true` + wrong ore-search action. Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `4cae55d` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), and #25 (`4cae55d`) — `!addRule` armor/durability pattern + new `replaceBrokenArmor` skill (in-inventory swap with same-tier craft fallback). Closes JP's 2026-04-17 "if any part of your diamond armor breaks, make a replacement and equip it" rule — was previously falling through to a wrong default ore-search. Seven BTs awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,46 +66,50 @@ _Last updated: 2026-04-19. HEAD `6ddfbef` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### 25. `!addRule` armor/durability pattern + `replaceBrokenArmor` skill
-
-**Status:** in-progress (code phase) • **Priority:** medium (unlocks the class of rules JP actually requested 2026-04-17 — "if any part of your diamond armor breaks, make a replacement and equip it")
-
-**Problem.** `!addRule` in `src/agent/commands/actions.js` has no keyword case for armor or durability. JP's 2026-04-17 chat for a diamond-armor-break rule would (even if the LLM had correctly emitted `!addRule(...)`) fall through to `conditionFn = () => true` (fires every tick) + `action = '!searchForBlock("diamond_ore", 64)'` (completely wrong). Unusable.
-
-**Approach.** Three coordinated additions:
-
-1. **New skill `replaceBrokenArmor(bot)`** in `src/agent/library/skills.js`. Scans equipped armor slots (5 helmet / 6 chestplate / 7 leggings / 8 boots). For each piece at <20% durability:
-   - Search main inventory for a same-or-better-tier replacement (leather < chainmail < iron < golden < diamond < netherite) that is itself >20% durability. If found, `bot.equip(item, bodyPart)`.
-   - Else: attempt `craftRecipe(bot, '<tier>_<piece>', 1)` for the same tier, then equip if the craft succeeded. Crafting failures log and exit gracefully (no throw).
-   - Re-entry throttle via `bot._lastArmorReplace` (5s) so the rule firing every self-prompter tick doesn't spam craft attempts.
-
-2. **Register `!replaceBrokenArmor` command** in `actions.js` (no args, calls `skills.replaceBrokenArmor(agent.bot)`).
-
-3. **Add armor/durability case to `!addRule.perform`** dispatch (both the `conditionFn` block and the `action` block), keyed on `armor|armour|durability`:
-   - Condition: any equipped armor piece at <20% durability → return true.
-   - Action: `!replaceBrokenArmor`.
-
-**Files.**
-- `src/agent/library/skills.js` — new `_impl_replaceBrokenArmor` + export.
-- `src/agent/commands/actions.js` — new `!replaceBrokenArmor` command + new `!addRule` case.
-
-**Blast radius.** Additive case in the existing if/else chain inside `!addRule`. New skill + command are pure additions. No changes to rules dispatch model, no touch to existing cases.
-
-**Guardrails.**
-- Re-entry throttle (5s cooldown on `bot._lastArmorReplace`) to prevent craft-loop spam when the rule fires every self-prompter iteration.
-- Per-piece try/catch around `bot.equip` — mineflayer throws on mid-swap contention.
-- Craft fallback in its own try/catch — missing-ingredient / no-crafting-table failures log but don't throw.
-- Replacement-search skips items at <20% durability themselves — no swapping broken-for-broken.
-- Equipped slot (5/6/7/8) excluded from replacement scan so we can't "equip" the already-equipped broken item.
-
-**Rule 7 audit.** Single dispatch case in `!addRule`, single new skill, single new command registration. Tier-ranking table lives inside the new skill, not leaked. No cross-module fan-out.
-
-**Philosophy alignment.** Principle 1 (durability is mechanical — don't ask the LLM to notice). Rule 9 (minimum code — one dispatch case, one skill; defer any rules-API redesign until a second use case shows up).
-
-**Success signal.** JP chats: `!addRule("if any part of your diamond armor breaks, make a replacement and equip it")` → rule registers with condition fn (scans slots 5-8) + action `!replaceBrokenArmor`. Equipped diamond chestplate at 15% durability → rule fires → `[ReplaceArmor] chestplate at 15% durability — looking for replacement` → inventory search → equip spare OR craft `diamond_chestplate` OR log "missing ingredients". No dispatch spam (5s cooldown holds).
+_(empty — #25 shipped `4cae55d`; seven BTs shipped today all awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### 25. `!addRule` armor/durability pattern + `replaceBrokenArmor` skill (`4cae55d`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs JP to register an armor-break rule via chat AND for an equipped piece to drop below 20% durability; can be smoke-tested by spawning the bot with damaged armor in creative or by riding a goal that wears armor down)
+
+**Change.** Three coordinated additions:
+
+1. **New skill `replaceBrokenArmor(bot)`** (src/agent/library/skills.js, ~100 lines added after the `equip` export). Scans equipped armor slots 5/6/7/8. For each piece below 20% durability:
+   - Searches main inventory for a same-or-better-tier replacement (`leather` < `chainmail` < `iron` < `golden` < `diamond` < `netherite`) that itself has >20% durability. If found, `bot.equip(item, bodyPart)`.
+   - Else: attempts `craftRecipe(bot, '<tier>_<piece>', 1)` for the same tier, then equips if a fresh item appeared in inventory.
+   - Re-entry throttle via `bot._lastArmorReplace` (5s cooldown) prevents craft-loop spam since the rule fires every self-prompter iteration.
+   - Per-piece try/catch around `bot.equip`; craft fallback in its own try/catch. All failure modes log via `log(bot, ...)` and do not throw.
+
+2. **New `!replaceBrokenArmor` command** (src/agent/commands/actions.js, registered right after `!equip`). No args. Calls `skills.replaceBrokenArmor(agent.bot)`.
+
+3. **New armor/durability case in `!addRule.perform`** (src/agent/commands/actions.js). Keyed on `armor|armour|durability`:
+   - **Condition:** scans slots 5–8 for any equipped piece at <20% durability → returns true.
+   - **Action:** `!replaceBrokenArmor`.
+
+**Why this closes the gap.** JP's 2026-04-17 chat — "add a new rule, if any part of your diamond armor breaks, make a replacement corresponding diamond armor and equip it" — had nowhere to land in `!addRule`'s dispatch. The description would fall through to `conditionFn = () => true` (fires every tick forever) and `action = '!searchForBlock("diamond_ore", 64)'` — wrong on both axes. Even if BT-24 had landed in time and the LLM had emitted `!addRule(...)`, the resulting rule would have been useless. With this patch, the same description registers a real durability-aware condition and a real corrective action.
+
+**Guardrails.**
+- Re-entry throttle (5s) on `bot._lastArmorReplace` keeps the rule from spamming craft attempts when self-prompter ticks fast.
+- Replacement search skips items that are themselves at <20% durability — no swapping broken-for-broken.
+- Equipped slot (5/6/7/8) excluded from replacement scan — cannot accidentally "equip" the already-equipped broken item.
+- Tier comparison uses prefix matching (`leather_`, `iron_`, etc.) — won't confuse `iron_helmet` with `iron_pickaxe` because `_armorTier` only ranks the prefix, and the suffix gate (`item.name.endsWith('_' + piece.suffix)`) ensures only matching armor pieces are considered.
+
+**Rule 7 audit.** Single dispatch case in `!addRule`, single new skill, single new command registration. Tier-ranking table (`ARMOR_TIERS`) and slot-mapping table (`ARMOR_PIECES`) live inside the new skill, not leaked. No cross-module fan-out, no touch to existing rules dispatch model.
+
+**Verification signals to watch.**
+- JP chat: `!addRule("if any part of your diamond armor breaks, make a replacement and equip it")` → expect `Persistent rule #N added: "..." → !replaceBrokenArmor` (note the action no longer reads `!searchForBlock("diamond_ore", 64)`).
+- When an equipped piece drops below 20% durability, expect on the next self-prompter iteration: `[ReplaceArmor] <piece> (<itemName>) at NN% durability — looking for replacement` followed by either `[ReplaceArmor] Equipped <itemName> in <bodyPart> slot` (in-inventory swap), or `[ReplaceArmor] Crafted and equipped <name>` (craft path), or `[ReplaceArmor] Craft of <name> did not produce inventory item (missing ingredients or no nearby crafting table)` (failure path).
+- No `[ReplaceArmor]` log spam — lines should appear at most once every 5 seconds even though the rule fires every tick.
+
+**Companion ship.** #24 (`0b2e0df`) closed the player-chat-invisibility path that originally killed this rule attempt on 2026-04-17. #25 closes the dispatch-pattern gap so when the player chat does land, `!addRule` produces a usable rule.
+
+**Deferred (may promote later).**
+- Empty-slot bootstrap: if a slot is unequipped (e.g., bot has never had a helmet), the current condition won't fire. Could add a parallel rule like `!ensureBestArmor` that crafts/equips the best available tier per slot regardless of durability. Not in scope here — JP's request was specifically about replacement on break.
+- Tier auto-upgrade: if the bot has a netherite chestplate sitting in inventory and is wearing a worn diamond chestplate at 50% durability, the rule won't fire (durability >20%). Belongs with a separate "always wear best armor" rule pattern.
+
 
 ### 29. `autoBreakStuckPlant` vertical-scan extension — dy=-1 and dy=2 added (`a6a3e9b`, 2026-04-19)
 
