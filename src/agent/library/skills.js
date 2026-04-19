@@ -1915,6 +1915,230 @@ function startVillageScanner(bot) {
 // Exports for agent.js startup wiring
 export { detectNearbyVillages, startVillageScanner };
 
+// === BT-7c (2026-04-19): heuristic auto-detection of player-built structures ===
+// Complements the village detector. Scans chunks around the bot for clusters of
+// strongly player-characteristic blocks (stone bricks, wool, concrete, redstone,
+// banners, beds, doors, glass panes). Clusters above the signal threshold
+// register a protected zone of type='player_base'. Dedups against existing
+// zones so re-scans are idempotent.
+
+const PLAYER_SCAN_RADIUS = 64;
+const PLAYER_CLUSTER_RADIUS = 12;
+const PLAYER_MIN_SIGNALS = 6;
+const PLAYER_PROTECT_RADIUS = 40;
+const PLAYER_Y_BELOW = 20;
+const PLAYER_Y_ABOVE = 30;
+const PLAYER_DEDUP_RADIUS = 30;
+
+const PLAYER_CHARACTERISTIC_BLOCKS = [
+    'stone_bricks',
+    'mossy_stone_bricks',
+    'cracked_stone_bricks',
+    'chiseled_stone_bricks',
+    'polished_granite',
+    'polished_diorite',
+    'polished_andesite',
+    'polished_blackstone',
+    'polished_blackstone_bricks',
+    // Doors
+    'oak_door',
+    'spruce_door',
+    'birch_door',
+    'jungle_door',
+    'acacia_door',
+    'dark_oak_door',
+    'mangrove_door',
+    'cherry_door',
+    'bamboo_door',
+    'crimson_door',
+    'warped_door',
+    'iron_door',
+    // Glass panes
+    'glass_pane',
+    'white_stained_glass_pane',
+    'orange_stained_glass_pane',
+    'magenta_stained_glass_pane',
+    'light_blue_stained_glass_pane',
+    'yellow_stained_glass_pane',
+    'lime_stained_glass_pane',
+    'pink_stained_glass_pane',
+    'gray_stained_glass_pane',
+    'light_gray_stained_glass_pane',
+    'cyan_stained_glass_pane',
+    'purple_stained_glass_pane',
+    'blue_stained_glass_pane',
+    'brown_stained_glass_pane',
+    'green_stained_glass_pane',
+    'red_stained_glass_pane',
+    'black_stained_glass_pane',
+    // Wool
+    'white_wool',
+    'orange_wool',
+    'magenta_wool',
+    'light_blue_wool',
+    'yellow_wool',
+    'lime_wool',
+    'pink_wool',
+    'gray_wool',
+    'light_gray_wool',
+    'cyan_wool',
+    'purple_wool',
+    'blue_wool',
+    'brown_wool',
+    'green_wool',
+    'red_wool',
+    'black_wool',
+    // Concrete
+    'white_concrete',
+    'orange_concrete',
+    'magenta_concrete',
+    'light_blue_concrete',
+    'yellow_concrete',
+    'lime_concrete',
+    'pink_concrete',
+    'gray_concrete',
+    'light_gray_concrete',
+    'cyan_concrete',
+    'purple_concrete',
+    'blue_concrete',
+    'brown_concrete',
+    'green_concrete',
+    'red_concrete',
+    'black_concrete',
+    // Redstone mechanisms
+    'redstone_lamp',
+    'redstone_torch',
+    'repeater',
+    'comparator',
+    'piston',
+    'sticky_piston',
+    'observer',
+    'hopper',
+    'dispenser',
+    'dropper',
+    'lever',
+    'note_block',
+    // Banners
+    'white_banner',
+    'orange_banner',
+    'magenta_banner',
+    'light_blue_banner',
+    'yellow_banner',
+    'lime_banner',
+    'pink_banner',
+    'gray_banner',
+    'light_gray_banner',
+    'cyan_banner',
+    'purple_banner',
+    'blue_banner',
+    'brown_banner',
+    'green_banner',
+    'red_banner',
+    'black_banner',
+    // Beds
+    'white_bed',
+    'orange_bed',
+    'magenta_bed',
+    'light_blue_bed',
+    'yellow_bed',
+    'lime_bed',
+    'pink_bed',
+    'gray_bed',
+    'light_gray_bed',
+    'cyan_bed',
+    'purple_bed',
+    'blue_bed',
+    'brown_bed',
+    'green_bed',
+    'red_bed',
+    'black_bed',
+];
+
+function _playerBaseAlreadyRegistered(bot, x, z) {
+    if (!Array.isArray(bot.protectedZones)) return false;
+    for (const z0 of bot.protectedZones) {
+        const dx = (z0.x ?? 0) - x;
+        const dz = (z0.z ?? 0) - z;
+        if (dx * dx + dz * dz <= PLAYER_DEDUP_RADIUS * PLAYER_DEDUP_RADIUS) return true;
+    }
+    return false;
+}
+
+function _playerBaseZoneFromCenter(x, y, z, signalCount) {
+    const xi = Math.round(x);
+    const yi = Math.round(y);
+    const zi = Math.round(z);
+    return {
+        name: `player_base_${xi}_${zi}`,
+        type: 'player_base',
+        x: xi,
+        z: zi,
+        radius: PLAYER_PROTECT_RADIUS,
+        yMin: yi - PLAYER_Y_BELOW,
+        yMax: yi + PLAYER_Y_ABOVE,
+        source: `auto-detect (${signalCount} signals)`,
+    };
+}
+
+/**
+ * Scan for clusters of player-characteristic blocks around the bot. Registers
+ * each qualifying cluster as a protected zone in bot.protectedZones.
+ * @param {MinecraftBot} bot
+ * @returns {number} number of new zones registered this scan.
+ */
+function detectNearbyPlayerStructures(bot) {
+    let registered = 0;
+    try {
+        const registry = bot.registry;
+        if (!registry) return 0;
+
+        // Resolve block name list -> numeric id list (some blocks may not exist
+        // in this mineflayer data version — skip silently).
+        const ids = [];
+        for (const name of PLAYER_CHARACTERISTIC_BLOCKS) {
+            const b = registry.blocksByName[name];
+            if (b) ids.push(b.id);
+        }
+        if (ids.length === 0) return 0;
+        const idSet = new Set(ids);
+
+        const positions = bot.findBlocks({
+            matching: (block) => idSet.has(block.type),
+            maxDistance: PLAYER_SCAN_RADIUS,
+            count: 512,
+        });
+        if (!positions || positions.length === 0) return 0;
+
+        const clusters = _clusterPositions(positions, PLAYER_CLUSTER_RADIUS);
+        for (const c of clusters) {
+            if (c.count < PLAYER_MIN_SIGNALS) continue;
+            if (_playerBaseAlreadyRegistered(bot, c.centerX, c.centerZ)) continue;
+            const zone = _playerBaseZoneFromCenter(c.centerX, c.centerY, c.centerZ, c.count);
+            if (!Array.isArray(bot.protectedZones)) bot.protectedZones = [];
+            bot.protectedZones.push(zone);
+            log(bot, `[PlayerStructureScan] Detected player-built cluster at (${zone.x}, ${zone.z}) — ${c.count} signals; registering zone ${zone.name} (radius ${PLAYER_PROTECT_RADIUS})`);
+            registered++;
+        }
+    } catch (err) {
+        console.warn('[PlayerStructureScan] scan failed:', err.message);
+    }
+    return registered;
+}
+
+const PLAYER_STRUCTURE_SCAN_INTERVAL_MS = 30_000;
+function startPlayerStructureScanner(bot) {
+    setTimeout(() => {
+        try { detectNearbyPlayerStructures(bot); } catch (err) { console.warn('[PlayerStructureScan] Initial scan failed:', err.message); }
+    }, 10_000);
+
+    return setInterval(() => {
+        try { detectNearbyPlayerStructures(bot); } catch (err) { console.warn('[PlayerStructureScan] Periodic scan failed:', err.message); }
+    }, PLAYER_STRUCTURE_SCAN_INTERVAL_MS);
+}
+
+export { detectNearbyPlayerStructures, startPlayerStructureScanner };
+
+
 /**
  * Configure a pf.Movements instance for safer terrain traversal across biomes,
  * especially swamps, dripstone caves, nether, and other damage-prone terrain.

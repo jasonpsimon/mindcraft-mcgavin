@@ -264,6 +264,21 @@ export class Agent {
                     console.warn('[VillageDetect] startVillageScanner threw:', scanErr.message);
                 }
 
+                // BT-7c: heuristic player-structure detector. First scan fires
+                // ~10s after startup (chunks must load); subsequent scans every
+                // 30s. Adds zones of type='player_base' to bot.protectedZones
+                // for clusters of player-characteristic blocks (wool/concrete/
+                // stone-bricks/redstone/banners/beds/doors/glass-panes).
+                try {
+                    if (this._playerStructureScanInterval) {
+                        clearInterval(this._playerStructureScanInterval);
+                        this._playerStructureScanInterval = null;
+                    }
+                    this._playerStructureScanInterval = skills.startPlayerStructureScanner(this.bot);
+                } catch (scanErr) {
+                    console.warn('[PlayerStructureScan] startPlayerStructureScanner threw:', scanErr.message);
+                }
+
                 // BT-12: wire observability BEFORE the spawn-escape await so
                 // any damage taken during escape, path decisions, mutex
                 // contention, and general bot state during the 45-60s
