@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `933ee16` on `origin/develop`. **Shipped today:** #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), #22b NaN-position suffocation recovery (`d921016`), and #23 self-prompter held-state back-off (`933ee16`). The suffocation-death class is now fully guarded at both commit-point and current-position layers (#22 + #22b); the self-prompter no longer walks the circuit-breaker into `STOPPED` during ChunkWait holds, preserving goals across NaN windows (#23). All four awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `4788f5f` on `origin/develop`. **In-progress:** #24 — self-prompter yields to queued player chat before its next self-prompt. Closes the "player chat invisible to a stuck bot" failure observed live 2026-04-17 (`!addRule` chat received but never acted on; LLM pattern-completed past it). Shipped today: #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`) — all awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,31 @@ _Last updated: 2026-04-19. HEAD `933ee16` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — #23 shipped `933ee16`; four BTs shipped today all awaiting live verification on next natural ChunkWait hold / suffocation / forcedMove-into-zone / escape event.)_
+### 24. Self-prompter doesn't interrupt stuck loops for player chat
+
+**Status:** in-progress (code phase) • **Priority:** high (player-chat-invisible failure observed live 2026-04-17)
+
+**Problem.** `SelfPrompter.startLoop` drains `_playerMsgQueue` AFTER each LLM round-trip. So when a player sends chat mid-generation (or during the cooldown sleep), the LLM that just generated `!digDown` has zero visibility into what they said relative to what it was already doing. Pattern-completion wins: stuck dig-loop continues, player message drained as a separate `handleMessage` call but the goal-state LLM is the one that already decided. On 2026-04-17 ≈19:00Z this killed `!addRule(...)` chat in a `!digDown(10)` loop — message received in tmux, never acted on, zero `[PersistentRule]` logs.
+
+**Approach.** Add a top-of-loop drain (after the #23 ChunkWait gate, before persistent-rules check). If `_playerMsgQueue` has anything, drain it via `handleMessage(username, msg)` BEFORE building the next self-prompt. Each player message gets a dedicated LLM turn with `source=username` (not `'system'`). Reset `no_command_count` and `_consecutiveNoProgress` after draining so player turns don't walk us toward the circuit-breaker. `continue` to skip the self-prompt this tick.
+
+**Files.**
+- `src/agent/self_prompter.js` — top-of-loop drain block in `startLoop` while-body.
+
+**What this does NOT change.**
+- Existing bottom-of-loop drain stays — catches messages that arrive during the LLM self-prompt round-trip itself.
+- `agent.js` untouched — `_playerMsgQueue` and `_processingPlayerMsg` flag already exist.
+- No chat-aware prompt prefix (deferred unless verify shows it's needed). Player message becomes its own history entry; LLM should see it on next self-prompt naturally.
+- No stuck-loop detection (#10 territory).
+
+**Guardrails.**
+- Re-entry gated by existing `_processingPlayerMsg` flag (also used by bottom drain).
+- Optional chaining (`this.agent._playerMsgQueue?.length`) keeps the check safe before agent finishes init.
+- Counter reset after drain prevents the player-chat path from feeding into #23's circuit-breaker concern.
+
+**Rule 7 audit.** Single site (top of `startLoop` while-body, just after #23 ChunkWait gate). All downstream LLM calls in this loop sit under it. Player-chat handlers OUTSIDE this loop (the immediate-response path in `agent.js:respondFunc`) are unchanged — they were never the bug.
+
+**Success signal.** Bot in a repeating `!digDown` failure pattern; player sends `!addRule(...)`. Expect `[SelfPrompter] yielding to player message from <user>` → `!addRule` executes → `[PersistentRule] Added rule #1 …` → next self-prompt-generated command happens AFTER, not before.
 
 
 ## Shipped — awaiting live verification
@@ -183,40 +207,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-### 24. Self-prompter doesn't interrupt stuck loops for player chat
-
-**Status:** ⏳ not started • **Priority:** high (observed live 2026-04-17; player chat effectively invisible to a stuck bot)
-
-**Problem.** Observed live 2026-04-17 ~19:00Z. The bot was deep in a repeating `!digDown(10)` → "dangerous drop ahead, 0 blocks dug" loop against an unreachable cavern. JP sent two chat messages via `Bones_McGavin`:
-
-1. "Set a goal to mine 64 ancient debris" — processed (goal set via `!goal`, bot then pattern-completed into the dig-loop).
-2. "add a new rule, if any part of your diamond armor breaks, make a replacement corresponding diamond armor and equip it" — RECEIVED (seen in tmux: `ThatCoolGuyDude received message from Bones_McGavin : ...`) but NEVER acted on. Zero `[PersistentRule]` logs in 5000+ lines of tmux; zero `!addRule` in the rotated history file; `memory.json persistent_rules: []` after the save that covered this window.
-
-The LLM's next response after the rule chat stayed in the dig-down pattern. The chat joined the conversation turns but did not break the loop. From the player's perspective, the message was ignored.
-
-**Root cause.** Two contributing patterns:
-
-1. `SelfPrompter.startLoop` treats player-chat drainage as secondary — the `_playerMsgQueue` drain runs AFTER the LLM has already generated a response to its own self-prompt (`self_prompter.js:168-177`). So if a player message arrives mid-generation, it's drained as a new `handleMessage` call but the LLM that just responded has no visibility into what the player said relative to what it was already doing. No mechanism to interrupt or reset the pattern.
-2. When the LLM has been issuing `!digDown` repeatedly and a new chat arrives, nothing in the prompt says "a player just interrupted you — reconsider." The self-prompt message at `self_prompter.js:159` is still `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command...`. Pattern-matching continues.
-
-**Solution sketch.**
-
-- **Interrupt-on-chat:** when a `Bones_McGavin`/player-authored message arrives, call `self_prompter.stopLoop()` (or a softer version that doesn't set `state=STOPPED`) so the current self-prompt cycle exits cleanly, then route the player message through `handleMessage` outside the loop, then resume. This preserves the goal but gives the player message undivided attention.
-- **Chat-aware prompt prefix:** if `_playerMsgQueue` had messages drained during the last turn, prepend the prompt with `A player just said: "<message>". Address it before continuing.` so the LLM can't pattern-complete past it.
-- **Stuck-loop detection:** secondary — if the last N commands were identical (same name + args), the self-prompt should say `You have repeated !digDown(10) 4 times with no progress. Try a different approach.` Extends BT-5's measurement instinct.
-
-Option 1 is the surgical fix; 2 is the defense-in-depth; 3 is the root cause of the dig-loop itself and probably belongs with #10 survival hardening.
-
-**Files.**
-- `src/agent/self_prompter.js` — interrupt + prompt-prefix logic.
-- `src/agent/agent.js` — `handleMessage` may need to signal "this was a player, not a self-prompt" to the prompter.
-
-**Blast radius.** Changes control flow inside the loop. Medium risk — must verify interrupts don't cascade into the auto-stop counter or goal-loss path from #23. Ship #23 first.
-
-**Success signal.** Replay scenario: put the bot in a repeating failing command (`!digDown` against unreachable cavern), send a chat message, the bot's very next response addresses the chat — not another `!digDown`. Confirm via the rotated history file that `!addRule` / `!goal` / whatever the chat demanded actually appears.
-
-**Philosophy alignment.** Principle 1 (the player is the human-in-the-loop; never let the LLM's self-prompting drown them out). Rule 7 (complete the perimeter — every loop that talks to the LLM needs a chat-interrupt path, not just the top-level handler).
 
 ### 25. `!addRule` has no armor/durability pattern
 
