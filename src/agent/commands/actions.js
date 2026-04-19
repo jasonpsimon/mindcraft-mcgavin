@@ -210,6 +210,13 @@ export const actionsList = [
         })
     },
     {
+        name: '!replaceBrokenArmor',
+        description: 'Scan equipped armor; for any piece <20% durability, equip a same-or-better-tier spare from inventory or craft same-tier replacement.',
+        perform: runAsAction(async (agent) => {
+            await skills.replaceBrokenArmor(agent.bot);
+        })
+    },
+    {
         name: '!putInChest',
         description: 'Put the given item in the nearest chest.',
         params: {
@@ -475,6 +482,22 @@ export const actionsList = [
                         return blocks.length > 0;
                     } catch { return false; }
                 };
+            } else if (descLower.includes('armor') || descLower.includes('armour') || descLower.includes('durability')) {
+                // BT-25: any equipped armor piece below 20% durability → fire.
+                conditionFn = (agent) => {
+                    try {
+                        const slots = agent.bot.inventory.slots;
+                        for (const slotIdx of [5, 6, 7, 8]) {
+                            const item = slots[slotIdx];
+                            if (!item) continue;
+                            const maxDur = item.maxDurability || 0;
+                            if (maxDur <= 0) continue;
+                            const remaining = maxDur - (item.durabilityUsed || 0);
+                            if (remaining / maxDur < 0.2) return true;
+                        }
+                        return false;
+                    } catch { return false; }
+                };
             } else {
                 // Default: always-true rule (fires every iteration)
                 conditionFn = () => true;
@@ -497,6 +520,8 @@ export const actionsList = [
                     action = '!autoDiscard(5)';
                 else if (dl.includes('low health') || dl.includes('heal'))
                     action = '!eat';
+                else if (dl.includes('armor') || dl.includes('armour') || dl.includes('durability'))
+                    action = '!replaceBrokenArmor';
                 else
                     action = '!searchForBlock("diamond_ore", 64)';
             }

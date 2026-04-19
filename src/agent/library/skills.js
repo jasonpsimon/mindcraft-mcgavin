@@ -1071,6 +1071,114 @@ async function _impl_equip(bot, itemName) {
 
 export const equip = wrapSkill('equip', _impl_equip);
 
+// === BT-25 (2026-04-19): durability-aware armor replacement ===
+// Used by the `!addRule(...armor/durability...)` dispatch case in
+// actions.js. Reactive: scans equipped armor slots, swaps in a same-or-
+// better-tier replacement from inventory, falls back to crafting the
+// same tier if inventory has nothing usable. Re-entry throttled because
+// the rule fires every self-prompter iteration.
+
+const ARMOR_TIERS = { leather: 1, chainmail: 2, iron: 3, golden: 4, diamond: 5, netherite: 6 };
+const ARMOR_PIECES = [
+    { slot: 5, bodyPart: 'head',  suffix: 'helmet' },
+    { slot: 6, bodyPart: 'torso', suffix: 'chestplate' },
+    { slot: 7, bodyPart: 'legs',  suffix: 'leggings' },
+    { slot: 8, bodyPart: 'feet',  suffix: 'boots' },
+];
+
+function _armorTier(itemName) {
+    if (!itemName) return 0;
+    for (const [prefix, rank] of Object.entries(ARMOR_TIERS)) {
+        if (itemName.startsWith(prefix + '_')) return rank;
+    }
+    return 0;
+}
+
+async function _impl_replaceBrokenArmor(bot) {
+    /**
+     * Scan equipped armor; for each piece <20% durability, equip a same-or-
+     * better-tier replacement from inventory, or craft same-tier if none.
+     * Re-entry throttled to 5s.
+     * @param {MinecraftBot} bot
+     * @returns {Promise<boolean>} true if any swap or craft+equip happened.
+     */
+    const now = Date.now();
+    if (bot._lastArmorReplace && now - bot._lastArmorReplace < 5000) {
+        return false;
+    }
+    bot._lastArmorReplace = now;
+
+    let anyReplaced = false;
+    for (const piece of ARMOR_PIECES) {
+        const equipped = bot.inventory.slots[piece.slot];
+        if (!equipped) continue;
+        const maxDur = equipped.maxDurability || 0;
+        if (maxDur <= 0) continue;
+        const remaining = maxDur - (equipped.durabilityUsed || 0);
+        const pct = remaining / maxDur;
+        if (pct >= 0.2) continue;
+
+        const equippedTier = _armorTier(equipped.name);
+        log(bot, `[ReplaceArmor] ${piece.suffix} (${equipped.name}) at ${Math.round(pct*100)}% durability — looking for replacement`);
+
+        // Search inventory for same-or-better-tier replacement (skip equipped slot).
+        let best = null;
+        let bestRank = 0;
+        for (let i = 0; i < bot.inventory.slots.length; i++) {
+            if (i === piece.slot) continue;
+            const item = bot.inventory.slots[i];
+            if (!item) continue;
+            if (!item.name.endsWith('_' + piece.suffix)) continue;
+            const imMax = item.maxDurability || 0;
+            if (imMax > 0) {
+                const imRem = imMax - (item.durabilityUsed || 0);
+                if (imRem / imMax < 0.2) continue;  // skip nearly-broken spares
+            }
+            const rank = _armorTier(item.name);
+            if (rank >= equippedTier && rank > bestRank) {
+                best = item;
+                bestRank = rank;
+            }
+        }
+
+        if (best) {
+            try {
+                await bot.equip(best, piece.bodyPart);
+                log(bot, `[ReplaceArmor] Equipped ${best.name} in ${piece.bodyPart} slot`);
+                anyReplaced = true;
+                continue;
+            } catch (err) {
+                log(bot, `[ReplaceArmor] Failed to equip ${best.name}: ${err.message}`);
+            }
+        }
+
+        // No replacement in inventory — try to craft same-tier piece.
+        if (equippedTier > 0) {
+            const tierName = Object.entries(ARMOR_TIERS).find(([, r]) => r === equippedTier)?.[0];
+            if (!tierName) continue;
+            const craftName = `${tierName}_${piece.suffix}`;
+            log(bot, `[ReplaceArmor] No spare ${piece.suffix} in inventory — attempting to craft ${craftName}`);
+            try {
+                await _impl_craftRecipe(bot, craftName, 1);
+                const newItem = bot.inventory.slots.find((s, i) => i !== piece.slot && s && s.name === craftName);
+                if (newItem) {
+                    await bot.equip(newItem, piece.bodyPart);
+                    log(bot, `[ReplaceArmor] Crafted and equipped ${craftName}`);
+                    anyReplaced = true;
+                } else {
+                    log(bot, `[ReplaceArmor] Craft of ${craftName} did not produce inventory item (missing ingredients or no nearby crafting table)`);
+                }
+            } catch (err) {
+                log(bot, `[ReplaceArmor] Craft attempt for ${craftName} threw: ${err.message}`);
+            }
+        }
+    }
+    return anyReplaced;
+}
+
+export const replaceBrokenArmor = wrapSkill('replaceBrokenArmor', _impl_replaceBrokenArmor);
+
+
 
 /**
  * Safely toss items by digging a side pocket when underground/confined.
