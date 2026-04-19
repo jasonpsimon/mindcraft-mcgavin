@@ -58,6 +58,23 @@ const modes_list = [
                     bot._lowHpRetreatActive = false;
                 }
             }
+
+            // BT-10c (2026-04-19): suffocation latch clear. Cleared when the
+            // head block is no longer a solid bounding-box block. Runs every
+            // tick at the top so we exit the latch immediately after the dig
+            // (or any external rescue) lands.
+            if (bot._suffocationEscapeActive) {
+                const passable = ['air', 'cave_air', 'void_air', 'water', 'lava'];
+                const headClear = (
+                    !blockAbove ||
+                    passable.includes(blockAbove.name) ||
+                    blockAbove.boundingBox !== 'block'
+                );
+                if (headClear) {
+                    console.log('[Survival] suffocation-escape cleared');
+                    bot._suffocationEscapeActive = false;
+                }
+            }
             // Drowning check: head in water OR oxygen dropping while submerged.
             // Always hold jump when drowning, even during an active pathfind —
             // mineflayer tolerates setControlState('jump', true) while pathfinder
@@ -69,6 +86,35 @@ const modes_list = [
             const lowOxygen = typeof bot.oxygenLevel === 'number' && bot.oxygenLevel < 18;
             if (headInWater || (lowOxygen && bot.entity.isInWater)) {
                 bot.setControlState('jump', true);
+            }
+            // BT-10c (2026-04-19): suffocation escape. Triggers when the head
+            // block is a solid bounding-box block (full-block collision) that is
+            // NOT in the passable allowlist. Catches: completed sand/gravel
+            // collapses, world-edit drops, cave-ins, mob shoves into walls,
+            // griefer towers. Lava-as-head-block is excluded — the lava
+            // branch handles that case with its own escape primitives.
+            else if (
+                blockAbove &&
+                blockAbove.boundingBox === 'block' &&
+                !['air', 'cave_air', 'void_air', 'water', 'lava'].includes(blockAbove.name) &&
+                !bot._suffocationEscapeActive
+            ) {
+                bot._suffocationEscapeActive = true;
+                const headType = blockAbove.name;
+                console.log(`[Survival] suffocation-escape type=${headType}`);
+                say(agent, 'Suffocating — digging up!');
+                execute(this, agent, async () => {
+                    try {
+                        const pos = bot.entity.position;
+                        await skills.breakBlockAt(bot,
+                            Math.floor(pos.x),
+                            Math.floor(pos.y) + 1,
+                            Math.floor(pos.z));
+                    } catch (_) {
+                        // Latch stays set; top-of-update clear handles the
+                        // case where head clears via any other means.
+                    }
+                });
             }
             else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
                 execute(this, agent, async () => {
