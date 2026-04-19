@@ -5,7 +5,7 @@ import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
 import { getDiscardSuggestions, autoDiscard, markDiscarded } from '../../utils/inventory_utils.js';
-import { withBotLock } from '../bot_mutex.js';
+import { withBotLock, botMutex } from '../bot_mutex.js';
 import { wrapSkill } from '../../observability/skill_lifecycle.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
@@ -2161,6 +2161,9 @@ function _installSpawnEscapeInstrumentation(bot) {
     let _fmLastLogged = 0;
     let _fmBurstCount = 0;
     let _fmLastPos = null;
+    // #28 re-fire state — debounce + cooldown so bursts don't spam escape calls.
+    let _fmReFireScheduled = false;
+    let _fmLastReFireMs = 0;
     bot.on('forcedMove', () => {
         const p = bot.entity?.position;
         const now = Date.now();
@@ -2182,6 +2185,38 @@ function _installSpawnEscapeInstrumentation(bot) {
                 _fmLastLogged = now;
                 _fmBurstCount = 0;
             }
+        }
+
+        // #28 Mid-session in-zone trigger.
+        // Why: escapeProtectedZone only fires on spawn/login. A server teleport
+        // (or /tp by an op) that drops the bot back into the protected zone
+        // leaves it stranded — destructive actions inside the zone get blocked,
+        // and the self-prompter has no signal to escape. Re-fire the escape on
+        // any forcedMove that lands inside the zone, with re-entry guards.
+        // Defer 500ms so the bot's position has settled and we don't spam
+        // during a teleport burst.
+        if (!_fmReFireScheduled) {
+            _fmReFireScheduled = true;
+            setTimeout(() => {
+                _fmReFireScheduled = false;
+                try {
+                    const pp = bot.entity?.position;
+                    if (!pp || !Number.isFinite(pp.x) || !Number.isFinite(pp.z)) return;
+                    if (bot.health !== undefined && bot.health <= 0) return;
+                    if (!_isInSpawnZone(bot, pp.x, pp.z)) return;
+                    const holder = botMutex.currentHolder;
+                    if (holder === 'escapeProtectedZone' || holder === 'escapeSpawnZone') return;
+                    const now2 = Date.now();
+                    if (now2 - _fmLastReFireMs < 30000) return;  // 30s cooldown
+                    _fmLastReFireMs = now2;
+                    console.log(`[SpawnEscape] forcedMove landed in protected zone at (${pp.x.toFixed(1)}, ${pp.y.toFixed(1)}, ${pp.z.toFixed(1)}) — re-firing escape`);
+                    _impl_escapeProtectedZone(bot).catch((err) => {
+                        console.warn(`[SpawnEscape] re-fire failed: ${err && err.message ? err.message : err}`);
+                    });
+                } catch (err) {
+                    console.warn(`[SpawnEscape] re-fire scheduler error: ${err && err.message ? err.message : err}`);
+                }
+            }, 500);
         }
     });
 
@@ -2210,7 +2245,7 @@ function _installSpawnEscapeInstrumentation(bot) {
         }
     });
 
-    console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners)');
+    console.log('[SpawnEscape] Instrumentation installed (forcedMove / respawn / death / health / chat listeners; #28 in-zone re-fire enabled)');
 }
 
 // -----------------------------------------------------------------------------
