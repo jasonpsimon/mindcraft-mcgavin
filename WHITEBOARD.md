@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `b18b40a` on `origin/develop`. **In-progress:** BT-7b — self-cleanup of incidental block placements (tracker + `cleanup_blocks` idle mode). JP repeatedly observes bot placing scaffolding/filler (cobble, dirt) that never gets picked back up — world-stewardship gap. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`). Eight BTs awaiting live verification; OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `67d8d82` on `origin/develop`. **Shipped today:** #22 (`8c2b6fe`), #28 (`f3bee88`), #22b (`d921016`), #23 (`933ee16`), #24 (`0b2e0df`), #29 (`a6a3e9b`), #25 (`4cae55d`), #7c (`0ff5c29`), OPT-H (`4f5141e`), OPT-I (`94442d2`, live verified), OPT-J (`e2b680b`), and BT-7b (`67d8d82`) — new `placement_tracker` observability module + `cleanup_blocks` idle mode; bot now tracks its own placements, classifies them (intentional / pathfinder-scaffold / unknown-llm), and breaks incidental ones after 30s + 5-block departure. Nine items awaiting live verification (eight prior BTs + BT-7b); OPT-H/I/J complete. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,56 +66,48 @@ _Last updated: 2026-04-19. HEAD `b18b40a` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-7b. Self-cleanup of incidental block placements
-
-**Status:** in-progress (code phase) • **Priority:** medium (world-stewardship behavior; JP repeatedly observes abandoned scaffolding)
-
-**Problem.** Bot places resource blocks (cobble, dirt, etc.) during pathfinder scaffolding or LLM confusion, then walks away. No mechanism exists to reclaim them. Over a play session the world fills with orphaned columns/piles.
-
-**Design (approved 2026-04-19).**
-
-1. **Tracker** — new `bot._placedBlocks = []` array of `{x, y, z, type, t, purpose}`. FIFO cap 200 (mirror `bot.placedTorches` pattern at skills.js:5055). Cleared on death/respawn.
-2. **Purpose tagging** via `bot.on('blockPlaced')` hook in a new observability module `src/observability/placement_tracker.js`:
-   - `pathfinder-scaffold` if `bot.pathfinder.isMoving()` at the moment of placement
-   - `torch` if the block matches `bot.placedTorches` head — skip (already tracked by torch logic)
-   - `intentional` if `bot._placeIntent === 'intentional'` (set/cleared by `_impl_placeBlock` try/finally)
-   - `unknown-llm` otherwise (LLM-driven `!placeBlock` via coder path counts as intentional; this catches confused spam)
-3. **Cleanup mode** `cleanup_blocks` in `modes.js` with `interrupts: []` (idle-only, no preemption). Per-tick scan: find first entry where `now - t > 30s` AND `distance(bot, block) > 5` AND `block.name` still matches. Run `skills.breakBlockAt` + splice. Max 1 block per tick to avoid monopolizing the mode loop.
-4. **Zone guard** — skip cleanup inside any `protectedZones` entry (250-block spawn perimeter + any manually-added zones). Both write-side (don't track) and read-side (don't break) guarded.
-5. **Observability** — JSONL sink `data/placement-stream.jsonl` (one record per `blockPlaced` with resolved purpose + per cleanup event). StateTicker snapshot field: `placedBlocks: { total, eligible, oldest_age_s }`.
-
-**Files.**
-- NEW `src/observability/placement_tracker.js` — closure state + `configurePlacementTracker()` + `hookPlacementTracker(agent)` (idempotent via `_hookedPlacementTracker` reference-identity gate on `bot`) + `getPlacementStats()`. Mirrors `src/observability/path_telemetry.js` shape exactly.
-- `src/agent/library/skills.js` — `_impl_placeBlock` body wrapped in `try { bot._placeIntent = 'intentional'; ... } finally { bot._placeIntent = null; }` so the tagger can distinguish intentional from incidental.
-- `src/agent/modes.js` — new `cleanup_blocks` mode appended to `modes_list`. `interrupts: []`, `on: true`, `active: false`, `update` reads `bot._placedBlocks` and does at most one break per tick.
-- `src/agent/agent.js` — import + `hookPlacementTracker(this)` after `startEvents()`, before `escapeProtectedZone` call (mirror `hookPathTelemetry` wiring).
-
-**Blast radius.**
-- New module: zero touch to existing code paths (additive).
-- `_impl_placeBlock` try/finally: single function, single perimeter. `bot._placeIntent` is a private sentinel flag — no other reader in the codebase (grep-verified before ship).
-- New mode: follows existing mode contract. `interrupts: []` means nothing else loses control. Idempotent skip when list is empty.
-- Agent wiring: one import + one call, directly parallel to existing observability hooks.
-
-**Guardrails.**
-- Tracker cap 200 FIFO — old entries drop silently, no unbounded growth.
-- Cleanup mode skips: blocks inside any protected zone, blocks where name no longer matches (already mined or changed), blocks within 5 of the bot (too close — wait until bot has moved on).
-- `breakBlockAt` respects spawn protection guard on its own path; the zone check here is defense-in-depth, not primary.
-- Cleared on `bot.on('death')` and `bot.on('respawn')` (stale coords after world transition are dangerous).
-
-**Rule 7 audit.** Single perimeter for the tracker module. The mode, the agent wiring, and the skills.js intent-flag edit each form their own single-site change. No fan-out; the pieces meet at `bot._placedBlocks` and `bot._placeIntent`, both of which are new.
-
-**Skip (explicit, for honesty).**
-- Retroactive cleanup of existing scaffolds already in the world — this only tracks placements from the ship forward. JP can manually clear pre-existing scaffolds if desired.
-- Spawn-block detection (purpose: `spawn-block`) from the original sketch — dropped from v1; the spawn path doesn't currently place blocks, so no tagger is needed. Can revisit if that changes.
-
-**Success signal (live verification).**
-- After natural scaffolding event: entry appears in `data/placement-stream.jsonl` with `purpose:pathfinder-scaffold`.
-- After bot moves >5 blocks away and 30s passes: `cleanup` event in the same stream; block is gone from the world; entry removed from `bot._placedBlocks`.
-- `!placeBlock` from chat produces `purpose:intentional` and is NEVER cleaned up.
-- Zero cleanup activity while bot is in `escapeProtectedZone` (zone guard holds).
+_(empty — BT-7b shipped `67d8d82`; nine items awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### BT-7b. Self-cleanup of incidental block placements (`67d8d82`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot to naturally produce a pathfinder scaffold, or operator `!placeBlock` for the `intentional` path; then wait 30s + bot-moves-5-blocks to observe cleanup)
+
+**What shipped.**
+- NEW `src/observability/placement_tracker.js` (+191 lines) — closure-state observability module mirroring `path_telemetry.js` shape exactly. Public surface: `configurePlacementTracker()`, `hookPlacementTracker(agent)` (idempotent via `bot._hookedPlacementTracker` reference-identity gate), `getPlacementStats()`, `recordCleanup()`.
+- `src/agent/library/skills.js` — `_impl_placeBlock` body wrapped in `try { bot._placeIntent='intentional'; ... } finally { bot._placeIntent = null; }` so the blockPlaced handler can distinguish LLM-driven calls from pathfinder scaffolding.
+- `src/agent/modes.js` — new `cleanup_blocks` mode (idle-only, `interrupts:[]`, min-age 30s, min-distance 5 blocks from bot, at most one break per tick, uses `skills.breakBlockAt` which enforces protected-zone guard).
+- `src/agent/agent.js` — `hookPlacementTracker(this)` wired after `hookPathTelemetry(this)`, before `escapeProtectedZone`.
+
+**Purpose taxonomy.** Every `blockPlaced` resolves to exactly one of:
+1. `intentional` — `_impl_placeBlock` set the flag → never cleaned up.
+2. `torch` — head of `bot.placedTorches` matches coords → skipped (torch logic owns it).
+3. `pathfinder-scaffold` — `bot.pathfinder.isMoving()` returned true at event-time.
+4. `unknown-llm` — everything else (default).
+
+**Streams.** `data/placement-stream.jsonl` gets one line per placement (`event:"placed"`) and one per cleanup attempt (`event:"cleaned"` or `"cleanup-skipped"`).
+
+**Blast radius.** New module is additive (zero touch to existing code paths). The `_impl_placeBlock` try/finally is a single-function change — the private `_placeIntent` sentinel has no other reader in the codebase. The new mode follows the existing mode contract and `interrupts:[]` means it can never preempt running work. Agent wiring is one import + one hook call, directly parallel to the existing `hookPathTelemetry` block.
+
+**Verification signals to watch.**
+- **Placed event:** `data/placement-stream.jsonl` grows by one line per block the bot puts down; `purpose` field populated.
+- **Intentional path:** `!placeBlock dirt X Y Z` from chat → stream shows `purpose:"intentional"`. Wait 60s and confirm no `cleaned` event for those coords.
+- **Scaffold path:** next time the bot digs down and pillars back up (or pathfinder adds a bridge block), stream shows `purpose:"pathfinder-scaffold"`. After the bot has moved on (>5 blocks) and 30s elapsed, a `cleaned` event follows and the block is broken.
+- **Zone guard:** placements inside the spawn protection zone (250-block radius around `bot.spawnPoint`) that somehow land in the tracker will be refused by `breakBlockAt` — `ok:false` in the cleanup record; the entry is spliced either way (no retry loop).
+- **Death clears:** die to a mob / lava → `bot._placedBlocks` drops to `[]` and the `[Placement] death — cleared N tracked placements` log line appears.
+- **Cap holds:** `bot._placedBlocks.length` never exceeds 200 under any live play conditions.
+
+**Rule 7 audit.** Single perimeter for the tracker module. The mode, the agent wiring, and the skills.js intent-flag edit each form their own single-site change. Pieces meet at two new bot-level fields: `bot._placedBlocks` and `bot._placeIntent`. No fan-out; every reader/writer is in one of the three touched files.
+
+**Skip (explicit, for honesty).**
+- **Retroactive cleanup** of existing scaffolds already in the world — only tracks from the ship forward. JP can manually clear pre-existing scaffolds.
+- **Spawn-block purpose** from the original sketch — dropped from v1 (the spawn path doesn't currently place blocks). Revisit if that changes.
+- **Cross-dimension safety** beyond the death/respawn clear — if the bot nether-portals without dying, the stale coords will fail the `blockAt` name-match check and get spliced on first scan (soft-correct, one-tick cost per stale entry).
+
+**Companion gap (already-shipped-related).** None. BT-7b's cleanup *uses* `breakBlockAt`'s existing zone guard — no duplication.
+
 
 
 ### 7c. Heuristic auto-detection of player-built structures (`0ff5c29`, 2026-04-19)
