@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `a08b178` on `origin/develop`. **In-progress:** #22b — NaN-position suffocation recovery (jump-spam + self-kill fallback) inside the existing health listener of `_installSpawnEscapeInstrumentation`. BT-22 (commit-point guard) closes sub-failure (a) but cannot rescue a hitbox already wedged in solids; #22b closes sub-failure (b) by detecting unknown-source rapid drops + NaN/held position and intervening before the bot dies (~13s death window). Recently shipped today: #22 pre-move passability guard (`8c2b6fe`) and #28 in-zone re-fire on `forcedMove` (`f3bee88`).
+_Last updated: 2026-04-19. HEAD `d921016` on `origin/develop`. **Shipped today:** #22 pre-move passability guard (`8c2b6fe`), #28 in-zone re-fire on `forcedMove` (`f3bee88`), and #22b NaN-position suffocation recovery (`d921016`). #22b closes the last known unknown-source death path: detects health drops while `bot.entity.position` is non-finite, fires Stage A (cancel pathfinder + clear controls + 2s jump-spam) on ≥3 ticks within 2s, then Stage B (`/kill` self-respawn) if NaN damage persists ≥3s. The #22 + #22b pair now covers both suffocation sub-failures: commit-point routing through solids and current-hitbox wedged in solids. All three shipped today are awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,40 +66,41 @@ _Last updated: 2026-04-19. HEAD `a08b178` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery
-
-**Status:** in-progress (code phase) • **Priority:** high (direct death cause — killed the bot 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification)
-
-**Problem.** BT-22's pre-move passability guard correctly rejects every solid target (perimeter held), but the bot can still die when its *current* hitbox lands inside solids — e.g. mob shove into an underground pocket, fall into a one-block hole, or pathfinder glitch dropping the bot at `y=31.75` between blocks. When `bot.entity.position` goes NaN, the damage classifier loses `pos`, so 11 ticks of 1.58-dmg suffocation read as `source:unknown pos:null` and no existing handler can react. Bot dies in ~13s from first suffocation tick.
-
-**Approach (v1 — jump-spam + self-kill fallback).** Extend the existing `health` listener in `_installSpawnEscapeInstrumentation`:
-1. **Detect:** on each health drop, query `damageStream.getLastDamage()`. If `source === 'unknown'` AND (position non-finite OR `chunkWait.isHeld()`), increment a suffocation-tick counter with a 2s rolling window.
-2. **Stage A (≥3 ticks within 2s):** cancel any pathfinder goal, clear all control states, pulse `bot.setControlState('jump', true)` for 2s. Sometimes pops the hitbox loose.
-3. **Stage B (≥3s persistent):** `bot.chat('/kill')` for clean respawn. Spawn-side `escapeProtectedZone` then runs cleanly. Items lost — acceptable cost vs. guaranteed death.
-4. **Recovery flag:** `_suffocRecovering` prevents re-entry during stage A; reset on `respawn`.
-5. **Position tracker:** `_lastGoodPos` sampled cheaply when handlers see a finite position (no new tick hook).
-
-**Files.**
-- `src/agent/library/skills.js` — extend `_installSpawnEscapeInstrumentation` health listener; module-state for tracker + counter + recovery flag.
-
-**Guardrails.**
-- Detection requires BOTH unknown source AND NaN/held — prevents stage A firing on normal mob hits.
-- 2s rolling window — single stray unknown-source ticks won't trigger.
-- Recovery flag prevents re-entry while jump-spam is active.
-- Stage B only after Stage A has had ≥3s to work.
-- Reset on respawn so the next session starts clean.
-
-**Rule 7 audit.** Single site (the existing `health` listener inside `_installSpawnEscapeInstrumentation`). No fan-out. `damageStream` is already a peer module — no new dependencies.
-
-**Open questions deferred.** `bot.dig` rescue (Stage A.5) skipped from v1 pending evidence it works during NaN. `/back` / op-status verification deferred — `/kill` is server-default and works for non-ops.
-
-**Verification signal.** Next NaN-suffocation event: `[SuffocationRecovery]` log lines (`detected` → `stage_a` → either `recovered` or `stage_b` self-kill). Either bot survives or telemetry tells us why not.
-
-
-
+_(empty — #22b shipped `d921016`; three BTs shipped today all awaiting live verification on next natural suffocation / in-zone forcedMove / escape event.)_
 
 
 ## Shipped — awaiting live verification
+
+### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery (`d921016`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs a natural NaN-suffocation event to fire; can't be reliably reproduced without a specific mob-shove / fall-into-pocket scenario)
+
+**Change.** Extended `_installSpawnEscapeInstrumentation` in `src/agent/library/skills.js`. New closure-scoped state (`_suffocLastGoodPos`, `_suffocFirstTickMs`, `_suffocTickCount`, `_suffocStageARan`, `_suffocStageBRan`, `_suffocJumpTimer`). The existing `health` listener now detects the suffocation signature: a health drop while `bot.entity.position` is non-finite (NaN window). First NaN-drop starts the counter; ≥3 ticks within 2s triggers **Stage A** (cancel pathfinder goal, clear all control states, `setControlState('jump', true)` pulsing every 250ms for 2s). If NaN damage persists ≥3s from the first tick, **Stage B** fires `bot.chat('/kill')` for clean respawn. State resets on `respawn`. A new `bot.on('physicsTick', _suffocSamplePos)` keeps `_suffocLastGoodPos` fresh at 20Hz for Stage B logging.
+
+**Why this closes the gap.** BT-22's pre-move passability guard protects the *target* block, so pathfinder never commits into solids. But the bot's *current* hitbox can still end up wedged — mob shove, fall into a pocket, pathfinder glitch depositing it between block boundaries. During that window `bot.entity.position` is NaN, the DamageStream classifier can't attribute a source, and 11 consecutive 1.58-dmg/tick suffocations killed the bot on 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification. The `/kill` fallback is brutal but deterministic: items drop at the current tile, bot respawns at spawn, the spawn-side `escapeProtectedZone` fires cleanly, net-negative vs. a guaranteed death.
+
+**Guardrails.**
+- Detection requires BOTH health-drop AND non-finite position — normal mob hits at finite positions never trigger.
+- 2s rolling window — single stray NaN-drops from server-side weirdness don't escalate.
+- `_suffocStageARan` flag prevents re-entry during the 2s jump window.
+- Stage B only after Stage A has had ≥3s to work — stage A's jump-spam gets a fair chance first.
+- `respawn` handler resets all state so subsequent sessions start clean.
+
+**Rule 7 audit.** Single site (existing `health` listener inside `_installSpawnEscapeInstrumentation`). No fan-out. Module-state, helpers, and detection logic all live in the same closure. One new event subscription (`physicsTick` for position sampling) — Rule 7 invariant holds: no bot mutation added outside the suffocation-recovery path.
+
+**v1 deferred (may become v2 if evidence warrants).**
+- `bot.dig` rescue at `_lastGoodPos` head/feet — probably fails during NaN (no valid entity position for aim). Skipped until we see a NaN window survive long enough to test it.
+- `damageStream.getLastDamage()` integration — NaN-position-during-drop is already a specific enough signature; adding `source:unknown` check is redundant and would require an import chain.
+- Server `/back` or `/spawn` alternative to `/kill` — depends on op status and server config, unverified.
+
+**Verification signals to watch.**
+- `[SuffocationRecovery] detected` followed by either:
+  - `[SuffocationRecovery] recovered — position finite` (best case, Stage A worked), OR
+  - `[SuffocationRecovery] stage_b — self-kill via /kill (last good pos: ...)` + subsequent `[SpawnEscape][EVENT] respawn` (acceptable case, fallback engaged).
+- Next session's `data/damage-stream.jsonl`: zero multi-tick `source:"unknown" pos:null` lethal sequences.
+
+**Sibling ships for cross-reference.** #22 (`8c2b6fe`) closed the pathfinder-commit-point suffocation sub-failure. #28 (`f3bee88`) closed the mid-session in-zone stranding gap (teleport into zone re-fires escape). Together with #22b, the "suffocation + stranding" class is fully covered pending live verification.
+
 
 ### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19)
 
