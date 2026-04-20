@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-B — lazy-build `destructiveMovements` in `goToGoal` so the happy path only pays for one `createMovements()` call instead of two. **Shipped 4/20:** #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,19 +66,43 @@ _Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### OPT-B — lazy-build `destructiveMovements` in `goToGoal`
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding.** `goToGoal` (skills.js:3609) builds both `nonDestructiveMovements` and `destructiveMovements` upfront, but only uses the destructive one when the non-destructive path lookup fails. Every call that finds a walkable path pays for a `createMovements()` + `_configureTerrainSafeMovements()` it never uses. No ordering dependency, no shared state — pure habit.
-
-**Scope.** Lazy-build `destructiveMovements` inside the else-branch. No behavior change. 20+ callers unaffected (they just `await goToGoal(bot, goal)`).
-
-**Expected diff.** ~10 lines restructured in goToGoal body. `createMovements()` call count in the happy path drops from 2 → 1.
-
-**Why it matters.** `goToGoal` is the hot path for every navigation skill (collectBlock, moveAway, goToPosition, pickupNearbyItems, construction loops). `_configureTerrainSafeMovements` iterates config zones and sets `blocksCantBreak` entries — non-trivial work. Cutting the happy-path cost in half is a clean, low-risk perf win.
+_(empty — OPT-B shipped `9887d62`; fourteen items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
+
+### OPT-B. Lazy-build `destructiveMovements` in `goToGoal` (`9887d62`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: no regression in navigation behavior; bot finds the same paths it did before, just with one fewer `createMovements()` call on the happy path).
+
+**What shipped.** One file, 26 lines changed (15 insertions, 11 deletions). `goToGoal` restructured so `destructiveMovements` is only built inside the else-branch where it's actually used. Non-destructive construction + configuration unchanged.
+
+**Behavior.** Identical. The control flow is:
+1. Build + configure `nonDestructiveMovements`
+2. `getPathTo(nonDestructive)` — if success, use it (happy path — now ends here)
+3. Else: build + configure `destructiveMovements`, try it, fall through using destructive anyway if that also fails
+
+Every external observable — path chosen, log line emitted, pathfinder.goto() call — is unchanged. The only change is **when** the destructive object gets constructed.
+
+**Why it matters.** `goToGoal` is the hot path for every navigation skill (`collectBlock`, `moveAway`, `goToPosition`, `pickupNearbyItems`, construction loops, `goToBed`, etc.). `_configureTerrainSafeMovements` iterates protected zones and sets `blocksCantBreak` entries — non-trivial. Cutting the happy-path cost in half is a clean perf win on a function called thousands of times per session.
+
+**Blast radius.**
+- One file, one function body restructured.
+- 20+ callers unaffected — they all just `await goToGoal(bot, goal)`; internal Movements construction is invisible.
+- `final_movements` is still assigned before `bot.pathfinder.setMovements(final_movements)` in every branch (verified by walking both paths).
+- No race — both `getPathTo` calls are sequential awaits, and `destructiveMovements` only exists inside the scope where it's used.
+
+**Rule 2 audit.** Read `goToGoal` body + all 20+ callsites (grep `goToGoal(bot,`). Every caller is a fire-and-forget `await` on a goal object. No caller inspects internal Movements state. No caller has any coupling to construction order. Safe.
+
+**Deferred.** OPT-C (`pickupNearbyItems` creates Movements per loop iteration) and OPT-D (`_isDangerous` rebuilds array + `.includes()` on every call) remain in the OPT-bundle queue — each needs its own Rule 2 pass before action.
+
+**Verification signals to watch.**
+- Bot boots cleanly (no SyntaxError from restructured body) — **observed during restart 2026-04-20 (HEAD 9887d62)**.
+- Navigation skills continue to find paths (watch for `[World]` "Found non-destructive path." / "Found destructive path." log lines at normal rate).
+- No `ReferenceError: destructiveMovements is not defined` — would indicate the lazy scope was mis-structured.
+- Regression absence: path success/failure rate in `data/path-stream.jsonl` should be statistically indistinguishable from pre-ship baseline.
+
+---
+
 
 ### #12 Stage 2. Route `world.js:isClearPath` through `createMovements()` (`93d7986`, 2026-04-20)
 
