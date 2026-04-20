@@ -97,6 +97,25 @@ const modes_list = [
                 }
             }
 
+            // BT-10f (2026-04-19): creeper-evade latch clear. Clears when no
+            // creeper within 10 blocks, OR distance to nearest creeper > 8
+            // (we got outside blast radius), OR HP<6 (BT-10b takes priority).
+            if (bot._creeperEvadeActive) {
+                let nearestCreeperDist = Infinity;
+                try {
+                    const c = world.getNearestEntityWhere(
+                        bot,
+                        e => e && e.name === 'creeper',
+                        10
+                    );
+                    if (c) nearestCreeperDist = bot.entity.position.distanceTo(c.position);
+                } catch (_) { /* ignore */ }
+                if (nearestCreeperDist === Infinity || nearestCreeperDist > 8 || bot.health < 6) {
+                    console.log(`[Survival] creeper-evade cleared dist=${nearestCreeperDist === Infinity ? 'none' : nearestCreeperDist.toFixed(1)} hp=${bot.health.toFixed(1)}`);
+                    bot._creeperEvadeActive = false;
+                }
+            }
+
             // BT-10e (2026-04-19): shield auto-raise state maintenance.
             // Runs at the top of update() independently of the else-if chain
             // below — this is state maintenance, not an alternative action.
@@ -363,6 +382,33 @@ const modes_list = [
                             } catch (_) { /* latch stays set; top-of-update clear handles exit */ }
                         });
                     }
+                }
+            }
+            // BT-10f (2026-04-19): creeper proximity evade. Fires when a
+            // creeper enters 5 blocks and HP>=6. Backs off to 8 blocks
+            // (outside blast radius) so combat can then engage safely. Does
+            // NOT handle charged creepers specially — 8 blocks is still
+            // outside their ~6-block blast radius.
+            else if (bot.health >= 6 && !bot._creeperEvadeActive) {
+                let creeper = null;
+                try {
+                    creeper = world.getNearestEntityWhere(
+                        bot,
+                        e => e && e.name === 'creeper',
+                        5
+                    );
+                } catch (_) { /* ignore */ }
+                if (creeper) {
+                    bot._creeperEvadeActive = true;
+                    const dist = bot.entity.position.distanceTo(creeper.position);
+                    console.log(`[Survival] creeper-evade dist=${dist.toFixed(1)}`);
+                    say(agent, 'Creeper! Backing off!');
+                    const target = creeper;
+                    execute(this, agent, async () => {
+                        try {
+                            await skills.moveAwayFromEntity(bot, target, 8);
+                        } catch (_) { /* latch stays set; top-of-update clear handles exit */ }
+                    });
                 }
             }
             else if (agent.isIdle()) {
