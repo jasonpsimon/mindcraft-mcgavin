@@ -1025,6 +1025,42 @@ This section retained as the audit-trail entry; remove on next hygiene sweep.
 
 ---
 
+### 31. POI location memory — auto-capture of notable world features
+
+**Status:** ⏳ not started • **Priority:** medium (enables natural-language navigation; builds on existing memory primitives)
+
+Bot passively records notable POIs as it moves through the world, so later user interactions can resolve natural-language references ("meet me at the portal", "remember that village?") to coordinates without the user having to have manually saved the location.
+
+**POI catalog (initial cut):**
+- **Portals:** `nether_portal`, `end_portal`, `end_portal_frame`.
+- **Beacons / conduits / lodestones** (rare, player-placed, usually important).
+- **Villages** (already auto-detected via the village scanner — reuse the detection signal, just also stamp a POI entry).
+- **Generated structures:** strongholds / fortresses / bastions / monuments / outposts / ancient cities / trial chambers. Mineflayer's structure-chunk detection is unreliable, so detect via signature blocks (e.g. `end_portal_frame` → stronghold, clustered `nether_bricks` → fortress, `reinforced_deepslate` → ancient city, `copper_bulb`/`copper_grate` → trial chamber).
+- **Player bases** (already captured as zones via #7 / #7c / #7d — reuse the zone as a POI entry, don't double-detect).
+- **Chat-labeled landmarks** — future enhancement. User says "this is my base" or "that's the train station" → save current location with the given tag. Optional for MVP.
+
+**Detection mechanism.** Two-tier, mirrors #7c / #7d:
+- **Scanner:** periodic `bot.findBlocks` pass over the POI signature-block catalog. Low frequency (~60s — POIs don't move).
+- **Watcher:** `bot.on('blockUpdate')` filter for POI-signature blocks appearing in loaded chunks (catches newly-lit portals, newly-placed beacons).
+- Dedup by `{type, dimension, x_bucket, z_bucket}` so re-observing the same portal doesn't create new entries.
+
+**Storage.** Extend existing remembered-places machinery rather than a new file wherever possible. Likely a new section in `bots/<profile>/memory.json` or a dedicated `poi_memory.json` sibling. Each entry: `{tag, type, x, y, z, dimension, first_seen, last_seen, source}`. `source` distinguishes auto-captured from manually saved (`!rememberHere`).
+
+**Retrieval for natural language.** ContextBuilder injects nearby / relevant POIs into prompt context when:
+- User message mentions a POI keyword ("portal", "village", "base", "fortress", "beacon").
+- Bot is pathfinding and a POI is along or near the route.
+- Bot is idle (episodic context recall surfaces nearest POIs).
+- `!goToRememberedPlace <tag>` or a new `!goToPOI <type>` resolves against both manually-saved and auto-captured entries.
+
+**Survey before coding.** Primitives to inventory first:
+- `!rememberHere` / `!savedPlaces` / `!goToRememberedPlace` command set (exists) — hopefully the storage layer is reusable, otherwise extend it.
+- Village scanner (exists — adds zones today; should also stamp POI).
+- ContextBuilder injection points (exists — #11 truncation decisions mention budget-aware inclusion).
+- `bot.game.dimension` for dimension-scoped storage.
+- `memory.json` persistence shape (exists).
+
+**First commit:** research pass on the existing remember-place code path to decide whether this extends that table or lives in a parallel file. Then POI catalog + detection code + retrieval-side prompt injection.
+
 ### 30. Bot modes: Auto / Assistant / Survivor
 
 **Status:** ⏳ not started • **Priority:** medium (user-facing control + structured autonomy)
