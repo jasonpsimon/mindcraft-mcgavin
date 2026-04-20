@@ -2281,6 +2281,17 @@ export function createMovements(bot) {
     // upward if a longer drop is genuinely intended.
     m.maxDropDown = 3;
 
+    // #12-follow-up (2026-04-20): bias the pathfinder against destructive
+    // path elements. Defaults are digCost=1 / placeCost=1 — equal to walking,
+    // so the planner happily mines through obstacles or scaffolds across gaps
+    // when a short detour exists. This matches `installSafePathfinderDefaults`
+    // (line ~1755) which already applies digCost=10 on bot.collectBlock.movements
+    // with the same rationale ("no straight-down digging" safety norm).
+    // placeCost=2 is a softer bias — scaffolding is sometimes the only path,
+    // but should still lose to a comparable walk-around.
+    m.digCost = 10;
+    m.placeCost = 2;
+
     // Protected zone check: disable dig and scaffold inside zones
     const pos = bot.entity?.position;
     if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
