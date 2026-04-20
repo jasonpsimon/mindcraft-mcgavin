@@ -63,6 +63,19 @@ async function equipHighestAttack(bot) {
         weapons = bot.inventory.items().filter(item => item.name.includes('pickaxe') || item.name.includes('shovel'));
     if (weapons.length === 0)
         return;
+    // BT-10i (2026-04-19): durability filter. Drop weapons at <5% remaining
+    // durability before the attackDamage sort so we don't pick a sword that
+    // shatters mid-swing and leaves the bot empty-handed. Fall back to the
+    // unfiltered list if filtering removes every candidate — better to
+    // swing a near-broken weapon than fists. mineflayer exposes item wear
+    // via `item.durabilityUsed` (0 = pristine); max comes from
+    // `item.maxDurability` when present, else infer from item stats.
+    const _healthy = weapons.filter(w => {
+        const max = w.maxDurability;
+        if (!max || typeof w.durabilityUsed !== 'number') return true;  // unknown — assume fine
+        return (max - w.durabilityUsed) / max >= 0.05;
+    });
+    if (_healthy.length > 0) weapons = _healthy;
     // Bug fix 2026-04-15: previous comparator returned a boolean (a < b), which
     // is treated as 0 by sort and produced random ordering. Use proper b-a for
     // descending sort by attackDamage. Also handle missing attackDamage values.
@@ -465,6 +478,20 @@ async function _impl_defendSelf(bot, range=9) {
     bot.modes.pause('self_defense');
     bot.modes.pause('cowardice');
     try {
+        // BT-10i (2026-04-19): shield to offhand once, before the fight loop.
+        // Mineflayer's pvp blocks with shield when offhand-equipped; equipping
+        // per-iteration would be wasteful and would re-trigger every 500ms.
+        // Errors logged + swallowed (same policy as _equipBestToolFor) —
+        // if equip fails for any reason, combat continues without shield.
+        try {
+            const _shield = bot.inventory.items().find(it => it.name === 'shield');
+            const _offhand = bot.inventory.slots[45];  // offhand slot in mineflayer
+            if (_shield && _offhand?.type !== _shield.type) {
+                await bot.equip(_shield, 'off-hand');
+            }
+        } catch (_equipErr) {
+            console.warn(`[defendSelf] shield equip skipped: ${_equipErr.message}`);
+        }
         let attacked = false;
         let enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
         while (enemy) {
