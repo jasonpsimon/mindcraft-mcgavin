@@ -218,6 +218,8 @@ function numParams(command) {
     return commandParams(command).length;
 }
 
+import { getHumanDelay } from '../human_delays.js';
+
 export async function executeCommand(agent, message) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
@@ -233,6 +235,15 @@ export async function executeCommand(agent, message) {
             return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
         else {
             const result = await command.perform(agent, ...parsed.args);
+            // #8 (2026-04-20): humanized post-command delay for anti-cheat
+            // resilience and less-robotic feel. `getHumanDelay` returns 0
+            // for instant commands (!stop, !stfu, etc.); mode-triggered
+            // reflexes bypass this path entirely and stay millisecond-fast.
+            const delay = getHumanDelay(parsed.commandName);
+            if (delay > 0) {
+                console.log(`[HumanDelay] ${parsed.commandName} waiting ${delay}ms`);
+                await new Promise(r => setTimeout(r, delay));
+            }
             return result;
         }
     }
