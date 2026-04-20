@@ -4650,6 +4650,21 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
     return bestCavern;
 }
 
+/**
+ * OPT-F: shared yaw-to-cardinal snapping. Previously duplicated inline in
+ * _impl_digDown and _impl_digUp. Minecraft yaw: 0 = south (+Z), pi/2 = west (-X),
+ * pi = north (-Z), 3pi/2 = east (+X). Snap to the nearest cardinal at pi/4 bounds.
+ * @param {number} yaw - bot.entity.yaw
+ * @returns {{dx: number, dz: number, name: 'south'|'west'|'north'|'east'}}
+ */
+function _yawToCardinal(yaw) {
+    const normalized = ((yaw % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+    if (normalized >= 5.5 || normalized < 0.785) return { dx: 0, dz: 1, name: 'south' };
+    if (normalized < 2.356) return { dx: -1, dz: 0, name: 'west' };
+    if (normalized < 3.927) return { dx: 0, dz: -1, name: 'north' };
+    return { dx: 1, dz: 0, name: 'east' };
+}
+
 async function _impl_digDown(bot, distance = 10) {
     /**
      * Digs down a specified distance using a safe staircase pattern.
@@ -4717,24 +4732,11 @@ async function _impl_digDown(bot, distance = 10) {
         console.warn('[digDown] Cavern scan failed, digging normally:', e.message);
     }
 
-    // Get the bot's facing direction (snapped to nearest cardinal)
-    const yaw = bot.entity.yaw;
-    // Minecraft yaw: 0 = south (+Z), pi/2 = west (-X), pi = north (-Z), 3pi/2 = east (+X)
-    let dx = 0, dz = 0;
-    const normalized = ((yaw % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
-    if (normalized >= 5.5 || normalized < 0.785) {
-        dz = 1;  // south
-    } else if (normalized >= 0.785 && normalized < 2.356) {
-        dx = -1; // west
-    } else if (normalized >= 2.356 && normalized < 3.927) {
-        dz = -1; // north
-    } else {
-        dx = 1;  // east
-    }
+    // OPT-F: yaw-to-cardinal via shared helper.
+    const { dx, dz, name: dirName } = _yawToCardinal(bot.entity.yaw);
 
     let currentPos = bot.entity.position.floored();
     let descended = 0;
-    const dirName = dz === 1 ? 'south' : dz === -1 ? 'north' : dx === -1 ? 'west' : 'east';
     console.log(`[Skills] digDown: starting at ${currentPos}, heading ${dirName}, distance=${distance}`);
 
     for (let i = 0; i < distance; i++) {
@@ -4903,23 +4905,11 @@ async function _impl_digUp(bot, distance = 10) {
         return false;
     }
 
-    // Get the bot's facing direction (snapped to nearest cardinal)
-    const yaw = bot.entity.yaw;
-    let dx = 0, dz = 0;
-    const normalized = ((yaw % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
-    if (normalized >= 5.5 || normalized < 0.785) {
-        dz = 1;  // south
-    } else if (normalized >= 0.785 && normalized < 2.356) {
-        dx = -1; // west
-    } else if (normalized >= 2.356 && normalized < 3.927) {
-        dz = -1; // north
-    } else {
-        dx = 1;  // east
-    }
+    // OPT-F: yaw-to-cardinal via shared helper.
+    const { dx, dz, name: dirName } = _yawToCardinal(bot.entity.yaw);
 
     let currentPos = bot.entity.position.floored();
     let ascended = 0;
-    const dirName = dz === 1 ? 'south' : dz === -1 ? 'north' : dx === -1 ? 'west' : 'east';
     console.log(`[Skills] digUp: starting at ${currentPos}, heading ${dirName}, distance=${distance}`);
 
     for (let i = 0; i < distance; i++) {
