@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `edcd01b` on `origin/develop`. **In-progress:** BT-10h — dimension-aware survival tuning (low-HP threshold bump in nether/end, lava-adjacent backoff gated to overworld, void-awareness branch for the end). Bot is allowed to visit nether/end; reflexes just adapt thresholds. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. Eighteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `8956d33` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h. **BT-10h:** dimension-aware survival tuning — `_dimensionProfile(bot)` helper gates lava-adjacent backoff (overworld+End only), bumps low-HP threshold to 10 in Nether/End, adds void-awareness branch (End, y<10). Nineteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,21 +66,50 @@ _Last updated: 2026-04-19. HEAD `edcd01b` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10h. Dimension-aware survival tuning
-
-**Goal.** Bot is allowed to visit the Nether and End (no retreat-on-entry). Existing survival reflexes need small threshold adjustments so they stay useful in dimensions where the overworld assumptions don't hold.
-
-**Three deltas behind one helper (`_dimensionProfile(bot)`):**
-
-1. **Low-HP retreat threshold (BT-10b).** Overworld keeps `hp < 6`. Nether/End bump to `hp < 10` — regen needs 8+ hunger which is harder to maintain, and hostiles are tankier.
-2. **Lava-adjacent preemptive backoff (BT-10a).** Fine in overworld where lava is rare. Disabled in the Nether where lava is the floor — a "too close to lava" reflex would either spam every tick or strand the bot on basalt platforms. Primary `isInLava` escape still fires (that's the authoritative survival signal).
-3. **Void awareness (End).** New branch. When `dimension==='the_end'`, `y<10`, and pathfinder is active, latch `_voidRetreatActive`, abort pathfinder, log. Void drop is instant-death with no HP-based reflex to catch it.
-
-**Blast radius.** Three gates in `self_preservation.update()` + one helper function. No new modes. No changes to `_impl_defendSelf` or any skill. Overworld behavior unchanged.
-
-**Out of scope.** Dimension-specific combat tuning (ghast shield, ender dragon positioning). Entry logging. Any "return through portal" logic — JP's policy is the bot is free to travel.
+_(empty — BT-10h shipped `8956d33`; nineteen items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
+
+### BT-10h. Dimension-aware survival tuning (`8956d33`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot to travel to Nether and/or End; observe that overworld behavior is unchanged, lava-adjacent backoff stays quiet in Nether, low-HP retreat fires at hp<10 not hp<6, and void-retreat latch logs in End at y<10).
+
+**What shipped.** One helper `_dimensionProfile(bot)` in `src/agent/modes.js` plus three gated reflexes + one new void-awareness branch in `self_preservation.update()`. Zero new imports, zero new modes, no changes to `_impl_defendSelf` or any skill.
+
+**Helper shape (`_dimensionProfile(bot) → {dim, lowHpThreshold, lavaAdjacentBackoff, voidCheckY}`):**
+
+| Dimension | `lowHpThreshold` | `lavaAdjacentBackoff` | `voidCheckY` |
+|-----------|------------------|----------------------|--------------|
+| Overworld | 6                | true                 | null         |
+| Nether    | 10               | false                | null         |
+| End       | 10               | true                 | 10           |
+
+Handles both namespaced (`minecraft:the_nether`) and bare (`the_nether`) dimension strings via a `.replace(/^minecraft:/, '')` strip. Defaults to overworld profile if `bot.game.dimension` is missing/unexpected.
+
+**Three deltas:**
+
+1. **BT-10a lava-adjacent preemptive backoff — gated.** Added `&& _dimensionProfile(bot).lavaAdjacentBackoff` to the `else if` clause. Overworld: unchanged. Nether: disabled (lava is the floor — the reflex would either spam every tick or strand the bot on basalt platforms; primary `isInLava` escape still fires). End: enabled (matches overworld profile).
+2. **BT-10b low-HP retreat threshold — parameterized.** `bot.health < 6` → `bot.health < _dimensionProfile(bot).lowHpThreshold`. Overworld stays at 6. Nether/End bump to 10 — regen requires 18+ hunger (harder to maintain between food sources), hostiles are tankier, and retreats take longer through uneven terrain.
+3. **Void-awareness branch (new).** Inserted at top of `update()` next to other latch blocks. When `voidCheckY !== null` and `bot.entity.position.y < voidCheckY` and pathfinder is moving, latch `_voidRetreatActive = true`, stop pathfinder, call `skills.moveAway(bot, 3)`. Clears at `y >= voidCheckY + 2` (2-block buffer prevents flapping). Also clears if dimension changes out of End. Logs `[Survival] void-retreat dim=end y=...` once per latch.
+
+**Why void-awareness needs its own branch.** Void drop in the End is instant-death with no HP-based reflex to catch it — bot falls, dies, zero damage ticks in between. Had to be anticipatory, not reactive. Y<10 is the "you are off the main island and falling" signal in vanilla End terrain (main island floor sits around y=56-64).
+
+**Why gate lava-adjacent rather than expand it.** The primary `bot.entity.isInLava` escape at line ~268 is authoritative and dimension-agnostic — if the bot is actually in lava, it still fires in the Nether. The gated BT-10a clause is the *preemptive* "you are standing next to lava" backoff, which is the one that would misfire in a lava-floor dimension.
+
+**Blast radius.**
+- `self_preservation.update()` + one new helper function at module scope.
+- Overworld profile matches pre-BT-10h behavior exactly (verified by reading the before/after).
+- No pathfinder interaction changes outside the void-retreat latch (which mirrors BT-10b retreat shape).
+- `bot.game.dimension` / `bot.entity.position` / `bot.pathfinder.isMoving` defensive guards throughout.
+
+**Guardrails.**
+- Helper returns overworld profile on any unrecognized dimension string (safe default).
+- Void-retreat latch clears on dimension change (prevents stale latch bleeding across portals).
+- `voidCheckY + 2` hysteresis on clear prevents rapid re-fire at the threshold.
+
+**Out of scope.** Dimension-specific combat tuning (ghast shield, ender dragon positioning). Entry logging per dimension. Any "return through portal" logic — JP's policy is the bot is free to travel; this BT only adjusts the survival reflexes' calibration, not the bot's freedom of movement.
+
+---
 
 ### BT-10g. Drowning escape (`5324782`, 2026-04-19)
 
