@@ -96,6 +96,44 @@ const modes_list = [
                     bot._rangedEvadeActive = false;
                 }
             }
+
+            // BT-10e (2026-04-19): shield auto-raise state maintenance.
+            // Runs at the top of update() independently of the else-if chain
+            // below — this is state maintenance, not an alternative action.
+            // Pair of clear + trigger. Zero cost when no shield is in offhand
+            // (pre-gate short-circuits). When shield IS in offhand, we keep
+            // it raised exactly when a hostile is within 16 blocks.
+            if (bot._shieldRaiseActive) {
+                const offhand = bot.inventory.slots[45];
+                const hasShieldOff = !!(offhand && offhand.name && offhand.name.includes('shield'));
+                let threatNearby = false;
+                try {
+                    const h = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 16);
+                    threatNearby = !!h;
+                } catch (_) { /* ignore */ }
+                if (!threatNearby || !hasShieldOff) {
+                    try { bot.deactivateItem(); } catch (_) { /* ignore */ }
+                    console.log(`[Survival] shield-raise cleared threat=${threatNearby} shield=${hasShieldOff}`);
+                    bot._shieldRaiseActive = false;
+                }
+            } else {
+                const offhand = bot.inventory.slots[45];
+                const hasShieldOff = !!(offhand && offhand.name && offhand.name.includes('shield'));
+                if (hasShieldOff) {
+                    let threat = null;
+                    try {
+                        threat = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 16);
+                    } catch (_) { /* ignore */ }
+                    if (threat) {
+                        const tdist = bot.entity.position.distanceTo(threat.position);
+                        try {
+                            bot.activateItem(true); // offhand = true → raise shield
+                            bot._shieldRaiseActive = true;
+                            console.log(`[Survival] shield-raise threat=${threat.name} dist=${tdist.toFixed(1)}`);
+                        } catch (_) { /* no latch set; retry next tick */ }
+                    }
+                }
+            }
             // Drowning check: head in water OR oxygen dropping while submerged.
             // Always hold jump when drowning, even during an active pathfind —
             // mineflayer tolerates setControlState('jump', true) while pathfinder
