@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `8956d33` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h. **BT-10h:** dimension-aware survival tuning — `_dimensionProfile(bot)` helper gates lava-adjacent backoff (overworld+End only), bumps low-HP threshold to 10 in Nether/End, adds void-awareness branch (End, y<10). Nineteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `0d8029b` on `origin/develop`. **In-progress:** BT-10i — pre-fight equip polish (shield to offhand before combat, filter low-durability weapons out of equipHighestAttack pick). **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h. Nineteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,18 @@ _Last updated: 2026-04-19. HEAD `8956d33` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10h shipped `8956d33`; nineteen items awaiting live verification on next natural events.)_
+### BT-10i. Pre-fight equip polish
+
+**Goal.** Two small combat-prep upgrades inside `_impl_defendSelf` / `equipHighestAttack` in `src/agent/library/skills.js`. No new modes, no new state, no pathfinder changes.
+
+**Two deltas:**
+
+1. **Shield to offhand before combat.** Once at the top of `_impl_defendSelf` (before the enemy-search loop), if the inventory contains a shield and the offhand isn't already a shield, `await bot.equip(shield, 'off-hand')`. One-shot per defendSelf call, not per iteration. Errors logged and swallowed (same policy as `_equipBestToolFor`).
+2. **Durability filter in `equipHighestAttack`.** Before sorting by `attackDamage`, drop weapons with <5% remaining durability (`(maxDurability - item.durabilityUsed) / maxDurability < 0.05`). Don't pick a sword that'll shatter mid-swing and leave the bot empty-handed. If filtering leaves zero weapons, fall back to the original unfiltered list (better to swing a near-broken weapon than fists).
+
+**Blast radius.** One file (`src/agent/library/skills.js`), two functions (`equipHighestAttack`, `_impl_defendSelf`). No changes to the fight loop itself, no changes to pathfinder or pvp wiring, no changes to #28 fix guards.
+
+**Out of scope.** Enchantment weighting (Sharpness/Smite tiers). Per-iteration rate-limiting of `equipHighestAttack` (existing `bot.heldItem?.type !== weapon.type` early-return already handles the common case). Autocrafting a shield if none exists.
 
 ## Shipped — awaiting live verification
 
