@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `85d93f7` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **Shipped 4/20:** #27 D1 migration close-out (`5663aa2`) — finishes the legacy `$MEMORY` pipeline teardown across all three surfaces under CB: history.js load path no-hydrates (next save wipes disk), prompter.js `$MEMORY` branch short-circuits to empty (kills double-injection of episodic via `replaceStrings` in promptConvoFast + CB error fallback), ThatCoolGuyDude.json conversing template strips the dead token. Non-CB legacy path preserved. Verified live: `memory.json` now persists `''`. **Shipped 4/20:** #12-follow-up (`85d93f7`) — `digCost=10` / `placeCost=2` added to `createMovements` factory. Matches `installSafePathfinderDefaults` which already applies `digCost=10` to collectBlock movements (Principle 5: kill redundancy). Awaiting path-stream verification: more `walkaround`, fewer `dig` entries on same terrain. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `71df242` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **Shipped 4/20:** #27 D1 migration close-out (`5663aa2`) — finishes the legacy `$MEMORY` pipeline teardown across all three surfaces under CB: history.js load path no-hydrates (next save wipes disk), prompter.js `$MEMORY` branch short-circuits to empty (kills double-injection of episodic via `replaceStrings` in promptConvoFast + CB error fallback), ThatCoolGuyDude.json conversing template strips the dead token. Non-CB legacy path preserved. Verified live: `memory.json` now persists `''`. **Shipped 4/20:** #12-follow-up (`85d93f7`) — `digCost=10` / `placeCost=2` added to `createMovements` factory. Matches `installSafePathfinderDefaults` which already applies `digCost=10` to collectBlock movements (Principle 5: kill redundancy). Awaiting path-stream verification: more `walkaround`, fewer `dig` entries on same terrain. **Shipped 4/20:** #2 Layer 3 (`71df242`) — turtle-helmet auto-equip reflex in `modes.js` self_preservation; latched via `bot._turtleHelmetEquipped`, skips diamond/netherite (turtle armor=2, same as iron — no downgrades). Pairs with BT-10g drowning-escape: turtle gives 10s O₂ buffer + slow Water Breathing, preventing the crisis BT-10g handles last-resort. Awaiting natural trigger (bot enters water with turtle_helmet in inventory). **Closed 4/20:** #2 Layer 2 — `swim(bot, targetPos)` dedicated skill; redundant research-pass finding. `goToPosition(x,y,z)` + `canSwim=true` (pathfinder default) + Layer 1 `escapeWater` already cover underwater traversal. Principle 5: no wrapper without new capability. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,9 +66,29 @@ _Last updated: 2026-04-20. HEAD `85d93f7` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2` (legacy `$MEMORY` pipeline torn down across all three surfaces under CB; verified `memory.json` persists `''`); #12-follow-up shipped `85d93f7` (`digCost=10`/`placeCost=2` in factory). Twenty-one items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
+_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2`; #12-follow-up shipped `85d93f7`; #2 Layer 3 shipped `71df242` (turtle-helmet auto-equip reflex); #2 Layer 2 closed as redundant (goToPosition + canSwim already cover it). Twenty-two items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
 
 ## Shipped — awaiting live verification
+
+### #2 Layer 3. Turtle helmet auto-equip reflex on water entry (`71df242`, 2026-04-20)
+
+**What shipped.** State-maintenance reflex in `src/agent/modes.js` `self_preservation.update()`, placed between the BT-10g drowning-escape block and the BT-10e shield-auto-raise block (same reflex pattern — latch + skip-conditions). When the bot enters water, if inventory holds a `turtle_helmet` and the head slot is empty or holds a ≤iron-tier helmet, auto-equip it. Latched via `bot._turtleHelmetEquipped` so the equip only fires once per session.
+
+**Design trade-offs.**
+- **Don't downgrade diamond/netherite.** Turtle armor value is 2 (same as iron). Skipping swap when head holds diamond/netherite preserves the better protection — we gain breathing but lose armor tier in that rare case, so we keep the better armor.
+- **No symmetric revert.** Unlike BT-10g's "clear on surface" or BT-10e's "clear when no hostile," Layer 3 has no "re-equip diamond when on land" pair. Keeping this minimal — the bot can re-equip manually via `replaceBrokenArmor` logic if needed.
+- **Complements BT-10g, doesn't replace it.** BT-10g is the last-resort panic (surface and jump at oxygen ≤ 10). Turtle-helmet gives a 10-second O₂ buffer + slow Water Breathing while worn — it prevents the crisis BT-10g handles. Both live side-by-side.
+
+**Verification.**
+- `node --check src/agent/modes.js` passed post-patch.
+- Bot rebooted clean on HEAD `71df242` — StateTicker 1Hz, HP 20/20, food 15, inventory 36 items, creeper/bogged/skeleton threats tracked.
+
+**Success signal (awaiting natural trigger).** Bot enters water with `turtle_helmet` in inventory → expect log line `[Survival] turtle-helmet equipped (water entry)` in tmux capture, and head slot (`bot.inventory.slots[5]`) populated with turtle_helmet on the next state-stream snapshot. Graduates to Recently completed on first observation.
+
+**Blast radius.** Near-zero. Pure addition — no existing code paths touched. Early-return on `!bot._turtleHelmetEquipped` means cost is one bool read per tick after first equip. Skip-if-diamond/netherite protects the one case where the swap would regress the bot's equipment.
+
+---
+
 
 ### #12-follow-up. `digCost=10` / `placeCost=2` in `createMovements` factory (`85d93f7`, 2026-04-20)
 
@@ -997,22 +1017,22 @@ Given world seed + MC version, regenerate each chunk deterministically and diff 
 
 **🟡 Partial**
 
-### 2. Bot swim capabilities
+### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
 
-**Status:** 🟡 Layer 1 shipped 2026-04-14 (`canSwim=true` in pathfinder + `self_preservation` jump-when-drowning). Layer 2/3 deferred. • **Priority:** medium (bot survives most water now)
+**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
 
-**Remaining work:**
-- Layer 2: explicit `swim(bot, targetPos)` skill the LLM can invoke
-- Layer 3: auto-equip turtle shell helmet / water-breathing potion if in inventory; prefer surface-swim paths over underwater paths
+**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
 
-**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); food/health stable in water; no "stuck" mode firing while swimming.
+**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
+
+**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
 
 ### 3. Swamp biome traversal — water + lily-pad pieces only
 
 **Status:** 🟡 plant-side shipped 2026-04-14 (`autoBreakStuckPlant`, terrain-safe movements, plant-vs-tree split, leaves allowed in spawn). Water + lily-pad portions deferred. • **Priority:** medium
 
 **Remaining work:**
-- Water-traversal in shallow swamp pockets (depends on #2 Layer 2/3)
+- Water-traversal in shallow swamp pockets (#2 Layers 1–3 now cover baseline water; swamp-specific pockets may just work — verify before scoping more)
 - `lily_pad` treated as walkable surface (mineflayer-pathfinder doesn't natively support "stand on this partial collision block" — may need custom handling)
 - In-swamp biome detection to activate more aggressive movement configs dynamically (current implementation is biome-agnostic)
 
@@ -1076,6 +1096,17 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### #2 Layer 2. `swim(bot, targetPos)` skill — closed as redundant (no code, 2026-04-20)
+
+**Decision.** Layer 2 of the original #2 spec — a dedicated `swim(bot, targetPos)` skill for the LLM — closed without shipping. Research pass during #2 Layer 3 work showed the capability is already covered by existing primitives: `goToPosition(x, y, z)` routes through `createMovements(bot)` which inherits pathfinder's default `canSwim = true`, and Layer 1's drowning-escape reflex (BT-10g shipped 2026-04-19) handles the oxygen-crisis edge case. A `swim()` wrapper would have been a rename of `goToPosition` with no new behavior.
+
+**Why logged.** Principle 5 win — prevented a redundant skill surface area addition. The "just ship the spec" impulse was the wrong move; reading the existing pathfinder config and Layer 1 reflex before writing new code revealed the layer was already there. Captured here so future "why isn't there a dedicated swim skill?" questions have a pointer.
+
+**Follow-up.** Water-breathing-potion auto-use parked as 2-follow-up in the to-do queue (low priority; turtle-helmet Layer 3 already covers the common case).
+
+---
+
 
 ### #27. D1 migration close-out — `$MEMORY` pipeline torn down (`5663aa2`, 2026-04-20)
 
