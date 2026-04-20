@@ -777,17 +777,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 
 
-### 21. L1 cleanup bundle (low-priority nits)
-
-**Status:** ⏳ not started • **Priority:** low (documentation / Rule-3 nits surfaced by L1 migration-marker grep) • **Source:** audit findings L1.1, L1.3, L6.3, L6.5
-
-Four small items in one bundle so none are forgotten:
-
-- `src/agent/modes.js:38` — `// hacky fix when blocks are not loaded` comment admits a band-aid (Rule 4). Either investigate the root cause (chunk timing?) or upgrade the comment to explain why treat-as-air is the right fallback.
-- `src/models/prompter.js:552` — bare `// deprecated` comment with no "why" / "when to remove" context (Rule 3). Either remove the deprecated code or annotate.
-- `src/agent/history.js:66` — the `!settings.use_context_builder` gate reads as profile-driven but the default actually lives in `src/settings.js:100`. Add a one-line pointer comment to save the next audit a round-trip (L5.1 shakedown lesson).
-- `src/models/prompter.js:237` — `// Combine legacy summary with episodic memory retrieval` comment. Needs read-in-context to confirm whether this branch is gated by `!use_context_builder` (clean) or always runs (contradicts D1 story).
-
 ### L1.4 verification — possibly-dead exports (pending JP confirmation)
 
 **Status:** ⏳ pending JP confirmation • **Priority:** low • **Source:** audit finding L1.4
@@ -807,10 +796,9 @@ The LLM can reach them only via `coder.js`-generated code addressing `skills.X()
 
 Surface-level findings from an optimization audit that did NOT follow proper review process (governing docs and full codebase were not read before analysis). Listed here so they aren't lost, but each must be verified with a proper Rule 1/2/3/4 pass before implementation.
 
-- **B.** `goToGoal` creates two Movements objects every call (lines ~2936-2950) — both `nonDestructiveMovements` and `destructiveMovements` constructed upfront via `createMovements(bot)`. The destructive one may only be needed if the non-destructive path fails. Needs verification: is there a reason both are created eagerly?
-- **C.** `pickupNearbyItems` creates Movements per loop iteration (line ~723). Could potentially create once before the loop. Needs verification: does the bot's position change between iterations in a way that invalidates a cached Movements?
-- **D.** `_isDangerous` rebuilds an array + `.includes()` on every call (line ~2628). Called in tight loops during safeToss direction validation. Could be a module-level Set. Needs verification: is this actually a measurable perf concern or just cosmetic?
-- **E.** `scanForCaverns` allocates `rockTypes` Set every call (line ~3902). Could be a module-level constant. Same verification question as D.
+_B, C, D shipped 2026-04-20 — see Recently completed / Shipped-awaiting-verification. E, F, I still pending:_
+
+- **E.** `scanForCaverns` allocates `rockTypes` Set every call (line ~3902). Could be a module-level constant. Same verification question as D (which shipped and passed).
 - **F.** Duplicate yaw-to-cardinal direction snapping in `digDown` and `digUp`. Identical code. Could extract to a shared helper. Pure cleanup — low risk but needs blast-radius check.
 - **I.** `moveAway` creates Movements twice (lines ~3317-3321) — first for `setMovements`, second inside the cheat-mode branch. First could potentially be reused. Needs verification: does the cheat-mode branch need different config?
 
