@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `5324782` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d, BT-10e, BT-10f, BT-10g (`5324782`) — drowning escape: `isInWater && oxygenLevel≤10` → jump+forward control states (vanilla swim-up); symmetric clear on `!isInWater` or oxygen≥18. Seventeen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `e1f47ac` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. **BT-10c fix:** diagnosed false-positive (cave trigger with head=air per game snapshot) — added 5-tick debounce (~0.25s) and diagnostic log (pos + legs + head). Seventeen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -304,6 +304,19 @@ Two-sided progress conditions + one escalation condition. Prevents oscillation (
 - **Non-trigger (melee hostile only):** zombie at 10 blocks, no skeleton → branch does NOT fire (name allowlist).
 - **Non-trigger (too close):** skeleton at 4 blocks → branch does NOT fire (below 6-block lower bound — combat territory).
 
+
+### BT-10c. Suffocation escape (`4fb5a2e`, 2026-04-19) — fix `e1f47ac`
+
+**Follow-up fix (`e1f47ac`, 2026-04-19):** false-positive debounce + diagnostic log.
+
+- **Observed bug.** Bot triggered `Suffocating — digging up!` in a cave at ~5:04PM local while self-prompting for diamond armor. Game's own NEARBY_BLOCKS snapshot immediately before the trigger showed `Block at Head: air` and `First Solid Block Above Head: andesite (3 blocks up)`. Bot was not actually suffocating.
+- **Root cause.** `bot.blockAt(position.offset(0, 1, 0))` can return stale/wrong results during fractional-y transitions (mid-jump, slab/stair, post-dig ticks). Single-tick glitch was enough to fire the trigger.
+- **Fix.** Require 5 consecutive solid-head ticks (~0.25s at 20 TPS) before firing. Real suffocation persists for many seconds; position-rounding glitches clear in 1-2 ticks. Counter reset hoisted to top-of-update() (preserves else-if chain integrity).
+- **Diagnostics.** Trigger log now includes `pos=<x,y,z>`, `legs=<block>`, `head=<block>` — any future false positive is triageable from one line.
+- **Blast radius.** Same single perimeter (`self_preservation.update()`). Counter joins the latch family (`bot._suffocationSolidTicks`). No new imports.
+- **Skip.** HP-delta gating (require damage before firing): considered but conflated with mob-hit damage; debounce alone handles the position-rounding class cleanly.
+
+---
 
 ### BT-10c. Suffocation escape (`4fb5a2e`, 2026-04-19)
 
