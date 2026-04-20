@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-D — hoist `_isDangerous` block-name list to module-level Set (avoid per-call array allocation + O(n) `.includes` scan). **Shipped 4/20:** OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,17 @@ _Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — OPT-C shipped `9a7b7eb`; fifteen items awaiting live verification on next natural events.)_
+### OPT-D — hoist `_isDangerous` block-name list to module-level Set
+
+**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
+
+**Finding.** `_isDangerous(name)` at skills.js:3303 builds a 5-element array + runs `.includes()` on every call: `['lava', 'water', 'bedrock', 'air', 'cave_air'].includes(name)`. Called from 9 callsites throughout skills.js, many inside tight tunnel-scan / safeToss direction-validation loops (lines 1287–1524 cluster, plus 2405).
+
+**Scope.** Hoist the list to module scope as a `Set`. Change function body to `return DANGEROUS_BLOCK_NAMES.has(name)`. O(1) lookup instead of O(n) array-scan + allocation per call.
+
+**Expected diff.** ~6 lines — add `const DANGEROUS_BLOCK_NAMES = new Set([...])` at top of skills.js, simplify `_isDangerous` body. All 9 callsites unchanged (same function signature, same return).
+
+**Why it matters.** Tunnel-scanning and safeToss direction-validation iterate over many block candidates per invocation. For each candidate, `_isDangerous` is called 1-2 times. Over a typical mining session, this is called thousands of times per minute. Cheap per-call savings compound.
 
 ## Shipped — awaiting live verification
 
