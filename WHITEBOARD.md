@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-B — lazy-build `destructiveMovements` in `goToGoal` so the happy path only pays for one `createMovements()` call instead of two. **Shipped 4/20:** #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,17 @@ _Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — #12 Stage 2 shipped `93d7986`; thirteen items awaiting live verification on next natural events.)_
+### OPT-B — lazy-build `destructiveMovements` in `goToGoal`
+
+**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
+
+**Finding.** `goToGoal` (skills.js:3609) builds both `nonDestructiveMovements` and `destructiveMovements` upfront, but only uses the destructive one when the non-destructive path lookup fails. Every call that finds a walkable path pays for a `createMovements()` + `_configureTerrainSafeMovements()` it never uses. No ordering dependency, no shared state — pure habit.
+
+**Scope.** Lazy-build `destructiveMovements` inside the else-branch. No behavior change. 20+ callers unaffected (they just `await goToGoal(bot, goal)`).
+
+**Expected diff.** ~10 lines restructured in goToGoal body. `createMovements()` call count in the happy path drops from 2 → 1.
+
+**Why it matters.** `goToGoal` is the hot path for every navigation skill (collectBlock, moveAway, goToPosition, pickupNearbyItems, construction loops). `_configureTerrainSafeMovements` iterates config zones and sets `blocksCantBreak` entries — non-trivial work. Cutting the happy-path cost in half is a clean, low-risk perf win.
 
 ## Shipped — awaiting live verification
 
