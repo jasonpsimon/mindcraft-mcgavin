@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `d16658b` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-I — delete dead first `setMovements(createMovements())` in `_impl_moveAway` (OPT-C-shape finding; audit expected dedup, Rule 2 reveals dead code). **Shipped 4/20:** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-bundle queue: I (moveAway) remains. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. OPT-bundle queue: F, I remain. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `9dd17a4` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,26 +66,36 @@ _Last updated: 2026-04-20. HEAD `d16658b` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### OPT-I — dedup / dead-code removal in `_impl_moveAway`
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding (stronger than audit).** `_impl_moveAway` (skills.js:4003-4035) has two `createMovements(bot)` allocations. The first (line 4015: `bot.pathfinder.setMovements(createMovements(bot))`) runs unconditionally, then control either (a) enters the cheat-mode branch which early-returns via `bot.chat('/tp ...')` on success, or (b) falls through to `goToGoal(bot, inverted_goal)` — which, post-OPT-B, unconditionally calls `setMovements` with its own factory build. **The first allocation is dead code in both paths** (same shape as OPT-C's `pickupNearbyItems` finding). The second allocation (line 4018, cheat-branch-only) is consumed by `getPathTo(move, inverted_goal, 10000)` and must stay.
-
-**Scope.** Delete line 4015 + its leading comment. Cheat-branch unchanged. Behavior change: zero (the value set by line 4015 is overwritten by `goToGoal` before it can be observed; cheat-branch never reads it).
-
-**Expected diff.** ~2 lines deleted. No additions.
-
-**Why it matters.** Rule 3 — matches OPT-C pattern exactly. The audit flagged this as "dedup: first could potentially be reused" but Rule 2 read reveals the first isn't used at all. Cleaner fix than the audit anticipated.
-
-**Rule 2 audit (pre-ship).**
-- `grep -n 'pathfinder.setMovements' skills.js` — confirm `goToGoal` still owns the override (post-OPT-B).
-- `grep -rn '_impl_moveAway\|moveAway' src/` — single implementation, single caller-path (`moveAway` skill wrapper).
-- Cheat-branch `const move` is locally scoped; deleting line 4015 does not affect it.
-
-**Closes the bundle.** With I shipped, 2026-04-16 optimization-audit bundle is 6/6 (B/C/D/E/F/I).
+_(empty — OPT-I shipped `9dd17a4`; nineteen items awaiting live verification. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
 
 ## Shipped — awaiting live verification
+
+### OPT-I. Delete dead `setMovements(createMovements())` in `_impl_moveAway` (`9dd17a4`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: `!moveAway` invocations continue to path away from the current position correctly; no regression when cheat-mode is on or off).
+
+**What shipped.** One file, ~1 line net (3 comment lines added, 1 code line removed). Deleted the unconditional `bot.pathfinder.setMovements(createMovements(bot))` at the top of `_impl_moveAway` (formerly skills.js:4015). Left an explanatory comment in its place documenting why the allocation was dead. Cheat-branch `const move = createMovements(bot)` unchanged — it's consumed by `getPathTo(move, inverted_goal, 10000)` and is correctly scoped.
+
+**Why it matters.** Rule 3 / dead-code removal. Matches OPT-C's `pickupNearbyItems` finding: a `setMovements(createMovements(bot))` call whose effect is immediately overwritten by `goToGoal`'s own factory build (post-OPT-B) is pure waste — one `createMovements()` invocation per `moveAway` call that nothing reads. The 2026-04-16 audit flagged this as "dedup: first could potentially be reused"; Rule 2 read revealed the first isn't used at all, so the fix is deletion rather than sharing.
+
+**Blast radius.**
+- One file (`src/agent/library/skills.js`), `_impl_moveAway` only.
+- Cheat-branch: unchanged. `const move` still locally allocated and consumed by `getPathTo`. Early-return on success unchanged.
+- Non-cheat branch: control falls through to `goToGoal(bot, inverted_goal)`, which (post-OPT-B) unconditionally calls `setMovements` with its own non-destructive-first factory build. Behavior bit-for-bit identical to pre-ship.
+- No external consumers depend on Movements state being set prior to `moveAway` returning (wrapped by `wrapSkill`; Movements lifetime is per-skill-invocation).
+
+**Rule 2 audit.** Read `_impl_moveAway` body (skills.js:4003-4035 pre-ship), confirmed the first `setMovements` value has zero readers before it's overwritten. Cheat-branch's `move` is a fresh local. Checked `grep -n 'pathfinder.setMovements' skills.js` — `goToGoal` at line 3664 is the authoritative setter post-OPT-B. No callers of `moveAway` rely on pre-existing Movements config.
+
+**OPT-bundle status.** **Closed: 6/6 (B/C/D/E/F/I).** The 2026-04-16 optimization-audit bundle is fully shipped. Three dead-code deletions (C, I) + two module-scope constant hoists (D, E) + one lazy-build refactor (B) + one helper extraction (F). Net: ~1 `createMovements()` call saved per `moveAway` + ~1 per `goToGoal` happy-path + ~1 per `pickupNearbyItems` loop iteration + one Set pre-allocated for `_isDangerous` + one Set pre-allocated for `scanForCaverns` + ~30 lines of duplicated yaw-snapping logic consolidated. No behavior changes.
+
+**Verification signals to watch.**
+- Bot boots cleanly — **observed during restart 2026-04-20 (HEAD 9dd17a4)**. StateTicker ticking at 1Hz, LLM inference active (`[LLM] label=LMStudio-Embed ... status=ok`), MemoryRecall returning episodes, no errors.
+- Next `!moveAway` invocation (self-prompted or operator-triggered): bot pathfinds away from current position, final position > `distance` blocks from start. `log(bot, 'Moved away from ... to ...')` line emits with sane floored coords.
+- Cheat-mode path (if enabled): `/tp @s X Y Z` issued with coords from `getPathTo` final node. No regression.
+- No `TypeError` or `ReferenceError` during first `moveAway` call after boot.
+
+---
+
 
 ### OPT-F. Extract `_yawToCardinal` helper shared by `digDown`/`digUp` (`d16658b`, 2026-04-20)
 
@@ -222,7 +232,7 @@ Every external observable — path chosen, log line emitted, pathfinder.goto() c
 
 **Rule 2 audit.** Read `goToGoal` body + all 20+ callsites (grep `goToGoal(bot,`). Every caller is a fire-and-forget `await` on a goal object. No caller inspects internal Movements state. No caller has any coupling to construction order. Safe.
 
-**Deferred.** OPT-C (`pickupNearbyItems` creates Movements per loop iteration) and OPT-D (`_isDangerous` rebuilds array + `.includes()` on every call) remain in the OPT-bundle queue — each needs its own Rule 2 pass before action.
+**Deferred (at ship time).** OPT-C and OPT-D remained queued when OPT-B shipped. Both since shipped (2026-04-20: `9a7b7eb`, `178ebe2`).
 
 **Verification signals to watch.**
 - Bot boots cleanly (no SyntaxError from restructured body) — **observed during restart 2026-04-20 (HEAD 9887d62)**.
@@ -861,15 +871,21 @@ The LLM can reach them only via `coder.js`-generated code addressing `skills.X()
 
 **Question for JP:** were these ever wired, are they planned surface, or forgotten? If planned, convert to tracked command-registration work. If forgotten, remove per Principle 5.
 
-### OPT-bundle. Unverified optimization findings from 2026-04-16 audit
+### OPT-bundle. Unverified optimization findings from 2026-04-16 audit — ✅ CLOSED 6/6
 
-**Status:** ⏳ not started — **needs full Rule 2 codebase read before any can be actioned** • **Priority:** low (code quality; none functionally broken)
+**Status:** ✅ closed 2026-04-20 • **Priority:** (done)
 
-Surface-level findings from an optimization audit that did NOT follow proper review process (governing docs and full codebase were not read before analysis). Listed here so they aren't lost, but each must be verified with a proper Rule 1/2/3/4 pass before implementation.
+All six items shipped after full Rule 2 codebase reads. Audit retrospective: the original surface-level findings were directionally correct (real optimizations existed in each of the named locations), but Rule 2 reads changed the nature of two fixes — OPT-C and OPT-I both turned out to be **dead-code deletion** rather than the dedup/reuse the audit anticipated (in both cases, `goToGoal`'s post-OPT-B factory override made a preceding `setMovements` call irrelevant). OPT-D/E/F landed as-anticipated. **Lesson carried forward:** a surface-level "could be reused" flag is worth a full Rule 2 pass — it might reveal the thing doesn't need to exist at all.
 
-_B, C, D, E, F shipped 2026-04-20. I in-flight (see In-progress above)._
+**Ships:**
+- **B** (`9887d62`) — lazy-build `destructiveMovements` in `goToGoal`.
+- **C** (`9a7b7eb`) — delete dead Movements block in `pickupNearbyItems` loop.
+- **D** (`178ebe2`) — hoist `_isDangerous` block-name list to module-level Set.
+- **E** (`85c9241`) — hoist `scanForCaverns` `rockTypes` Set to module-level Set.
+- **F** (`d16658b`) — extract `_yawToCardinal` helper shared by `digDown`/`digUp`.
+- **I** (`9dd17a4`) — delete dead first `setMovements` in `_impl_moveAway`.
 
-**All six OPT-bundle items either shipped or in-flight.** This section kept for audit trail; remove on next hygiene sweep once I graduates.
+This section retained as the audit-trail entry; remove on next hygiene sweep.
 
 ---
 
