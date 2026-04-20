@@ -2665,6 +2665,17 @@ function _installSpawnEscapeInstrumentation(bot) {
                     if (!_isInSpawnZone(bot, pp.x, pp.z)) return;
                     const holder = botMutex.currentHolder;
                     if (holder === 'escapeProtectedZone' || holder === 'escapeSpawnZone') return;
+                    // #28 fix (2026-04-19): combat preemption guard. Zombie
+                    // knockback fires `forcedMove`; without this guard, the
+                    // re-fire takes the mutex via `withBotLock` and kills an
+                    // in-flight defendSelf loop after one swing. Spawn
+                    // protection exists to stop *destructive* actions; a
+                    // mob actively attacking the bot is neither destructive
+                    // nor strands us. Combat wins this tiebreak — the zone
+                    // is still there after the fight, and any post-combat
+                    // NaN/low-HP state will route through self_preservation.
+                    if (holder === 'defendSelf') return;
+                    if (bot.pvp && bot.pvp.target) return;
                     const now2 = Date.now();
                     if (now2 - _fmLastReFireMs < 30000) return;  // 30s cooldown
                     _fmLastReFireMs = now2;
