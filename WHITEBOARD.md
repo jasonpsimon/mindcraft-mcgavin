@@ -1061,6 +1061,37 @@ Bot passively records notable POIs as it moves through the world, so later user 
 
 **First commit:** research pass on the existing remember-place code path to decide whether this extends that table or lives in a parallel file. Then POI catalog + detection code + retrieval-side prompt injection.
 
+### 32. Real-player location relay — bot can find a user on request
+
+**Status:** ⏳ not started • **Priority:** medium (unblocks "come help me" UX; depends on external-side integration)
+
+When a player asks the bot for help ("come help me", `!comeHelp`), the bot navigates to the player's real-world coordinates — even when the player is outside render distance or in a different dimension. Mineflayer's `bot.players[name].entity` only resolves when the player is in a loaded chunk near the bot, so this ticket is primarily about the **out-of-render-distance case**.
+
+**Coordinate source — JP's preference: server-side mod or plugin.** Mineflayer alone cannot see a player's position when the player is outside the bot's render distance. Options considered:
+
+- **✅ Spigot / Paper / Fabric plugin (JP's preferred path).** Small companion plugin exposes player positions to the bot — simplest shapes: (a) a plugin command like `/whereis <player>` that the bot reads from chat, (b) a scoreboard objective updated per tick with player XYZ (mineflayer can read scoreboards directly), or (c) a websocket/HTTP sidecar the bot polls. Scoreboard route is the lowest-friction — no extra network surface, mineflayer already receives scoreboard packets.
+- **RCON `/data get entity <player> Pos`.** Works on vanilla + any RCON-enabled server without a plugin. Requires RCON credentials in the bot config. Good fallback if the plugin route stalls.
+- **Cooperative chat fallback.** If neither plugin nor RCON is available, bot asks the player to run `/tp ~ ~ ~` output or share coords. MVP-acceptable but clunky.
+- **❌ Mineflayer-only.** Rejected — can't see out-of-render players.
+
+**Command surface.**
+- `!comeHelp <player>` — explicit command, bot resolves target coords via the chosen source and pathfinds.
+- Natural-language trigger — "come help me", "I need help", "come to me" routed through existing chat handler → LLM action selection → `!comeHelp`.
+
+**Cross-dimensional travel.** If the player is in a different dimension, bot must traverse a portal. Deferred design — mark as sub-scope. For MVP, restrict to same-dimension and log a "player is in nether, can't reach from overworld yet" message if dimensions differ.
+
+**Scope guard / Rule 2.** Existing `!goToPlayer` command likely covers the in-render case. #32 should **extend** that command (or add a thin wrapper that falls through to it when the player is loaded) rather than duplicate pathfinding logic. Verify during survey.
+
+**Survey before coding.** Inventory before design:
+- `!goToPlayer` command — existing? What does it do when the player is out of range?
+- `bot.players` object shape — does it carry anything useful (uuid, ping) when the entity isn't loaded?
+- Scoreboard packet handlers in mineflayer (`bot.scoreboards`, `bot.on('scoreboardUpdated')`).
+- RCON client in node ecosystem — pick one (`rcon-client` is standard).
+- JP's server — is it vanilla, Paper, Fabric? (Determines plugin API surface.)
+- Dimension handling — `bot.game.dimension`, existing portal-traversal logic if any.
+
+**First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
+
 ### 30. Bot modes: Auto / Assistant / Survivor
 
 **Status:** ⏳ not started • **Priority:** medium (user-facing control + structured autonomy)
