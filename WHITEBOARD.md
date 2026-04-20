@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `5f5d983` on `origin/develop`. **In-progress:** BT-10d — ranged-attacker close-distance reflex (sub-item of #10). Skeletons/strays/pillagers kite the bot from 10-16 blocks; existing self_defense only reacts once hit, and once hit the bot takes 3-4 dmg per arrow while standing. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c. Thirteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `ddbf4c8` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d (`ddbf4c8`) — ranged-attacker close-distance: skeleton/stray/pillager in [6,20] at HP≥6 → `goToPosition(min_dist=4)` to break the kite and hand off to melee. Fourteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,52 +66,81 @@ _Last updated: 2026-04-19. HEAD `5f5d983` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10d. Ranged-attacker close-distance reflex (sub-item of #10 survival hardening)
-
-**Status:** in-progress (code phase) • **Priority:** medium (arrow kiting is the #1 cause of slow-bleed deaths during work tasks — bot takes 3-4 dmg/arrow from 12-block stand-off, auto-heal can't keep up)
-
-**Problem.** Existing `self_defense` kicks combat once damage lands, but by then the bot is already trading HP. No proactive close-the-distance behavior for ranged hostiles. Skeletons and strays peck the bot down from 10-16 blocks; pillagers are worse (crossbow + high damage). BT-10b low-HP retreat only fires at HP<6, which is too late — by then half the health bar is gone.
-
-**Design (extend existing `self_preservation`).**
-
-1. **New branch placed AFTER BT-10b proactive-retreat.** Order matters: low-HP bail takes priority over closing distance. If HP<6 we already have a retreat plan; the ranged-close logic is for healthy bot vs. ranged threat.
-2. **Gate:** ranged hostile (`skeleton`, `stray`, `pillager`) within `[6, 20]` blocks, `bot.health >= 6`, `!bot._rangedEvadeActive`. The lower bound of 6 avoids fighting the melee/combat system (which handles close-range). Upper bound 20 matches typical arrow engage range.
-3. **Action:**
-   - Set `bot._rangedEvadeActive = true` latch.
-   - Log `[Survival] ranged-close type=<X> dist=<d>`.
-   - `say(agent, 'Closing on <X>!')`.
-   - `execute()` → `skills.goToPlayer`-style close: walk toward the hostile to range ≤4 so melee/combat takes over. Use `pathfinder.setGoal(new GoalFollow(entity, 3))` pattern.
-4. **Latch clear:** top-of-update group: clear if no such hostile within 20 blocks, OR distance to nearest ranged hostile ≤5, OR HP<6 (hand-off to BT-10b).
-
-**Files.**
-- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit.
-
-**Blast radius.**
-- One mode. No touch to `self_defense` combat primitives.
-- Uses `pathfinder.goto` with `GoalFollow` — pathfinder is the battle-tested primitive; no new movement code.
-- Reuses `mc.isHostile` filter + name-set narrowing.
-
-**Guardrails.**
-- Name allowlist (skeleton/stray/pillager) prevents firing on melee hostiles (zombie/spider) where closing distance is correct-by-default for combat anyway.
-- Latch prevents re-pathing every tick.
-- HP≥6 gate hands off cleanly to BT-10b when the situation degrades.
-- `execute()` error → latch stays set; top-of-update clear resets once geometry changes.
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. New state `bot._rangedEvadeActive` joins the existing bot-owned latch family.
-
-**Skip (explicit).**
-- Strafe (perpendicular dodge) — requires per-tick control-state toggling; too much complexity for this reflex. Closing distance accomplishes the same arrow-avoidance by breaking the aim arc.
-- Shield auto-raise — separate concern, candidate for BT-10e.
-- Blaze/ghast/ender-pearl ranged attackers (Nether/End) — dimension-aware; piggybacks on the dimension-safety sub-item.
-
-**Success signal (live verification).**
-- Bot at HP≥6 with skeleton 12 blocks away → `[Survival] ranged-close type=skeleton dist=12.0` line; `Closing on skeleton!` chat; bot walks toward skeleton; combat engages at melee range.
-- Bot at HP≥6 with no ranged hostile → branch does NOT fire.
-- Skeleton gives up and wanders off → `[Survival] ranged-close cleared` log; latch cleared.
-- HP drops below 6 mid-close → BT-10b retreat fires; ranged-close latch cleared via top-of-update check.
+_(empty — BT-10d shipped `ddbf4c8`; fourteen items awaiting live verification on next natural events.)_
 
 
 ## Shipped — awaiting live verification
+
+### BT-10d. Ranged-attacker close-distance reflex (`ddbf4c8`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot at HP≥6 with a skeleton/stray/pillager at 6-20 blocks; observe `ranged-close` log + pathfinder goal set toward hostile + melee hand-off at ≤5)
+
+**What shipped.** Two new code paths inside `self_preservation.update()` in `src/agent/modes.js`. Zero new imports (`world.getNearestEntityWhere`, `mc.isHostile`, `skills.goToPosition` all already available).
+
+**1. Ranged-evade latch clear (top of update, after BT-10c suffocation clear).**
+```js
+if (bot._rangedEvadeActive) {
+    let nearestRangedDist = Infinity;
+    try {
+        const rangedNames = ['skeleton', 'stray', 'pillager'];
+        const h = world.getNearestEntityWhere(
+            bot,
+            e => mc.isHostile(e) && rangedNames.includes(e.name),
+            20
+        );
+        if (h) nearestRangedDist = bot.entity.position.distanceTo(h.position);
+    } catch (_) {}
+    if (nearestRangedDist === Infinity || nearestRangedDist <= 5 || bot.health < 6) {
+        console.log(`[Survival] ranged-close cleared dist=... hp=...`);
+        bot._rangedEvadeActive = false;
+    }
+}
+```
+
+**2. Ranged-close trigger (after BT-10b proactive retreat).** Fires when `bot.health >= 6 && !bot._rangedEvadeActive` AND a ranged hostile (skeleton/stray/pillager) exists within 20 blocks AND distance ≥ 6. Sets the latch, logs `[Survival] ranged-close type=<X> dist=<d>`, says `Closing on <X>!`, `execute()` → `skills.goToPosition(bot, floor(x), floor(y), floor(z), 4)`.
+
+**Branch ordering rationale.** Placed AFTER BT-10b low-HP retreat so that when both conditions match (low HP + ranged threat), retreat takes priority. The ranged-close logic is exclusively for the healthy-bot vs. kite scenario.
+
+**Range windowing (`[6, 20]`).**
+- **Lower bound 6:** below this the bot is in melee range and `self_defense` / combat skills handle engagement. Closing into that space via pathfinder would fight combat's own target-tracking.
+- **Upper bound 20:** matches typical arrow engage range. Beyond 20 the kiter is already out of threat range and pathfinder chase overhead isn't worth it.
+
+**Name allowlist (skeleton/stray/pillager).** Explicit set. Excludes melee hostiles (zombie/spider/drowned-without-trident) where closing distance is already correct-by-default for combat. Excludes Nether/End ranged (blaze/ghast) — those are candidates for dimension-aware handling in a later sub-item.
+
+**Three-sided clear.** Latch clears on any of:
+- No ranged hostile within 20 (they gave up / died / bot walked away).
+- Distance ≤ 5 (we closed, combat takes over).
+- HP < 6 (BT-10b retreat takes priority; cleanly hands off).
+
+Two-sided progress conditions + one escalation condition. Prevents oscillation (we don't re-trigger immediately after closing because we clear first) and prevents conflict with BT-10b.
+
+**Blast radius.**
+- `self_preservation.update()` only. No touch to combat, `self_defense`, or pathfinder internals.
+- `skills.goToPosition` is the battle-tested primitive; already wraps `wrapSkill('goToPosition', _impl_goToPosition)` with the Movements config and safe defaults.
+- Target position is captured at trigger tick. If the skeleton moves during the path, the pathfinder won't chase — but the latch clears on every tick based on current geometry, so re-trigger on next opportunity is natural.
+
+**Guardrails.**
+- Latch prevents re-firing every tick.
+- Name allowlist, not `isHostile` alone — precise trigger.
+- HP≥6 gate prevents conflicting with BT-10b low-HP retreat.
+- `execute()` catches its own errors; latch cleanup via top-of-update handles recovery.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._rangedEvadeActive` joins the other bot-owned latches (`_lavaEscapeActive`, `_lavaEdgeBackoffActive`, `_lowHpRetreatActive`, `_suffocationEscapeActive`). No fan-out.
+
+**Skip (explicit).**
+- Strafe / perpendicular dodge: needs per-tick control-state toggling; closing distance accomplishes the same aim-break with simpler control flow.
+- Shield auto-raise: separate concern (BT-10e candidate) — would also help vs. melee attackers.
+- Blaze/ghast handling: Nether-specific; folds into the dimension-safety sub-item.
+- Reactive damage-type detection (`lastDamageSource === 'arrow'`): not needed — presence of a ranged hostile in the kite zone is a sufficient trigger without waiting for the first arrow to land.
+
+**Verification signals to watch.**
+- **Trigger:** bot at HP≥6 with a skeleton 12 blocks away → `[Survival] ranged-close type=skeleton dist=12.0` line; `Closing on skeleton!` chat; pathfinder sets goal at the skeleton's position; bot walks toward it.
+- **Clear (closed):** bot reaches ≤5 blocks → `[Survival] ranged-close cleared dist=4.x hp=X.X`; latch resets; combat/self_defense takes over.
+- **Clear (wander-off):** skeleton walks out of 20-block radius → same cleared log, dist=none.
+- **Clear (escalation):** HP drops below 6 during the close → cleared log; BT-10b retreat fires on next tick.
+- **Non-trigger (melee hostile only):** zombie at 10 blocks, no skeleton → branch does NOT fire (name allowlist).
+- **Non-trigger (too close):** skeleton at 4 blocks → branch does NOT fire (below 6-block lower bound — combat territory).
+
 
 ### BT-10c. Suffocation escape (`4fb5a2e`, 2026-04-19)
 
