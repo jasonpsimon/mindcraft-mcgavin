@@ -4012,7 +4012,10 @@ async function _impl_moveAway(bot, distance) {
     const pos = bot.entity.position;
     let goal = new pf.goals.GoalNear(pos.x, pos.y, pos.z, distance);
     let inverted_goal = new pf.goals.GoalInvert(goal);
-    bot.pathfinder.setMovements(createMovements(bot));
+    // OPT-I: removed dead `setMovements(createMovements(bot))` — value was
+    // immediately overwritten by goToGoal's own factory build (post-OPT-B),
+    // and the cheat-branch uses its own locally-scoped `move`. Same shape
+    // as OPT-C's dead-Movements-in-pickupNearbyItems finding.
 
     if (bot.modes.isOn('cheat')) {
         const move = createMovements(bot);
