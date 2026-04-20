@@ -3624,27 +3624,31 @@ export async function goToGoal(bot, goal) {
     nonDestructiveMovements.maxDropDown = 3;     // vanilla no-damage limit (was default 4 = sometimes-fall-damage)
     // _configureTerrainSafeMovements already applied by createMovements factory
 
-    const destructiveMovements = createMovements(bot);
-    destructiveMovements.canSwim = true;         // pathfinder handles water as swimmable
-    destructiveMovements.maxDropDown = 3;         // vanilla no-damage limit
-    // _configureTerrainSafeMovements already applied by createMovements factory
-
     // Bump pathfinder timeouts for complex underground terrain
     bot.pathfinder.thinkTimeout = 10000;  // 10s total (default 5s)
     bot.pathfinder.tickTimeout = 80;      // 80ms per tick (default 40ms)
 
-    let final_movements = destructiveMovements;
-
     const pathfind_timeout = 4000;
+    let final_movements;
     if (await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, pathfind_timeout).status === 'success') {
         final_movements = nonDestructiveMovements;
         log(bot, `Found non-destructive path.`);
     }
-    else if (await bot.pathfinder.getPathTo(destructiveMovements, goal, pathfind_timeout).status === 'success') {
-        log(bot, `Found destructive path.`);
-    }
     else {
-        log(bot, `Path not found, but attempting to navigate anyway using destructive movements.`);
+        // OPT-B: build destructiveMovements lazily — only when the non-destructive
+        // path lookup fails. Saves one createMovements() + _configureTerrainSafeMovements()
+        // pass on every call that finds a walkable path (the common case).
+        const destructiveMovements = createMovements(bot);
+        destructiveMovements.canSwim = true;         // pathfinder handles water as swimmable
+        destructiveMovements.maxDropDown = 3;         // vanilla no-damage limit
+        // _configureTerrainSafeMovements already applied by createMovements factory
+        final_movements = destructiveMovements;
+        if (await bot.pathfinder.getPathTo(destructiveMovements, goal, pathfind_timeout).status === 'success') {
+            log(bot, `Found destructive path.`);
+        }
+        else {
+            log(bot, `Path not found, but attempting to navigate anyway using destructive movements.`);
+        }
     }
 
     const doorCheckInterval = startDoorInterval(bot);
