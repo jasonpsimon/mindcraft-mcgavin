@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `e49c75c` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `e49c75c` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-E — hoist `scanForCaverns` `rockTypes` Set to module scope (same shape as OPT-D, cooler hot-path). **Shipped 4/20:** #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,19 @@ _Last updated: 2026-04-20. HEAD `e49c75c` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — #21 L1 cleanup bundle shipped `e49c75c` (docs-only, graduated direct to Recently completed). Sixteen items still awaiting live verification on next natural events.)_
+### OPT-E — hoist `scanForCaverns` `rockTypes` Set to module-level constant
+
+**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
+
+**Finding.** `scanForCaverns` at skills.js:4560 (single caller: `digDown` at 4683) allocates a 16-element `Set` (`rockTypes`) *inside* the triple-nested scan loop (dx × dz × y). The Set is only built when a viable cavern candidate passes the earlier gates (airCount ≥ 6, floor solid, ceiling present) — so per-call count is small (0-50) — but each full dig-down triggers one scan, and the Set contents are fixed/static. Same shape as OPT-D: pure constant re-allocated in a hot path.
+
+**Scope.** Hoist the Set to module scope as `CAVERN_ROCK_TYPES`. Replace the inline `const rockTypes = new Set([...])` with a reference. 16 entries, identical contents. Behavior bit-for-bit identical.
+
+**Expected diff.** ~18 lines — add constant at module scope near `_isDangerous` / `DANGEROUS_BLOCK_NAMES`, delete the inline construction, update the single `rockTypes.has(...)` call to `CAVERN_ROCK_TYPES.has(...)`. Comment explaining why-hoisted.
+
+**Why it matters.** Same class of fix as OPT-D, slightly cooler hot path (digDown runs on-demand, not every tick). Closes the OPT-E slot in the 2026-04-16 audit bundle. With E shipped, only F and I remain.
+
+**Callers checked.** `grep -rn scanForCaverns src/` → one definition + one caller (`digDown`:4683). No external or cross-module reach.
 
 ## Shipped — awaiting live verification
 
