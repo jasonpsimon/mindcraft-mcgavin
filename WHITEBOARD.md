@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `e1f47ac` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. **BT-10c fix:** diagnosed false-positive (cave trigger with head=air per game snapshot) — added 5-tick debounce (~0.25s) and diagnostic log (pos + legs + head). Seventeen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `ba75ea3` on `origin/develop`. **In-progress:** #28 fix — escapeProtectedZone re-fire preempting active combat (zombie knockback fires `forcedMove`, re-fire handler takes mutex via `interrupts:['all']`, defendSelf loop is killed after one swing). **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. Seventeen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,27 @@ _Last updated: 2026-04-19. HEAD `e1f47ac` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10g shipped `5324782`; seventeen items awaiting live verification on next natural events.)_
+### #28 fix. Combat vs spawn-protection conflict — re-fire must bail during active combat
+
+**Observed bug (2026-04-19 ≈20:17 CDT, UTC 01:17:03):** bot self-prompting for diamond armor, walking near spawn. Burning zombie closed to 2.5 blocks, landed one hit (1.68 HP zombie source). `self_defense` engaged, `defendSelf` ran one `bot.pvp.attack` swing — then combat stopped. Bot took 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked it out to x=224 (35 blocks past the protected zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
+
+**Evidence (state-stream + damage-stream):**
+
+- 01:17:02–03: pathfinder active, zombie closing 10 → 2.5 blocks, mutex=None, HP=20.
+- 01:17:04–29: 26-second state-stream blackout (`bot.entity`=null symptom, damage-stream keeps firing with `pos:null`). Fire ticks drain HP 20 → 2.17.
+- 01:17:30: state-stream recovers. `mutex.holder = escapeProtectedZone`, pathfinder target (224, 22, -53). Zombie 20+ blocks away.
+- 01:18:04: escape completes, bot returns to origin, mutex=None.
+
+**Root cause (`skills.js` ~L2649–2686, #28 handler):** the `forcedMove` bot-event handler re-fires `_impl_escapeProtectedZone` after a 500ms debounce whenever the bot lands inside the protected zone. **Zombie knockback fires `forcedMove`.** Existing guards bail on (a) NaN position, (b) health≤0, (c) outside zone, (d) already-escape holder, (e) 30s cooldown. **No guard for active combat.** So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf loop preempted.
+
+**Fix shape:** add two bail conditions in the deferred callback, next to the existing escape-holder check:
+
+1. `holder === 'defendSelf'` — combat actively running, do not preempt.
+2. `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the 500ms `setTimeout` await).
+
+Single perimeter. No new state. No changes to `_impl_defendSelf` itself. Rationale: spawn protection exists to prevent *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight ends (and if bot ends up NaN'd or low-HP, `self_preservation` routes to escape via its own paths).
+
+**Blast radius:** the 500ms deferred callback in the `forcedMove` handler only. Counter / cooldown state unchanged. All other escape pathways (spawn/login, autoRecovery ESCAPE_SPAWN_ZONE pattern, safety-net) unaffected.
 
 
 ## Shipped — awaiting live verification
