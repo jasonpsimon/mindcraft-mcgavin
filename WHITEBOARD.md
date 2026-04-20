@@ -64,7 +64,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_(empty — #7d Block-update watcher shipped `7d58837`; #8 Humanized action delays shipped `e6e7b5a`; L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2`; #12-follow-up shipped `85d93f7`; #2 Layer 3 shipped `71df242`; #2 Layer 2 + #3 Swamp biome closed as redundant. Twenty-four items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6.)_
+_(empty)_
 
 ## Shipped — awaiting live verification
 
