@@ -63,6 +63,7 @@ export class History {
         // the D1 deprecation (2026-04-15), so nothing reads this value anymore.
         // Skip the LLM call entirely when CB is enabled — saves one inference per
         // 5 turns and eliminates the "Memory truncated to 500 chars" warning.
+        // #21 L1.3: `use_context_builder` default lives at settings.js:100 (true).
         if (!settings.use_context_builder) {
             console.log("Storing memories (legacy summary path)...");
             this.memory = await this.agent.prompter.promptMemSaving(turns);

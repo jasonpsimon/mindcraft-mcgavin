@@ -255,7 +255,11 @@ export class Prompter {
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY')) {
-            // Combine legacy summary with episodic memory retrieval
+            // #21 L1.4: only runs when the prompt template literally contains
+            // $MEMORY. mcgavin default CB profiles no longer include it
+            // (removed in D1, 2026-04-15), so this branch is effectively dead
+            // for the default profile. Retained for non-CB / legacy-profile use.
+            // Combine legacy summary with episodic memory retrieval.
             let memoryText = this.agent.history.memory;
             try {
                 if (this.agent.history.episodic && messages?.length > 0) {
@@ -570,7 +574,9 @@ export class Prompter {
     }
 
     async promptGoalSetting(messages, last_goals) {
-        // deprecated
+        // #21 L1.2: NOT deprecated despite the old marker — still called from
+        // npc/controller.js:100 for the NPC goal-setting path. Retained for
+        // NPC use only; main agent loop does not hit this.
         let system_message = this.profile.goal_setting;
         system_message = await this.replaceStrings(system_message, messages);
 

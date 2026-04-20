@@ -64,7 +64,11 @@ const modes_list = [
             const bot = agent.bot;
             let block = bot.blockAt(bot.entity.position);
             let blockAbove = bot.blockAt(bot.entity.position.offset(0, 1, 0));
-            if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
+            // #21 L1.1: treating missing blocks as 'air' is the correct defensive
+            // fallback. blockAt() returns null when the chunk at that position
+            // isn't loaded yet (common during spawn / teleport). 'air' short-circuits
+            // the sand/gravel fall-block detector to 'no hazard' — safe default.
+            if (!block) block = {name: 'air'};
             if (!blockAbove) blockAbove = {name: 'air'};
 
             // BT-10b (2026-04-19): low-HP-retreat latch clear. Runs at the top
