@@ -17,6 +17,30 @@ async function say(agent, message) {
     agent.openChat(message);
 }
 
+// BT-10h (2026-04-19): dimension-aware tuning for survival reflexes. The
+// bot is allowed to travel to the Nether and End (no retreat-on-entry);
+// this helper lets individual reflexes adapt their thresholds instead of
+// hardcoding overworld assumptions. Mineflayer reports `bot.game.dimension`
+// as a namespaced string (`minecraft:the_nether`) on modern servers; older
+// paths return the bare form (`the_nether`). Handle both.
+//
+// Profile fields:
+//   dim                    — short label for logging
+//   lowHpThreshold         — BT-10b retreat trigger (hp < threshold)
+//   lavaAdjacentBackoff    — BT-10a preemptive ring-scan backoff enabled
+//   voidCheckY             — null, or a Y below which void-awareness fires
+function _dimensionProfile(bot) {
+    const raw = (bot && bot.game && bot.game.dimension) || 'overworld';
+    const dim = raw.replace(/^minecraft:/, '');
+    if (dim === 'the_nether' || dim === 'nether') {
+        return { dim: 'nether', lowHpThreshold: 10, lavaAdjacentBackoff: false, voidCheckY: null };
+    }
+    if (dim === 'the_end' || dim === 'end') {
+        return { dim: 'end', lowHpThreshold: 10, lavaAdjacentBackoff: true, voidCheckY: 10 };
+    }
+    return { dim: 'overworld', lowHpThreshold: 6, lavaAdjacentBackoff: true, voidCheckY: null };
+}
+
 // a mode is a function that is called every tick to respond immediately to the world
 // it has the following fields:
 // on: whether 'update' is called every tick
@@ -73,6 +97,34 @@ const modes_list = [
                 if (!headSolid && bot._suffocationSolidTicks) {
                     bot._suffocationSolidTicks = 0;
                 }
+            }
+
+            // BT-10h (2026-04-19): void awareness (End). The End islands sit
+            // above a void; falling off is instant-death with no HP-based
+            // reflex to catch it. When dimension has a voidCheckY, bot is
+            // below it, and pathfinder is active — abort pathfinder and
+            // back up. Latched so we don't re-fire every tick; cleared when
+            // bot climbs back above the threshold with a 2-block buffer.
+            const _dimProf = _dimensionProfile(bot);
+            if (_dimProf.voidCheckY !== null && bot.entity && bot.entity.position) {
+                const _y = bot.entity.position.y;
+                const _pfMoving = (bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving());
+                if (_y < _dimProf.voidCheckY && _pfMoving && !bot._voidRetreatActive) {
+                    bot._voidRetreatActive = true;
+                    console.log(`[Survival] void-retreat dim=${_dimProf.dim} y=${_y.toFixed(2)}`);
+                    say(agent, 'Near the void — backing up!');
+                    execute(this, agent, async () => {
+                        try {
+                            if (bot.pathfinder && bot.pathfinder.stop) bot.pathfinder.stop();
+                            await skills.moveAway(bot, 3);
+                        } catch (_) { /* ignore — latch clears when bot regains altitude */ }
+                    });
+                } else if (bot._voidRetreatActive && _y >= _dimProf.voidCheckY + 2) {
+                    bot._voidRetreatActive = false;
+                }
+            } else if (bot._voidRetreatActive) {
+                // Dimension change out of the End: clear stale latch.
+                bot._voidRetreatActive = false;
             }
 
                         // BT-10c (2026-04-19): suffocation latch clear. Cleared when the
@@ -350,7 +402,7 @@ const modes_list = [
             // BT-10a (2026-04-19): preemptive lava-adjacency step-back. Fires
             // only when idle — don't preempt user-requested work. One-shot
             // moveAway so we don't oscillate against pathfinder goals.
-            else if (agent.isIdle() && !bot._lavaEdgeBackoffActive) {
+            else if (agent.isIdle() && !bot._lavaEdgeBackoffActive && _dimensionProfile(bot).lavaAdjacentBackoff) {
                 let lavaAdj = false;
                 try {
                     const adj = [[1,0],[-1,0],[0,1],[0,-1]];
@@ -385,7 +437,7 @@ const modes_list = [
             // _lowHpRetreatActive. Retreats directly away from the nearest
             // hostile (via moveAwayFromEntity) instead of a random moveAway
             // direction.
-            else if (bot.health < 6 && !bot._lowHpRetreatActive) {
+            else if (bot.health < _dimensionProfile(bot).lowHpThreshold && !bot._lowHpRetreatActive) {
                 let hostile = null;
                 try {
                     hostile = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
