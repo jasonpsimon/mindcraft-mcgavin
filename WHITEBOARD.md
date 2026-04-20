@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `30de1f4` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i. **BT-10i:** pre-fight equip polish — shield to offhand before combat loop, <5% durability filter in equipHighestAttack pick. Twenty items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `63e2750` on `origin/develop`. **In-progress:** BT-10j — pathfinder fall-damage prevention (cap `maxDropDown=3` in `createMovements()` factory so ad-hoc pathfinder calls can't plan a 4-block drop). **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i. Twenty items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,17 @@ _Last updated: 2026-04-19. HEAD `30de1f4` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10i shipped `30de1f4`; twenty items awaiting live verification on next natural events.)_
+### BT-10j. Pathfinder fall-damage prevention (factory-level drop cap)
+
+**Finding.** `maxDropDown=3` is currently only set in three specific spots (`installSafePathfinderDefaults` for `bot.collectBlock.movements`, and two local mining-movement instantiations at lines ~3618/3623). The general `createMovements()` factory at line 2247 does NOT cap `maxDropDown` — so every ad-hoc pathfinder call that routes through the factory inherits the pathfinder default of 4, which can produce fall damage on landing.
+
+**Delta (one line).** Add `m.maxDropDown = 3;` to `createMovements()` right after `_configureTerrainSafeMovements(bot, m);`. Vanilla Minecraft's fall-damage-free drop is up to 3.5 blocks; capping at 3 keeps pathfinder from planning 4-block drops where damage becomes possible.
+
+**Why factory-level and not per-callsite.** Most callsites go through `createMovements()`; some have their own tweaks on top (e.g. `dontMineUnderFallingBlock = false` in the ore-collect path, `allow1by1towers = false` in another). Setting the cap in the factory gives a safe default that individual callsites can still override upward if a drop is genuinely intended.
+
+**Blast radius.** One line in `createMovements()` in `src/agent/library/skills.js`. The two existing `maxDropDown = 3` lines at 3618/3623 become redundant but harmless (explicit values match the factory default). Don't remove them — they're documentation.
+
+**Out of scope.** Reactive fall-damage handling (mid-fall velocity reflex, water-bucket placement, slow-falling potion auto-drink). Cliff-edge observability logging. These are reactive patches on top of the preventive cap; revisit if live data shows damage-causing drops still happen.
 
 ## Shipped — awaiting live verification
 
