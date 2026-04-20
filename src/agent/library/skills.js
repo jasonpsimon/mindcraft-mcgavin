@@ -807,9 +807,14 @@ async function _impl_breakBlockAt(bot, x, y, z) {
     const breakZone = _isInAnyProtectedZone(bot, x, y, z);
     if (breakZone) {
         const label = breakZone.type === 'spawn' ? 'spawn' : `protected structure '${breakZone.name}'`;
-        console.log(`[ProtectedZone] Blocked break at (${x}, ${y}, ${z}) — inside ${breakZone.radius}-block ${label}`);
-        log(bot, `Cannot break blocks near ${label} (within ${breakZone.radius} blocks). Move further away first.`);
-        return false;
+        // L1.4-wire BT 2: allowlisted ops (e.g. tillAndSow) pass through.
+        if (bot._allowProtectedZoneOps && PROTECTED_ZONE_ALLOWLIST.has(bot._allowProtectedZoneOps)) {
+            console.log(`[ProtectedZone] Bypassed break at (${x}, ${y}, ${z}) inside ${breakZone.radius}-block ${label} — allowlist: ${bot._allowProtectedZoneOps}`);
+        } else {
+            console.log(`[ProtectedZone] Blocked break at (${x}, ${y}, ${z}) — inside ${breakZone.radius}-block ${label}`);
+            log(bot, `Cannot break blocks near ${label} (within ${breakZone.radius} blocks). Move further away first.`);
+            return false;
+        }
     }
     let block = bot.blockAt(new Vec3(x, y, z));
     if (!block) {
@@ -886,9 +891,14 @@ async function _impl_placeBlock(bot, blockType, x, y, z, placeOn='bottom', dontC
     const placeZone = _isInAnyProtectedZone(bot, x, y, z);
     if (placeZone) {
         const label = placeZone.type === 'spawn' ? 'spawn' : `protected structure '${placeZone.name}'`;
-        console.log(`[ProtectedZone] Blocked place at (${x}, ${y}, ${z}) — inside ${placeZone.radius}-block ${label}`);
-        log(bot, `Cannot place blocks near ${label} (within ${placeZone.radius} blocks). Move further away first.`);
-        return false;
+        // L1.4-wire BT 2: allowlisted ops (e.g. tillAndSow) pass through.
+        if (bot._allowProtectedZoneOps && PROTECTED_ZONE_ALLOWLIST.has(bot._allowProtectedZoneOps)) {
+            console.log(`[ProtectedZone] Bypassed place at (${x}, ${y}, ${z}) inside ${placeZone.radius}-block ${label} — allowlist: ${bot._allowProtectedZoneOps}`);
+        } else {
+            console.log(`[ProtectedZone] Blocked place at (${x}, ${y}, ${z}) — inside ${placeZone.radius}-block ${label}`);
+            log(bot, `Cannot place blocks near ${label} (within ${placeZone.radius} blocks). Move further away first.`);
+            return false;
+        }
     }
     const target_dest = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
 
@@ -1620,6 +1630,17 @@ function _isNearProtectedZone(bot, x, y, z) {
     }
     return null;
 }
+
+// L1.4-wire BT 2 (2026-04-20): named-skill allowlist for ops that should
+// pass through protected-zone tripwires. A caller opts a sub-op in by setting
+// `bot._allowProtectedZoneOps = '<skillName>'` around the sensitive call(s)
+// (and clearing in finally — see `_impl_tillAndSow` for the reference pattern,
+// mirrors BT-7b's `_placeIntent` shape). The gates in `_impl_breakBlockAt`
+// and `_impl_placeBlock` honor the flag only when the named skill is in this
+// Set. Default (flag unset OR name not listed) preserves full protection.
+// Adding a new allowlisted op = one-line append here + matching try/finally
+// at the skill's entry point.
+const PROTECTED_ZONE_ALLOWLIST = new Set(['tillAndSow']);
 
 function _isInAnyProtectedZone(bot, x, y, z) {
     // Spawn zone is Y-agnostic by design — it gates the new-player wilderness
@@ -4216,6 +4237,13 @@ async function _impl_tillAndSow(bot, x, y, z, seedType=null) {
      * let position = world.getPosition(bot);
      * await skills.tillAndSow(bot, position.x, position.y - 1, position.x, "wheat");
      **/
+    // L1.4-wire BT 2: opt this skill into the protected-zone allowlist. The
+    // flag is read by the breakBlockAt + placeBlock tripwire gates and lets
+    // tillAndSow's internal break (clear-above) + place (farmland/seed in
+    // cheat branch) calls pass through spawn/protected zones. Cleared in
+    // `finally` so the bypass never leaks into subsequent skill calls.
+    bot._allowProtectedZoneOps = 'tillAndSow';
+    try {
     let pos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
     let block = bot.blockAt(pos);
     if (!block) {
@@ -4290,6 +4318,12 @@ async function _impl_tillAndSow(bot, x, y, z, seedType=null) {
         log(bot, `Planted ${seedType} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     return true;
+    } finally {
+        // L1.4-wire BT 2: clear allowlist flag on every exit path (success,
+        // early-return, throw) so the next skill invocation doesn't inherit
+        // the bypass. Matches BT-7b's `_placeIntent` finally-clear pattern.
+        bot._allowProtectedZoneOps = null;
+    }
 }
 export const tillAndSow = wrapSkill('tillAndSow', _impl_tillAndSow);
 
