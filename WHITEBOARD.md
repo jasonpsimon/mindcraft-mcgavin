@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `b0b874e` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** #12 Stage 2 — routing the last raw `new pf.Movements(bot)` (in `world.js:isClearPath`) through the `createMovements()` factory so OPT-J hazards + BT-10j drop cap apply there too. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `93d7986` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,21 +66,38 @@ _Last updated: 2026-04-20. HEAD `b0b874e` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### #12 Stage 2 — route the last raw `new pf.Movements(bot)` through the factory
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding on entry.** The "20+ raw callsite sweep" described in the pre-#12-Stage-2 whiteboard entry has already happened organically. Grep `new pf.Movements(bot)` across the codebase returns two hits: `skills.js:2248` (inside the `createMovements()` factory definition — correct) and `world.js:397` (`isClearPath` — the last raw caller). Every other historic raw callsite was converted to `createMovements(bot)` across prior BTs (BT-10j, OPT-J, and the Survival-series ships all use the factory).
-
-**Scope.** Close the last raw callsite by routing `isClearPath` through `createMovements(bot)`.
-
-**Implementation.** Export `createMovements` from `src/agent/library/skills.js`. Import it in `src/agent/library/world.js` (ES module circular import — safe because the call lives inside `isClearPath`'s function body, resolved at runtime not module-load time). Update `isClearPath` to start from `createMovements(bot)` then apply its three overrides (`canDig=false`, `canPlaceOn=false`, `canOpenDoors=false`). Net diff expected ~6 lines.
-
-**Why this matters.** `isClearPath` is a read-only probe used by several callers to decide whether to dig-through vs walk-around. Today it returns "clear" for paths that walk through OPT-J hazards (lava/campfire) or require a 4-block drop (BT-10j). Routing through the factory makes the clear-path answer consistent with the pathfinder behavior the rest of the bot uses.
-
-**Deferred.** Full module extraction into a new `src/agent/library/movements.js` (identified by the pre-existing WB entry as #17's natural first extraction target) is deferred until #17 starts in earnest — no point creating a 2-function module in isolation.
+_(empty — #12 Stage 2 shipped `93d7986`; thirteen items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
+
+### #12 Stage 2. Route `world.js:isClearPath` through `createMovements()` (`93d7986`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: no regression in dig-vs-walk decisions; `isClearPath` probes honor OPT-J hazards and BT-10j drop cap the same as the rest of pathfinder).
+
+**What shipped.** Two files, 10 lines total. `skills.js`: `createMovements` is now exported. `world.js`: new `import { createMovements } from './skills.js'` and `isClearPath` starts from the factory, then applies its three non-destructive overrides (`canDig=false`, `canPlaceOn=false`, `canOpenDoors=false`) on top.
+
+**Scope finding.** Entry research revealed the "20+ raw callsite sweep" described in the original #12 Stage 2 entry had already happened organically across BT-10j, OPT-J, and the Survival-series ships. The grep of `new pf.Movements(bot)` across the codebase returned only two hits going into the ship: the factory definition in `skills.js:2248` and this lone `world.js:397` caller. This ship closes the last one.
+
+**Why it matters.** `isClearPath` is a walk-probe used to decide between "walk around" and "dig through". Pre-ship it used raw pathfinder defaults — no OPT-J hazard avoidance, `maxDropDown=4`. A probe could return "clear" for a path that walks through lava/campfire, or requires a 4-block drop (which BT-10j explicitly prevents elsewhere). That meant dig-vs-walk decisions could diverge from what pathfinder would actually plan. Post-ship: the clear-path answer is consistent with the rest of the bot's path planning.
+
+**Circular import note.** `skills.js` imports from `world.js`, and now `world.js` imports `createMovements` from `skills.js`. ES modules handle this correctly as long as the imported binding is not dereferenced at module-load time. `createMovements` is only called inside `isClearPath`'s function body at runtime, so by the time the call happens both modules are fully loaded and the binding resolves. Verified by live restart — bot boots without `SyntaxError` or `undefined is not a function`.
+
+**Blast radius.**
+- Two files, one new named export, one new import, one function body edit.
+- No behavior change for any existing `createMovements()` caller (function body unchanged).
+- `isClearPath` is net-restrictive: any case where the pre-ship probe returned "clear" but pathfinder would actually refuse the path will now correctly return "not clear". No reverse case exists.
+
+**Rule 7 audit.** Single perimeter: `createMovements()` is now the only non-commented `new pf.Movements(bot)` call in the codebase. grep `new pf\.Movements\(` across `src/` returns 1 match — the factory definition itself.
+
+**Deferred (#17 first slice).** Full extraction of `createMovements` + `_configureTerrainSafeMovements` + `_isInAnyProtectedZone` into a new `src/agent/library/movements.js` module is deferred until #17 decomposition starts in earnest. Creating a 2-function module now would be premature; the natural grouping is "movements + zone helpers + terrain-safe config" and that belongs as one cohesive move.
+
+**Verification signals to watch.**
+- Bot boots cleanly (no ESM circular-load crash) — **observed during restart 2026-04-20**.
+- No runtime errors inside `isClearPath` — watch stdout for `[World]` or uncaught rejection traces.
+- Any caller of `isClearPath` that previously decided "walk" for a path through lava/campfire would now decide "dig" or "not clear" — behavioral signal difficult to surface without specific world state; main verification is regression-absence.
+
+---
+
 
 ### BT-10i. Pre-fight equip polish (`30de1f4`, 2026-04-19)
 
