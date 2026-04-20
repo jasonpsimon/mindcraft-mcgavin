@@ -2248,6 +2248,12 @@ function createMovements(bot) {
     const m = new pf.Movements(bot);
     _configureTerrainSafeMovements(bot, m);
 
+    // BT-10j (2026-04-19): cap maxDropDown at 3 (vanilla no-fall-damage
+    // limit is 3.5 blocks). Pathfinder default is 4, which can plan drops
+    // that hurt on landing. Individual callsites can still override this
+    // upward if a longer drop is genuinely intended.
+    m.maxDropDown = 3;
+
     // Protected zone check: disable dig and scaffold inside zones
     const pos = bot.entity?.position;
     if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
