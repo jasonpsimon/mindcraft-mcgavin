@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `85c9241` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-F — extract `_yawToCardinal` helper shared by `digDown`/`digUp` (dedup 14-line block × 2 callsites). **Shipped 4/20:** OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. OPT-bundle queue: F, I remain. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `d16658b` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-bundle queue: I (moveAway) remains. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. OPT-bundle queue: F, I remain. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,21 +66,36 @@ _Last updated: 2026-04-20. HEAD `85c9241` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### OPT-F — extract `_yawToCardinal` helper shared by `digDown` and `digUp`
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding.** `digDown` (skills.js:4714-4727) and `digUp` (skills.js:4900-4912) contain a bit-for-bit identical 14-line block that converts `bot.entity.yaw` to a cardinal direction: normalize yaw mod 2π, 4-way branch on the four pi/4-offset boundaries, assign `{ dx, dz }` for south/west/north/east. `dirName` derivation (4731 / 4916) is also duplicated.
-
-**Scope.** Add module-scope helper `_yawToCardinal(yaw) -> { dx, dz, name }`. Replace each 14-line block with a single destructuring line. Pure cleanup, zero behavior change.
-
-**Expected diff.** ~30 lines net-reduction. ~12 lines added (helper), ~28 lines deleted (two 14-line duplicates) + minor callsite edits.
-
-**Why it matters.** Cosmetic / Rule 3. Single source of truth for "which way am I facing" logic — future directional-dig features (diagonals? 8-way?) can extend the helper without risking drift between the two callers.
-
-**Callers checked.** `grep -n 'normalized >= 5\.5' skills.js` confirms only these two callsites use this exact snapping. No external reach.
+_(empty — OPT-F shipped `d16658b`; eighteen items awaiting live verification. OPT-bundle queue: I (moveAway) remains — needs Rule 2 verification before shipping.)_
 
 ## Shipped — awaiting live verification
+
+### OPT-F. Extract `_yawToCardinal` helper shared by `digDown`/`digUp` (`d16658b`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: `digDown` / `digUp` next invocation continues to log `heading south|west|north|east` correctly and the staircase pattern advances in the expected direction).
+
+**What shipped.** One file, net ~30-line reduction. Added module-scope helper `_yawToCardinal(yaw) -> { dx, dz, name }` immediately above `_impl_digDown`. Replaced the 14-line inline yaw-normalize + 4-way branch block at both callsites with a single destructuring line: `const { dx, dz, name: dirName } = _yawToCardinal(bot.entity.yaw);`.
+
+**Why it matters.** Rule 3 / cosmetic dedup. Minecraft yaw-to-cardinal is a well-defined mapping (yaw 0 = south, pi/4 boundaries snap to the four compass directions); having it duplicated inline in two sibling functions invited future drift. With the helper in place, directional-dig extensions (diagonals, 8-way, Y-axis variants) have a single point of modification.
+
+**Blast radius.**
+- One file (`src/agent/library/skills.js`).
+- Two callsites (`_impl_digDown`, `_impl_digUp`). Both verified identical pre- and post-edit.
+- Boundary values (5.5, 0.785, 2.356, 3.927) and `{dx, dz}` assignments preserved bit-for-bit.
+- `dirName` derivation matches pre-ship behavior: south when dz=1, north when dz=-1, west when dx=-1, else east.
+
+**Rule 2 audit.** Both inline blocks were bit-for-bit identical in the pre-ship source (confirmed via the Python patch's `.count(old) == 1` assertions on each identical 14-line pattern). `grep -n 'normalized >= 5\.5' skills.js` returned zero matches after the patch — no leftover inline callers. No external consumers of these snapped values (return via function-local `dx`/`dz`/`dirName`).
+
+**OPT-bundle status.** With OPT-F shipped, the 2026-04-16 optimization-audit bundle is 5/6 closed (B/C/D/E/F). Remaining: I (`moveAway` Movements dedup) — needs a proper Rule 2 pass before shipping; unlike B-F, the two Movements objects there may have different config requirements (cheat-mode branch).
+
+**Verification signals to watch.**
+- Bot boots cleanly — **observed during restart 2026-04-20 (HEAD d16658b)**. StateTicker ticking at 1Hz, inventory preserved, no errors.
+- Next `!digDown` or `!digUp` invocation: `[Skills] digDown: starting at ..., heading <dir>, distance=...` log line appears with correct cardinal direction matching bot's facing yaw at invocation time.
+- Staircase pattern advances in the expected cardinal (dx/dz unchanged from pre-ship).
+- No `ReferenceError: _yawToCardinal is not defined` at module-load or first-call.
+
+---
+
 
 ### OPT-E. Hoist `scanForCaverns` `rockTypes` Set to module-level constant (`85c9241`, 2026-04-20)
 
