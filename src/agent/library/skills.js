@@ -3297,11 +3297,17 @@ function _isUnderground(bot, pos) {
     return solidCount >= 3 || (solidCount >= 2 && hasCeiling);
 }
 
+// OPT-D: hoisted to module scope — avoid per-call array allocation + O(n)
+// .includes() scan. Set.has() is O(1) and called 1000s/min during tunnel-scan
+// and safeToss direction-validation loops.
+const DANGEROUS_BLOCK_NAMES = new Set(['lava', 'water', 'bedrock', 'air', 'cave_air']);
+
 /**
- * Check if a block name is dangerous (lava, water, bedrock).
+ * Check if a block name is dangerous (lava, water, bedrock, or empty space
+ * treated as a fall hazard for safeToss direction validation).
  */
 function _isDangerous(name) {
-    return ['lava', 'water', 'bedrock', 'air', 'cave_air'].includes(name);
+    return DANGEROUS_BLOCK_NAMES.has(name);
 }
 
 /**
