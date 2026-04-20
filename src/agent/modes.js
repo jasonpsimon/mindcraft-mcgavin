@@ -723,6 +723,44 @@ const modes_list = [
         }
     },
     {
+        // #33 Auto-craft basic-need items (MVP: torches). Periodic tick closes
+        // mechanical gaps the LLM forgets — e.g. #5/#6 torch-placement silent-
+        // skipping because bot never crafted torches. Charcoal counts same as
+        // coal (vanilla recipe accepts either). Deferred follow-ups: sticks,
+        // tools, food. See WHITEBOARD.md #33 + #9 theme.
+        name: 'auto_craft',
+        description: 'Periodically auto-craft basic-need items (torches when coal/charcoal + stick available) to close mechanical gaps the LLM forgets.',
+        interrupts: ['action:followPlayer'],
+        on: true,
+        active: false,
+        cooldown: 10,
+        torch_threshold: 16,
+        last_attempt: 0,
+        update: function (agent) {
+            if (Date.now() - this.last_attempt < this.cooldown * 1000) return;
+            const bot = agent.bot;
+            // Don't interrupt the LLM or reflex latches.
+            if (!agent.isIdle()) return;
+            if (bot.health < 6) return;
+            if (bot._lowHpRetreatActive || bot._drowningEscapeActive || bot._creeperEvadeActive) return;
+            const counts = world.getInventoryCounts(bot);
+            const torchCount = counts['torch'] || 0;
+            if (torchCount >= this.torch_threshold) return;
+            const fuelCount = (counts['coal'] || 0) + (counts['charcoal'] || 0);
+            const stickCount = counts['stick'] || 0;
+            if (fuelCount < 1 || stickCount < 1) return;
+            this.last_attempt = Date.now();
+            execute(this, agent, async () => {
+                console.log(`[AutoCraft] torches low (${torchCount}/${this.torch_threshold}) + have coal+stick → crafting 4`);
+                try {
+                    await skills.craftRecipe(bot, 'torch', 1);
+                } catch (err) {
+                    console.warn(`[AutoCraft] craft failed: ${err.message}`);
+                }
+            });
+        }
+    },
+    {
         name: 'elbow_room',
         description: 'Move away from nearby players when idle.',
         interrupts: ['action:followPlayer'],
