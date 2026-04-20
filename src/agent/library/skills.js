@@ -4557,6 +4557,17 @@ function stringifyItem(bot, item) {
  * @param {number} depthBelow - how many blocks below to scan (default 30)
  * @returns {{ pos: Vec3, distance: number, airCount: number }|null}
  */
+// OPT-E: hoisted to module scope — avoid re-allocating the Set every time a
+// cavern-candidate passes the earlier gates in scanForCaverns. Contents are
+// static (MC block-name list of rock-type walls). Same shape as OPT-D's
+// DANGEROUS_BLOCK_NAMES hoist.
+const CAVERN_ROCK_TYPES = new Set([
+    'stone', 'deepslate', 'granite', 'diorite', 'andesite',
+    'tuff', 'calcite', 'dripstone_block', 'cobblestone',
+    'cobbled_deepslate', 'basalt', 'blackstone', 'netherrack',
+    'sandstone', 'red_sandstone', 'smooth_basalt',
+]);
+
 export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
     const pos = bot.entity.position.floored();
     const startY = pos.y;
@@ -4606,13 +4617,8 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
                 }
                 if (!hasCeiling) continue;
 
-                // Verify walls are rock-type (not dirt/grass surface depressions)
-                const rockTypes = new Set([
-                    'stone', 'deepslate', 'granite', 'diorite', 'andesite',
-                    'tuff', 'calcite', 'dripstone_block', 'cobblestone',
-                    'cobbled_deepslate', 'basalt', 'blackstone', 'netherrack',
-                    'sandstone', 'red_sandstone', 'smooth_basalt',
-                ]);
+                // Verify walls are rock-type (not dirt/grass surface depressions).
+                // OPT-E: CAVERN_ROCK_TYPES is a module-level Set — no per-call alloc.
                 let rockWalls = 0;
                 const wallChecks = [
                     checkPos.offset(1, 0, 0), checkPos.offset(-1, 0, 0),
@@ -4620,7 +4626,7 @@ export function scanForCaverns(bot, radius = 100, depthBelow = 30) {
                 ];
                 for (const wc of wallChecks) {
                     const wb = bot.blockAt(wc);
-                    if (wb && rockTypes.has(wb.name)) rockWalls++;
+                    if (wb && CAVERN_ROCK_TYPES.has(wb.name)) rockWalls++;
                 }
                 if (rockWalls < 1) continue; // at least 1 rock wall
 
