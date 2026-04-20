@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-C — delete dead Movements block in `pickupNearbyItems` loop (`goToGoal` overrides it immediately; construction is pure waste). **Shipped 4/20:** OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,21 +66,38 @@ _Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### OPT-C — delete dead Movements block in `pickupNearbyItems`
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding — stronger than WB anticipated.** The WB entry assumed `pickupNearbyItems` "could build Movements once before the loop." On read, the 3-line `createMovements(bot); movements.canDig=false; bot.pathfinder.setMovements(movements);` block inside the loop is **fully dead code** — `goToGoal` unconditionally calls `bot.pathfinder.setMovements(final_movements)` right after (post-OPT-B, still inside `goToGoal`), so the outer Movements object is constructed, configured, set, and immediately discarded every iteration.
-
-**The `canDig=false` intent is already satisfied** by `goToGoal`'s non-destructive-first strategy, which has stronger constraints anyway (`digCost=10`, `placeCost=2`, glass-unbreakable).
-
-**Scope.** Delete the 3 dead lines. Net diff: -3 lines in one function.
-
-**Callers checked.** Lines 456 (construction loop) and 675 (survival cleanup) — both internal skill functions; neither relies on `bot.pathfinder` state after `pickupNearbyItems` returns. Each subsequent navigation call resets Movements via `goToGoal` or its own `setMovements` anyway.
-
-**Why it matters.** `pickupNearbyItems` runs in a tight `while (nearestItem)` loop over every nearby item (up to dozens per trigger). Deleting the dead block saves one `createMovements()` + `_configureTerrainSafeMovements()` + `setMovements()` per item picked up.
+_(empty — OPT-C shipped `9a7b7eb`; fifteen items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
+
+### OPT-C. Delete dead Movements block in `pickupNearbyItems` loop (`9a7b7eb`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: `pickupNearbyItems` still collects items at normal rate; no regression in post-mining cleanup behavior).
+
+**What shipped.** One file, 8 lines (5 insertions, 3 deletions). The 3-line block `let movements = createMovements(bot); movements.canDig = false; bot.pathfinder.setMovements(movements);` at the top of the `while (nearestItem)` loop in `pickupNearbyItems` was deleted and replaced with an explanatory comment.
+
+**Finding.** Stronger than the original WB hypothesis ("build once before the loop"). On read, those 3 lines were **fully dead code** — `goToGoal` (which is the very next line) unconditionally calls `bot.pathfinder.setMovements(final_movements)` with its own safe factory build (non-destructive first, destructive fallback post-OPT-B). The outer Movements object was constructed, configured, `setMovements`-ed, and immediately overridden every single iteration.
+
+**`canDig=false` intent preserved.** The stated goal of the deleted code (don't dig through blocks to reach an item) is already satisfied — and more strictly — by `goToGoal`'s non-destructive-first strategy: `digCost=10`, `placeCost=2`, glass-unbreakable, glass-pane-unbreakable. Only if a non-destructive path is not found does `goToGoal` fall back to a destructive path — but at that point, if the bot needs to dig to reach a floating item, it probably should.
+
+**Why it matters.** `pickupNearbyItems` runs in a tight `while (nearestItem)` loop over every nearby item (up to dozens per post-mining cleanup pass). Deleting the dead block saves one `createMovements()` + `_configureTerrainSafeMovements()` + `setMovements()` triple per item picked up. Combined with OPT-B (which cut happy-path `goToGoal` construction from 2 → 1), a full cleanup pass now builds O(N) Movements instead of O(3N).
+
+**Blast radius.**
+- One file, one loop-body cleanup.
+- Two callers (lines 456, 675) — both internal skill functions.
+- Neither caller inspects or depends on `bot.pathfinder` Movements state after `pickupNearbyItems` returns. Verified by reading both callsites.
+- `goToGoal` is still the authoritative Movements setter for every iteration.
+
+**Rule 2 audit.** Read `pickupNearbyItems` body, both callers, and the `goToGoal` override behavior. Confirmed: the deleted block had zero observable effect on any code path.
+
+**Verification signals to watch.**
+- Bot boots cleanly (no SyntaxError) — **observed during restart 2026-04-20 (HEAD 9a7b7eb)**.
+- `pickupNearbyItems` still collects items — watch for `[Skills] Picked up N items.` log lines at normal cadence.
+- No `TypeError: movements is not defined` or similar inside the loop — would indicate the deletion left a dangling reference (none expected; grep confirmed no other refs to `movements` in the function).
+- Regression absence: item-pickup rate during natural post-mining cleanup should be statistically indistinguishable from pre-ship baseline.
+
+---
+
 
 ### OPT-B. Lazy-build `destructiveMovements` in `goToGoal` (`9887d62`, 2026-04-20)
 
