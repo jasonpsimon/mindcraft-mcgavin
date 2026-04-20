@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `5663aa2` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **Shipped 4/20:** #27 D1 migration close-out (`5663aa2`) — finishes the legacy `$MEMORY` pipeline teardown across all three surfaces under CB: history.js load path no-hydrates (next save wipes disk), prompter.js `$MEMORY` branch short-circuits to empty (kills double-injection of episodic via `replaceStrings` in promptConvoFast + CB error fallback), ThatCoolGuyDude.json conversing template strips the dead token. Non-CB legacy path preserved. Verified live: `memory.json` now persists `''`. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `85d93f7` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **Shipped 4/20:** #27 D1 migration close-out (`5663aa2`) — finishes the legacy `$MEMORY` pipeline teardown across all three surfaces under CB: history.js load path no-hydrates (next save wipes disk), prompter.js `$MEMORY` branch short-circuits to empty (kills double-injection of episodic via `replaceStrings` in promptConvoFast + CB error fallback), ThatCoolGuyDude.json conversing template strips the dead token. Non-CB legacy path preserved. Verified live: `memory.json` now persists `''`. **Shipped 4/20:** #12-follow-up (`85d93f7`) — `digCost=10` / `placeCost=2` added to `createMovements` factory. Matches `installSafePathfinderDefaults` which already applies `digCost=10` to collectBlock movements (Principle 5: kill redundancy). Awaiting path-stream verification: more `walkaround`, fewer `dig` entries on same terrain. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,9 +66,36 @@ _Last updated: 2026-04-20. HEAD `5663aa2` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190` (machine-checkable via `scripts/check-movements-invariant.sh`); #27 D1 migration closed `5663aa2` (legacy `$MEMORY` pipeline torn down across all three surfaces under CB; verified `memory.json` persists `''`). Twenty items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
+_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2` (legacy `$MEMORY` pipeline torn down across all three surfaces under CB; verified `memory.json` persists `''`); #12-follow-up shipped `85d93f7` (`digCost=10`/`placeCost=2` in factory). Twenty-one items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
 
 ## Shipped — awaiting live verification
+
+### #12-follow-up. `digCost=10` / `placeCost=2` in `createMovements` factory (`85d93f7`, 2026-04-20)
+
+**What shipped.** Two cost-biasing lines inside the `createMovements(bot)` factory in `src/agent/library/skills.js`, applied after `m.maxDropDown = 3` and before the protected-zone check:
+
+```js
+m.digCost = 10;
+m.placeCost = 2;
+```
+
+Pathfinder defaults are `digCost=1` / `placeCost=1` — equal to walking — so the planner has been happily mining through obstacles and scaffolding across gaps when a short detour exists. These values bias against destructive path elements without forbidding them.
+
+**Principle 5 note (kill redundancy).** `installSafePathfinderDefaults` at `skills.js:~1755` was already applying `digCost=10` to `bot.collectBlock.movements` with the exact same rationale ("no straight-down digging" safety norm). Same value, different surface — the factory now owns the rule uniformly. `placeCost=2` is new: a softer bias since scaffolding is occasionally the only path (2-block gaps), but should still lose to a comparable walk-around.
+
+**Rule 2 (completed the audit, not just the sketch).** Full read of `createMovements`, `installSafePathfinderDefaults`, and the two lazy-built destructive Movements in `goToGoal` (lines 3657 / 3676) before shipping. The two in `goToGoal` are the one legitimate "I WANT to dig" call path; they live below the factory and rely on the factory's defaults *as their starting point*, then override `maxDropDown` and explicitly want the default low `digCost`. This is why placement is *inside* `createMovements` (not in `_configureTerrainSafeMovements`) — destructive callsites can still override back to `1` if they ever need to; today no callsite does.
+
+**Verification.**
+- `node --check src/agent/library/skills.js` passed post-patch.
+- `bash scripts/check-movements-invariant.sh` → OK (factory still the only raw callsite).
+- Bot rebooted clean on HEAD `85d93f7` — StateTicker 1Hz, HP 20/20, food 15, no errors, creeper/bogged threat tracking live.
+
+**Success signal (awaiting natural trigger).** Path-stream telemetry at `data/path-stream.jsonl`: on comparable terrain to pre-ship logs, expect a higher ratio of `walkaround` vs `dig` entries in the pathfinder's plan deltas. Graduates to Recently completed once a clean comparison window is available.
+
+**Blast radius.** Low. All 9 `goToGoal`-family callers still work — they either use the factory Movements (now biased toward walkaround, which is what they wanted anyway), or build destructive Movements below the factory override (unchanged behavior — they explicitly reset `digCost`). Collect-block paths unchanged (separate Movements via `installSafePathfinderDefaults`, which already had `digCost=10`).
+
+---
+
 
 ### L1.4-wire BT 2. Protected-zone allowlist for `tillAndSow` (`ea48e1d`, 2026-04-20)
 
@@ -969,25 +996,6 @@ Given world seed + MC version, regenerate each chunk deterministically and diff 
 
 
 **🟡 Partial**
-
-### 12-follow-up. Movements cost tuning — `digCost` / `placeCost`
-
-**Status:** ⏳ not started • **Priority:** low (polish; no known live bug) • **Source:** carried over from #12 Movements safety audit (close-out `b4f0190`, 2026-04-20) at JP's request.
-
-**Context.** #12 closed with every `pf.Movements` instance now routing through `createMovements(bot)` (factory applies `_configureTerrainSafeMovements`, `maxDropDown=3` from BT-10j, and protected-zone `canDig=false` / empty scaffold Set). The original #12 fix sketch also proposed biasing the pathfinder against mining-through and over-placing via cost tuning — never shipped, captured here so it isn't lost.
-
-**Proposed tuning (from original #12 sketch).**
-
-```js
-m.digCost = 10;    // discourage mining-through
-m.placeCost = 2;
-```
-
-Intent: make the pathfinder prefer walking around obstacles over breaking through them, and prefer a short detour over scaffolding. Today the factory leaves both at pathfinder defaults (1 and 1 respectively), so digging/placing ties with walking.
-
-**Why low priority.** No observed incident. BT-10j's `maxDropDown=3` + the terrain-safe hazard-avoid list already handle the fall/lava/drowning cases that were the #12 motivation. `digCost` bias is a "bot feels more natural" polish, not a safety fix.
-
-**Acceptance sketch.** One-line additions inside `createMovements` after `maxDropDown = 3`. Consider `opts` overrides if any callsite genuinely wants mining-through (none known today). Verify via pathfinder telemetry: `[Path]` events should show more `walkaround` and fewer `dig` entries on the same terrain post-change.
 
 ### 2. Bot swim capabilities
 
