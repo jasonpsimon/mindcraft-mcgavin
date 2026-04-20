@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-C — delete dead Movements block in `pickupNearbyItems` loop (`goToGoal` overrides it immediately; construction is pure waste). **Shipped 4/20:** OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,19 @@ _Last updated: 2026-04-20. HEAD `9887d62` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — OPT-B shipped `9887d62`; fourteen items awaiting live verification on next natural events.)_
+### OPT-C — delete dead Movements block in `pickupNearbyItems`
+
+**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
+
+**Finding — stronger than WB anticipated.** The WB entry assumed `pickupNearbyItems` "could build Movements once before the loop." On read, the 3-line `createMovements(bot); movements.canDig=false; bot.pathfinder.setMovements(movements);` block inside the loop is **fully dead code** — `goToGoal` unconditionally calls `bot.pathfinder.setMovements(final_movements)` right after (post-OPT-B, still inside `goToGoal`), so the outer Movements object is constructed, configured, set, and immediately discarded every iteration.
+
+**The `canDig=false` intent is already satisfied** by `goToGoal`'s non-destructive-first strategy, which has stronger constraints anyway (`digCost=10`, `placeCost=2`, glass-unbreakable).
+
+**Scope.** Delete the 3 dead lines. Net diff: -3 lines in one function.
+
+**Callers checked.** Lines 456 (construction loop) and 675 (survival cleanup) — both internal skill functions; neither relies on `bot.pathfinder` state after `pickupNearbyItems` returns. Each subsequent navigation call resets Movements via `goToGoal` or its own `setMovements` anyway.
+
+**Why it matters.** `pickupNearbyItems` runs in a tight `while (nearestItem)` loop over every nearby item (up to dozens per trigger). Deleting the dead block saves one `createMovements()` + `_configureTerrainSafeMovements()` + `setMovements()` per item picked up.
 
 ## Shipped — awaiting live verification
 
