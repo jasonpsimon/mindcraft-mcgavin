@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `b4f0190` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `5663aa2` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **Shipped 4/20:** #10 Bot survival hardening close-out (WB-only) — all six original sub-items (lava, mob-retreat, ranged-positioning, pre-fight-equip, suffocation, dimension-safety) shipped across BT-10a/b/c/d/e/h/i arc (plus BT-10f/g/j bonus). Stale-WB cleanup; #10 graduates. **Shipped 4/20:** #27 D1 migration close-out (`5663aa2`) — finishes the legacy `$MEMORY` pipeline teardown across all three surfaces under CB: history.js load path no-hydrates (next save wipes disk), prompter.js `$MEMORY` branch short-circuits to empty (kills double-injection of episodic via `replaceStrings` in promptConvoFast + CB error fallback), ThatCoolGuyDude.json conversing template strips the dead token. Non-CB legacy path preserved. Verified live: `memory.json` now persists `''`. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,7 @@ _Last updated: 2026-04-20. HEAD `b4f0190` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190` (machine-checkable via `scripts/check-movements-invariant.sh`). Twenty items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
+_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190` (machine-checkable via `scripts/check-movements-invariant.sh`); #27 D1 migration closed `5663aa2` (legacy `$MEMORY` pipeline torn down across all three surfaces under CB; verified `memory.json` persists `''`). Twenty items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
 
 ## Shipped — awaiting live verification
 
@@ -968,30 +968,6 @@ Bot currently acts as fast as LLM + mineflayer allows, which looks robotic and c
 Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
 
 
-### 27. Legacy `memory.json` residue under ContextBuilder
-
-**Status:** ⏳ not started • **Priority:** low (cosmetic/forensic — no behavior impact)
-
-**Problem.** `bots/<profile>/memory.json` `memory` field still carries the legacy `"…(Memory truncated to 500 chars. Compress it more next time)"` residue tail. D1 (commit `7ee597e`) stopped the *producer* (`promptMemSaving()` skipped when `use_context_builder` is true) but never *cleared* what was already persisted. The string rides along in every `history.save()` forever — under CB-on there is no path that overwrites it.
-
-**Root cause.** D1 was a surgical producer-side skip. The consumer-side cleanup — wipe the persisted field on load when CB is on — was never shipped. Principle 5 violation we inherited quietly: migration finished the write path but left a read-path residue.
-
-**Solution sketch.** On `history.load()`, if `use_context_builder` is true, clear `memory` to empty string (or strip the legacy truncation marker). Alternatively a one-shot manual wipe across the active `memory.json` files. Producer-side skip is correct — this is consumer-side hygiene.
-
-**Files.**
-- `src/agent/history.js` — load path (conditional field clear under CB).
-- One-time wipe of `bots/*/memory.json` `memory` fields.
-
-**Blast radius.** Nil. Field is dead under CB — no caller reads it when ContextBuilder is active.
-
-**Success signal.** Fresh `memory.json` saves under CB show `"memory": ""` (or equivalent) instead of the frozen legacy snippet.
-
-**Philosophy alignment.** Principle 5 (finish migrations, kill redundancy). Rule 4 (root cause not symptom — the wipe closes the class, not just the instance).
-
-
-
----
-
 **🟡 Partial**
 
 ### 12-follow-up. Movements cost tuning — `digCost` / `placeCost`
@@ -1092,6 +1068,28 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### #27. D1 migration close-out — `$MEMORY` pipeline torn down (`5663aa2`, 2026-04-20)
+
+**Three-surface fix.** D1 (`7ee597e`, 2026-04-15) was a producer-side skip only — `storeMemories` no-ops the legacy 500-char summary under CB, but the consumer side and the persistence side still exercised the dead pipeline. This commit completes the perimeter (Rule 7) across all three surfaces, gated on `settings.use_context_builder` so the non-CB legacy path is preserved verbatim.
+
+**Reframing credit.** Initial proposals were symptom-treatments (just clear on load, or just edit the profile). JP pushed back — "none of your suggestions feel like they are addressing the underlying root issue" — which forced a deeper Rule 2 audit and revealed a quiet **double-injection bug**: under CB, `_buildContextPrompt` injects episodic memory at priority 6 via the context builder, but `replaceStrings` (still called from `promptConvoFast` and the CB error fallback) was *also* hitting `getFormattedMemories` for the same `$MEMORY` token. Same content, two paths, no one had noticed because the legacy summary text was empty enough to look harmless. Principle 5 violation hiding a real bug.
+
+**What shipped (3 files, 41 insertions / 22 deletions).**
+- **`src/agent/history.js`** — load path now `this.memory = settings.use_context_builder ? '' : (data.memory || '');`. Next `save()` writes `memory: ''` to disk, wiping legacy residue across one restart cycle.
+- **`src/models/prompter.js`** — `$MEMORY` branch now `if (settings.use_context_builder) { prompt = prompt.replaceAll('$MEMORY', ''); } else { ...legacy combined episodic+summary path... }`. Kills the double-inject under CB; non-CB legacy-profile users still get the full original behavior.
+- **`ThatCoolGuyDude.json`** — `Summarized memory:'$MEMORY'` line stripped from `conversing` template. The short-circuit above is defense-in-depth for any legacy-shaped profile that still references the token; this is the primary fix so the token doesn't appear in CB prompts at all.
+
+**Verification.**
+- `node --check` passed on both modified .js files.
+- `python3 -c 'import json; json.load(open("ThatCoolGuyDude.json"))'` — JSON valid; `$MEMORY` no longer present in `conversing`.
+- Bot rebooted clean on HEAD `5663aa2` — StateTicker 1Hz, HP 20/20, food 15, no parse errors, zero exception lines in 30s of capture.
+- **Primary success signal hit:** `bots/ThatCoolGuyDude/memory.json` `memory` field reads `''` post-restart. Disk is clean.
+
+**Inline rationale.** Each of the three patch sites carries a comment block pointing back to D1 + this commit (`#27 (2026-04-20): Finish D1...`) so the next person (me, in 6 months) doesn't undo the gate without understanding why. The non-CB else-branch in prompter.js retains its `// #21 L1.4 context (pre-#27):` annotation explaining what the original combined path was for.
+
+---
+
 
 ### #10. Bot survival hardening — close-out (WB-only, 2026-04-20)
 
