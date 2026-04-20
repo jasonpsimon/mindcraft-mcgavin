@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `b0b874e` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **BT-10j:** factory-level `maxDropDown=3` cap in `createMovements()` — pathfinder no longer plans 4-block drops that can produce fall damage. Twenty-one items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `b0b874e` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -69,43 +69,6 @@ _Last updated: 2026-04-19. HEAD `b0b874e` on `origin/develop`. **Shipped today:*
 _(empty — BT-10j shipped `b0b874e`; twenty-one items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
-
-### BT-10j. Pathfinder fall-damage prevention (`b0b874e`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (observe that no pathfinder-scheduled movement produces fall-damage ticks in damage-stream; existing fall-damage classifier already tags these with `cause: 'fall'` so the signal is clean).
-
-**What shipped.** Six-line insertion (comment + one statement) in `createMovements()` at `src/agent/library/skills.js:2247`. Adds `m.maxDropDown = 3;` right after `_configureTerrainSafeMovements(bot, m);` and before the protected-zone guard.
-
-**The finding.** `maxDropDown=3` was already applied in three spots:
-
-- `installSafePathfinderDefaults` for `bot.collectBlock.movements` (line 1730) — covers the collect-block plugin path.
-- Two local mining-movement instantiations (lines ~3618, ~3623) — cover the mining staircase paths.
-
-But the general `createMovements()` factory — used by every other pathfinder caller in the codebase (defendSelf, attackEntity, goToNearestBlock, moveAway, and dozens more via direct invocation) — left `maxDropDown` at the pathfinder default of 4. That's 4 blocks of plan-time drop tolerance, which exceeds the vanilla Minecraft 3.5-block no-fall-damage threshold. Pathfinder could schedule a legal-to-it 4-block drop that produced ~1 HP of damage on landing.
-
-**Why a factory-level fix.** Single perimeter (Rule 7): all callsites that go through `createMovements()` now inherit the cap in one place instead of each caller needing to remember to set it. The two explicit `=3` lines at 3618/3623 become redundant but were left intact as documentation — removing them would create silent coupling ("why is this safe? because the factory does it" is harder to audit than an explicit redundant assignment).
-
-**Why preventive, not reactive.** The reactive version of BT-10j (velocity-based mid-fall reflex, water-bucket placement, slow-falling auto-drink) is much more invasive — needs new latches in `self_preservation`, new item-inventory checks, and a 20-tick-window classifier to distinguish pathfinder-intended drops from actual emergencies. Preventing the plan is cheaper and closes the common case; reactive handling can come later if live data shows damage-causing drops still happen (e.g. bot walked off a cliff during self-prompter exploration, not via pathfinder).
-
-**Blast radius.**
-- One factory function; every pathfinder-initiated movement via `createMovements()` gets the cap automatically.
-- No changes to mutex, no new state on the bot, no new listeners, no skill-lifecycle changes.
-- Existing callers that already explicitly set `maxDropDown = 3` are bit-identical after the change (factory default now matches their override).
-- Callers that wanted a larger drop would need to override upward post-factory — grep of `src/agent/library/skills.js` shows zero callsites that currently do this, so the change is net-restrictive (safer) without breaking anything.
-
-**Guardrails.**
-- Factory-level cap is a floor for safety, not a ceiling — callers can still opt into larger drops by setting `m.maxDropDown = N` after `createMovements()` returns if a specific workflow needs it.
-- Doesn't touch `scaffoldingBlocks` or `allow1by1towers` — pathfinder's scaffold-up / tower-down behaviors are unchanged (they're how the bot gets back out of legitimate drops).
-
-**Out of scope.**
-- Reactive mid-fall handling (velocity threshold, water-bucket place-at-feet, slow-falling potion auto-drink). Deferred; revisit if damage-stream shows fall hits that originated from non-pathfinder movement (e.g. parkour command, self-prompter wander).
-- Cliff-edge observability (e.g. log a warning when `bot.entity.onGround === false` and velocity.y < -0.5 for N ticks). Pure-observation feature, not on critical path.
-- Fall-damage attribution in damage-stream (already covered by existing classifier).
-
-**Verification hooks.**
-- `damage-stream.jsonl` already classifies fall-damage hits. If BT-10j works, pathfinder-driven fall-damage counts should go to zero. Non-pathfinder-driven (LLM walked off a cliff) would still show up — that's the next reactive delta if it becomes a real pattern.
-
----
 
 ### BT-10i. Pre-fight equip polish (`30de1f4`, 2026-04-19)
 
@@ -183,57 +146,6 @@ Handles both namespaced (`minecraft:the_nether`) and bare (`the_nether`) dimensi
 **Out of scope.** Dimension-specific combat tuning (ghast shield, ender dragon positioning). Entry logging per dimension. Any "return through portal" logic — JP's policy is the bot is free to travel; this BT only adjusts the survival reflexes' calibration, not the bot's freedom of movement.
 
 ---
-
-### BT-10g. Drowning escape (`5324782`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs bot in water with `oxygenLevel≤10`; observe `drowning-escape` log + swim-up control states + `cleared` on surface-break)
-
-**What shipped.** One self-contained state-maintenance block at the top of `self_preservation.update()` in `src/agent/modes.js`. Pair of clear + trigger sharing a single `if/else`. Zero new imports.
-
-**Structure (single `if/else`, mirrors BT-10e shield shape):**
-```js
-if (bot._drowningEscapeActive) {
-    // clear: !isInWater OR oxygen>=18 → drop jump+forward, reset latch
-} else {
-    // trigger: isInWater && oxygen<=10 → set jump+forward, set latch
-}
-```
-
-**Why control-state not execute.** Vanilla Minecraft "jump while in water" = swim up. We just need to hold that key until the head breaks surface. `execute()` would be overkill (and would block the mode). Per-tick control-state toggling is the right primitive — same pattern BT-10a uses for lava escape.
-
-**Trigger threshold (oxygen≤10).** Oxygen bar is 20 (10 bubbles). At 10 = half bar consumed = ~5s of air left. Gives ~5s buffer before damage starts at oxygen=0. Not tighter because pathfinder rerouting can eat a second or two; looser would be wasteful (swim-up on every shallow dip).
-
-**Clear thresholds (¬ isInWater OR oxygen≥18).**
-- **Primary clear: !isInWater.** Once the head breaks surface, `bot.entity.isInWater` returns false — clean exit.
-- **Edge-case clear: oxygen≥18.** Covers Respiration III / Water Breathing potion / conduit power — if oxygen is regenerating for some other reason, no need to keep swimming up.
-
-**Blast radius.**
-- `self_preservation.update()` top-of-update only. No touch to else-if chain below, no new imports, no pathfinder interaction.
-- Control-state conflict with pathfinder during the reflex: accepted (same policy as BT-10a lava escape) — drowning is survival-critical. Pathfinder resumes cleanly once latch clears.
-- `bot.oxygenLevel` defensive guard: if undefined for any reason (version mismatch, chunk transient) we default to 20 so the reflex doesn't false-fire.
-- `bot.entity.isInWater`: mineflayer built-in. Fast, authoritative.
-
-**Guardrails.**
-- Oxygen default 20 prevents false-fire on undefined.
-- Try/catch around every setControlState — resilient against transient disconnects.
-- Symmetric clear drops BOTH jump and forward — no sticky-control bugs.
-- Latch prevents re-setting control states every tick once already set.
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._drowningEscapeActive` joins the latch family. No fan-out.
-
-**Skip (explicit).**
-- Pathfinder-side surface-seek goal: requires column scanning + goal construction; out of scope for a reflex.
-- Boat/raft construction as an escape path: goal-level behavior, not a reflex.
-- Elder Guardian mining-fatigue coping: situational, would need deeper system changes.
-- Respiration detection: naturally handled by the oxygen≥10 gate (high-Respiration bots rarely drop that low).
-
-**Verification signals to watch.**
-- **Trigger:** bot's head submerges and oxygen drops to ≤10 → `[Survival] drowning-escape oxygen=8` line; `Drowning — surfacing!` chat; bot swims upward.
-- **Clear (surfaced):** head breaks water → `[Survival] drowning-escape cleared oxygen=X in_water=false`; jump+forward controls drop.
-- **Clear (respiration):** oxygen regenerates to ≥18 while still underwater → same cleared log, in_water=true but oxygen high.
-- **Non-trigger (shallow dip):** dive into water with full oxygen, surface before oxygen drops to 10 → branch does NOT fire.
-- **Non-trigger (land):** bot on land → branch does NOT fire; no log.
-
 
 ### BT-10f. Creeper proximity evade (`0cd2d11`, 2026-04-19)
 
@@ -484,101 +396,6 @@ if (bot._suffocationEscapeActive) {
 - **Spawn-zone no-op:** bot somehow suffocates inside 250-block spawn zone → trigger fires, latch sets, but `breakBlockAt` no-ops due to tripwire; latch stays set until external rescue clears the head. Logged as `[ProtectedZone] breakBlockAt blocked — within spawn zone`.
 
 
-### BT-10b. Proactive low-HP mob retreat (`e633301`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs bot at HP<6 with a hostile mob within 12 blocks; observe retreat log + directional movement away from hostile)
-
-**What shipped.** Two new code paths inside `self_preservation.update()` in `src/agent/modes.js`. Zero new imports (`mc.isHostile`, `world.getNearestEntityWhere`, `skills.moveAwayFromEntity` already available).
-
-**1. Latch-clear (top of update).** Runs before any other branch:
-```js
-if (bot._lowHpRetreatActive) {
-    const h = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
-    if (bot.health >= 14 || !h) {
-        console.log(`[Survival] low-hp-retreat cleared hp=${bot.health.toFixed(1)}`);
-        bot._lowHpRetreatActive = false;
-    }
-}
-```
-
-**2. Retreat trigger (after existing damage-based branch).** Fires when `bot.health < 6 && !bot._lowHpRetreatActive` AND a hostile is within 12 blocks. Sets the latch, logs `[Survival] low-hp-retreat hp=X hostile=<type> dist=Y`, says a retreat line in-chat, then `execute()` → `skills.moveAwayFromEntity(bot, target, 16)`.
-
-**Hysteresis design.**
-- **Set** at HP<6 (3 hearts) to catch pre-damage chase scenarios.
-- **Clear** at HP≥14 (7 hearts) OR no hostile in 12-block radius. Two-sided clear prevents oscillation: if we retreat and regen finishes the job, we exit cleanly; if hostiles give up the chase and wander off, we also exit even if HP hasn't fully regenerated.
-- Latch lives on the bot (`bot._lowHpRetreatActive`) and is owned solely by this mode.
-
-**Attribution.** `world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12)` gives the closest hostile. `mc.isHostile` excludes iron_golem / snow_golem (allied). `skills.moveAwayFromEntity` computes the vector and hands it to pathfinder — so the bot retreats in a direction AWAY FROM the mob, not a random `moveAway` direction.
-
-**Blast radius.**
-- `self_preservation.update()` only. No touch to `self_defense`, combat skills, pathfinder, or any other mode.
-- `interrupts:['all']` already set on the mode; high-HP combat yields to the retreat path automatically when HP crosses the threshold.
-- Existing damage-based branch (`lastDamageTime < 3000 && health < 5`) preserved verbatim — it still fires under its original narrow conditions, and this new branch covers the pre-damage-chase and damage-cooldown-elapsed gaps.
-
-**Guardrails.**
-- Latch-gated: only one `execute()` retreat fires per episode.
-- Hostile captured at trigger tick (target-of-retreat frozen) — no mid-flight re-target.
-- `moveAwayFromEntity` catches its own errors; latch stays set so the top-of-update clear handles exit.
-- Try/catch around `world.getNearestEntityWhere` in both paths — world lookups are resilient to chunk-unload transients.
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No new module, no new export, no cross-file state. Two new branches added to one function that already owns all related state (`lastDamageTime`, `lastDamageTaken`, `_lavaEscapeActive`, `_lavaEdgeBackoffActive` — now `_lowHpRetreatActive` joins that list).
-
-**Skip (explicit).**
-- Finding cover / hiding in a structure (long-term #10 safe-pathing sub-item; needs memory + heuristics).
-- Eating food mid-retreat (auto-eat already shipped separately).
-- Ranged-attacker special case (strafe + shield + close-distance vs arrows) — that's BT-10c candidate.
-
-**Verification signals to watch.**
-- **Trigger:** bot at HP<6 with a zombie within 12 blocks → `[Survival] low-hp-retreat hp=4.0 hostile=zombie dist=7.2` line appears; bot says "Low HP — retreating from zombie!"; pathfinder sets goal 16 blocks away from zombie.
-- **Hysteresis clear:** after retreating and regenerating to HP≥14 → `[Survival] low-hp-retreat cleared hp=14.0`; latch cleared; bot resumes normal work.
-- **Wander-off clear:** hostile gives up and walks away (12-block check fails) → same cleared log fires even if HP is still below 14.
-- **Non-trigger:** HP drops below 6 while mining alone (no hostiles) → branch does NOT fire. No log, no retreat.
-- **Existing branch preserved:** bot takes a heavy hit at HP<5 → original `I'm dying!` line + `moveAway(20)` still fires (different log line, different code path).
-
-
-### BT-10a. Lava avoidance reflex (`3c31b78`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs bot to step into lava OR stand adjacent to a lava tile while idle; then observe the escape log + motor behavior)
-
-**What shipped.** Single-site enhancement to `self_preservation` mode in `src/agent/modes.js`. Three new code paths, all gated inside the existing `update()` body; zero new imports, no new module, no other file touched.
-
-**1. Primary lava-escape branch (`bot.entity.isInLava`).** Short-circuits BEFORE the existing `block.name === 'lava'` branch. On first entry:
-- Sets `bot._lavaEscapeActive` latch (dedup for the log line).
-- Scans 4 cardinals at feet level (`position.offset(±1, 0, 0)` and `±z`); picks first neighbor whose feet-block is NOT `lava/fire/void_air` AND whose head-block is `air/cave_air`.
-- Logs `[Survival] lava-escape dir=<N/S/E/W|none> has_water=<bool>`.
-- `say(agent, 'Lava! Getting out!')`.
-- `bot.lookAt(target, true)` toward chosen direction.
-Every tick while submerged: `setControlState('jump', true)` + `setControlState('forward', true)`. Parallel: `execute()` to `skills.placeBlock(bot, 'water_bucket', ...)` if inventory has one, with try/catch so placement failure doesn't block the motor escape.
-
-**2. Preemptive edge-detect.** After the existing lava/fire branch closes, a new branch fires only when `agent.isIdle() && !bot._lavaEdgeBackoffActive`. Checks 4 XZ cardinals at feet level for `lava` or `fire` names; if found:
-- Sets `_lavaEdgeBackoffActive` latch (clears in the execute() cleanup).
-- Logs `[Survival] lava-adjacent moving away`.
-- `say(agent, 'Too close to lava — backing up.')`.
-- `execute(this, agent, async () => { await skills.moveAway(bot, 2); })`.
-
-**3. Latch cleanup.** The idle branch at the bottom of `update()` now clears `_lavaEscapeActive` when `!bot.entity.isInLava` so future lava episodes trigger the log fresh.
-
-**Blast radius.**
-- One file, one mode, one `update()` function. No touch to pathfinder, combat, other modes, or skills.js.
-- Mode was already `interrupts:['all']` so combat/pathing yields to lava-escape automatically.
-- Existing lava/fire branches preserved verbatim for the surface-splash and ceiling-drip cases.
-
-**Verification signals to watch.**
-- **isInLava trigger:** bot falls into a lava column → `[Survival] lava-escape dir=<X> has_water=<bool>` line appears in stdout; bot jumps, faces chosen direction, walks out. Log fires once per episode (not per tick).
-- **Edge-detect trigger:** bot stands idle with lava in an adjacent block → `[Survival] lava-adjacent moving away` fires, bot moves 2 blocks away.
-- **Existing behavior preserved:** bot takes a lava-splash on the head (no `isInLava`) → `I'm on fire!` say + water-bucket/moveAway path still runs.
-- **Latch reset:** after escape, bot idles on safe ground → `_lavaEscapeActive` clears (verifiable on next lava entry, log fires again).
-
-**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No parallel sites, no fan-out. Sole state introduced lives on the bot: `_lavaEscapeActive` + `_lavaEdgeBackoffActive`, both owned by this mode.
-
-**Skip (explicit).**
-- Pathfinder `Movements` cost-penalty for lava (separate #10 sub-item).
-- Magma-block damage reflex (different heuristic — non-burning contact damage).
-- Memory of prior lava-death locations (long-term #10 item; needs persistence design).
-
-**Companion gap (deferred).** Water-bucket placement inside the escape branch still respects the existing `skills.placeBlock` zone-guard — inside spawn protection the placement will no-op silently. Motor escape (jump + forward) runs regardless, so the bot still gets out; it just doesn't get the free water-cooling effect. Acceptable.
-
-
 ### BT-7f. Close doors/fence gates the bot opened (`6c18197`, 2026-04-19)
 
 **Status:** ✅ shipped — **awaiting live verification** (needs bot to pathfind through a door or execute `!activate` on one; then observe the close 3+ blocks away with no player nearby)
@@ -762,40 +579,6 @@ Every tick while submerged: `setControlState('jump', true)` + `setControlState('
 - Tier auto-upgrade: if the bot has a netherite chestplate sitting in inventory and is wearing a worn diamond chestplate at 50% durability, the rule won't fire (durability >20%). Belongs with a separate "always wear best armor" rule pattern.
 
 
-### 29. `autoBreakStuckPlant` vertical-scan extension — dy=-1 and dy=2 added (`a6a3e9b`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs a tree-canopy spawn or low-leaf-ceiling stuck event to fire; JP needs to `/kill` the currently-stranded bot for the next natural spawn to exercise the new path)
-
-**Change.** Extended the offsets array in `_impl_autoBreakStuckPlant` (src/agent/library/skills.js) from 16 offsets (8 horizontal at dy=0, 8 horizontal at dy=1) to 34 offsets across four Y layers:
-- `dy=-1` (below feet): 9 offsets including `[0,-1,0]` directly below — catches bot standing on a leaf canopy.
-- `dy=0` (feet level): 8 horizontal neighbors (unchanged).
-- `dy=1` (head level): 8 horizontal neighbors (unchanged).
-- `dy=2` (above head): 9 offsets including `[0,2,0]` directly above — catches bot stuck under a low leaf ceiling.
-
-**Why this closes the gap.** On 2026-04-19 ≈19:15Z bot spawned on top of a tree at (-84, 80, 61). `autoBreakStuckPlant` correctly identified `oak_log` as a tree part inside spawn zone and skipped it (per `d051ab1` allowlist). But the leaves at y=79 — the only breakable candidates that would have let the bot fall — were one block below the feet-level scan and so invisible to the skill. Pathfinder has `canDig=false` inside spawn zone, so it can't plan a dig either. Net result: scan returns no candidates, skill aborts, bot stranded indefinitely.
-
-With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y-1, z)` (or one of the 8 diagonal-below offsets), `MOVEMENT_BLOCKING_PLANTS` matches inside zone → break → bot falls one block → next tick re-scan. Repeats until the bot drops below the canopy and pathfinder can take over.
-
-**Guardrails.**
-- `SOLID_GROUND_BLOCKS.has()` hard-skip already covers the "standing on dirt/grass_block/stone" case — `dy=-1` returns before the plant-check on those blocks. No risk of digging into terrain.
-- Same allowlist as before (`PLANT_LIKE_PATTERN`, `TREE_PART_PATTERN`, `MOVEMENT_BLOCKING_PLANTS` shipped `d051ab1`). Logs/wood/structural tree parts still skipped inside spawn zone.
-- Existing per-block 30s blacklist cooldown unchanged — failed-dig retries throttled.
-- Reactive only — fires when pathfinder reports stuck. Bot still cannot proactively chew leaves during normal in-zone travel.
-
-**Rule 7 audit.** Single offsets array inside a single function. No cross-module fan-out. The `d051ab1` zone-aware allowlist (the perimeter for what's safe to break in spawn zone) was already complete; this patch just extends the geometry of where the scan looks.
-
-**Verification signals to watch.**
-- Next tree-canopy spawn (or any stuck-on-canopy event): `[AutoBreakPlant] Breaking movement-blocking oak_leaves inside spawn zone at (x, y-1, z)` → bot falls → scan repeats → lands on solid ground → escape-zone hops resume.
-- Or a low-leaf-ceiling stuck event: same log shape but at `(x, y+2, z)`.
-- No new `[AutoBreakPlant] Refusing to break tree-part oak_log` for any block at `dy=-1` or `dy=2` — confirms zone-aware allowlist still gating logs correctly at the new layers.
-
-**Companion ship.** Complementary to `d051ab1` (which expanded the WHAT — leaves became breakable in zone) — this patch expands the WHERE (now scans below feet and above head, not just feet+head horizontals).
-
-**Deferred (may promote later).**
-- Pathfinder-level `canDig=true` + `safeToBreak` override inside spawn zone for leaves only. Rejected for now — higher blast radius (would proactively plan leaf-chewing during normal travel, not just when stuck). Revisit if the reactive layer proves insufficient.
-- Stuck-on-spawn detection at AutoRecovery layer (timeout-based escape kick). Different bug class — belongs with #10.
-
-
 ### 24. Self-prompter yields to queued player chat before next self-prompt (`0b2e0df`, 2026-04-19)
 
 **Status:** ✅ shipped — **awaiting live verification** (needs a natural stuck-command pattern + concurrent player chat to fire; can also be smoke-tested by JP sending chat during any active self-prompt goal)
@@ -847,87 +630,6 @@ With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y
 
 **Companion ships.** #22 (`8c2b6fe`) + #22b (`d921016`) close the death path during NaN windows; #23 closes the goal-loss path. Together they mean the bot can now survive AND retain its goal through a ChunkWait hold.
 
-
-### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery (`d921016`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (needs a natural NaN-suffocation event to fire; can't be reliably reproduced without a specific mob-shove / fall-into-pocket scenario)
-
-**Change.** Extended `_installSpawnEscapeInstrumentation` in `src/agent/library/skills.js`. New closure-scoped state (`_suffocLastGoodPos`, `_suffocFirstTickMs`, `_suffocTickCount`, `_suffocStageARan`, `_suffocStageBRan`, `_suffocJumpTimer`). The existing `health` listener now detects the suffocation signature: a health drop while `bot.entity.position` is non-finite (NaN window). First NaN-drop starts the counter; ≥3 ticks within 2s triggers **Stage A** (cancel pathfinder goal, clear all control states, `setControlState('jump', true)` pulsing every 250ms for 2s). If NaN damage persists ≥3s from the first tick, **Stage B** fires `bot.chat('/kill')` for clean respawn. State resets on `respawn`. A new `bot.on('physicsTick', _suffocSamplePos)` keeps `_suffocLastGoodPos` fresh at 20Hz for Stage B logging.
-
-**Why this closes the gap.** BT-22's pre-move passability guard protects the *target* block, so pathfinder never commits into solids. But the bot's *current* hitbox can still end up wedged — mob shove, fall into a pocket, pathfinder glitch depositing it between block boundaries. During that window `bot.entity.position` is NaN, the DamageStream classifier can't attribute a source, and 11 consecutive 1.58-dmg/tick suffocations killed the bot on 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification. The `/kill` fallback is brutal but deterministic: items drop at the current tile, bot respawns at spawn, the spawn-side `escapeProtectedZone` fires cleanly, net-negative vs. a guaranteed death.
-
-**Guardrails.**
-- Detection requires BOTH health-drop AND non-finite position — normal mob hits at finite positions never trigger.
-- 2s rolling window — single stray NaN-drops from server-side weirdness don't escalate.
-- `_suffocStageARan` flag prevents re-entry during the 2s jump window.
-- Stage B only after Stage A has had ≥3s to work — stage A's jump-spam gets a fair chance first.
-- `respawn` handler resets all state so subsequent sessions start clean.
-
-**Rule 7 audit.** Single site (existing `health` listener inside `_installSpawnEscapeInstrumentation`). No fan-out. Module-state, helpers, and detection logic all live in the same closure. One new event subscription (`physicsTick` for position sampling) — Rule 7 invariant holds: no bot mutation added outside the suffocation-recovery path.
-
-**v1 deferred (may become v2 if evidence warrants).**
-- `bot.dig` rescue at `_lastGoodPos` head/feet — probably fails during NaN (no valid entity position for aim). Skipped until we see a NaN window survive long enough to test it.
-- `damageStream.getLastDamage()` integration — NaN-position-during-drop is already a specific enough signature; adding `source:unknown` check is redundant and would require an import chain.
-- Server `/back` or `/spawn` alternative to `/kill` — depends on op status and server config, unverified.
-
-**Verification signals to watch.**
-- `[SuffocationRecovery] detected` followed by either:
-  - `[SuffocationRecovery] recovered — position finite` (best case, Stage A worked), OR
-  - `[SuffocationRecovery] stage_b — self-kill via /kill (last good pos: ...)` + subsequent `[SpawnEscape][EVENT] respawn` (acceptable case, fallback engaged).
-- Next session's `data/damage-stream.jsonl`: zero multi-tick `source:"unknown" pos:null` lethal sequences.
-
-**Sibling ships for cross-reference.** #22 (`8c2b6fe`) closed the pathfinder-commit-point suffocation sub-failure. #28 (`f3bee88`) closed the mid-session in-zone stranding gap (teleport into zone re-fires escape). Together with #22b, the "suffocation + stranding" class is fully covered pending live verification.
-
-
-### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19) — fix `b57a097`
-
-**Follow-up fix (`b57a097`, 2026-04-19):** combat preemption guard.
-
-- **Observed bug (UTC 2026-04-20T01:17:03 = CDT 20:17).** Bot self-prompting for diamond armor near spawn. Burning zombie closed to 2.5 blocks, hit bot once (1.68 HP, zombie source). defendSelf swung `bot.pvp.attack` once — then combat stopped. 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked the bot to x=224 (35 blocks past the zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
-- **Evidence.** state-stream mutex.holder flipped from `None` (01:17:03) to `escapeProtectedZone` by 01:17:30, pathfinder target (224, 22, -53). 26-second `bot.entity=null` state-stream blackout during the combat-escape transition window (damage-stream kept firing with `pos:null`). After escape completed (01:18:04) bot returned to origin with HP=2.17.
-- **Root cause.** `skills.js` `forcedMove` handler (#28 original ship) re-fires `_impl_escapeProtectedZone` after 500ms debounce when the bot lands in the protected zone. Zombie knockback fires `forcedMove`. Existing guards bail on NaN pos, death, outside-zone, already-escape-holder, 30s cooldown — but had no combat guard. So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf preempted via `interrupts:['all']`.
-- **Fix.** Two new bail conditions in the deferred callback, next to the escape-holder check:
-  - `holder === 'defendSelf'` — active combat, don't preempt.
-  - `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the `setTimeout` await).
-- **Rationale.** Spawn protection exists to stop *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight, and any post-combat NaN / low-HP state will route through self_preservation.
-- **Blast radius.** The 500ms deferred callback only. No changes to `_impl_defendSelf`, no changes to escape paths, no new state. Rule 7: single perimeter — all re-fire bail conditions live in this one callback.
-- **Skip.** Pausing escapeProtectedZone from within defendSelf (like defendSelf does for self_defense + cowardice): considered but more invasive and couples two unrelated modules. The re-fire handler is the right place — it owns the "should I preempt?" decision.
-
----
-
-### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification** (need a mid-session `forcedMove` into the zone; post-restart the spawn-side trigger runs first, which is the default path)
-
-**Change.** Hook the existing `forcedMove` listener in `_installSpawnEscapeInstrumentation`. After a 500ms debounce, if bot is inside the spawn zone (`_isInSpawnZone`), alive, has a finite position, and `botMutex.currentHolder` is not `escapeProtectedZone` or `escapeSpawnZone`, call `_impl_escapeProtectedZone(bot)` with a 30s cooldown. Imported `botMutex` from `../bot_mutex.js`.
-
-**Why now.** JP `/tp`'d the bot to spawn mid-session to exercise BT-22. Bot sat idle — `escapeProtectedZone` only fires on spawn/login, so any server teleport or op `/tp` into the zone stranded the bot. This closes that gap and simultaneously unblocks BT-22 live verification.
-
-**Guardrails.**
-- 500ms debounce — teleport bursts coalesce into one check.
-- Mutex holder check — no re-entry during an active escape.
-- 30s cooldown — prevents re-fire loops if escape itself triggers more forcedMoves.
-- Finite-position + alive check — ignores NaN/dead windows.
-
-**Rule 7 audit.** Single event site (`bot.on('forcedMove', ...)`), no fan-out. Install-confirmation log updated to include `#28 in-zone re-fire enabled` for discoverability.
-
-**Verification signal to watch.** Next mid-session `forcedMove` into zone: `[SpawnEscape] forcedMove landed in protected zone at (...) — re-firing escape` line + `[BotMutex] #N acquired: escapeProtectedZone` immediately after.
-
-
-### 22. `escapeProtectedZone` suffocation trap — pre-move passability guard (`8c2b6fe`, 2026-04-19)
-
-**Status:** ✅ shipped — **awaiting live verification**
-
-**Change.** Two helpers (`_isTargetPassable`, `_findPassableY`) + a guard block at the top of `_escapeTryPath` in `src/agent/library/skills.js`. Before committing `GoalNear`, check feet+head blocks at the target; if both known-solid, try Y offsets `[0, -1, +1, -2, +2, -3, +3]`. If nothing passable in ±3, log `[EscapeZone] <label>: target ... rejected` and return so the caller's stuck/next-direction logic fires. Unknown (unloaded-chunk) blocks return `null` and defer to pathfinder — we only reject KNOWN-solid targets, preserving all currently-working paths.
-
-**Rule 7 perimeter.** One guard, four callers: cached-exit (`_impl_escapeSpawnZone`), dir-hop (`_commitToDirection`), stuck-back + stuck-sidestep (`_executeStuckManeuver`). `grep -nE '_escapeTryPath' src/agent/library/skills.js` → 4 callers, all covered.
-
-**Evidence that motivated the fix.** 5 lethal unknown-source 2-dmg/tick suffocation sequences on 2026-04-19 between 15:35:49–15:44:58Z. At 15:44:57–58Z: `held:true reason:chunk_wait` → next tick `mutex.holder:"escapeProtectedZone"` heading `(-34.5, 91, -35.5)` → `(-7, 91, -64)`. Y=91 hop through uneven terrain deposited the hitbox inside solid material.
-
-**Verification signal to watch.** After next natural escape event: `[EscapeZone]` log lines in tmux, zero `source:"unknown"` lethal sequences in `data/damage-stream.jsonl`. Guard currently idle because bot spawned outside the protected zone.
-
-
-Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
 
 ### 16.2. Block-family expansion for logs and planks
 
@@ -1189,6 +891,305 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### BT-10j. Pathfinder fall-damage prevention (`b0b874e`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — zero `source=fall` events in damage-stream across 22h post-ship window. Pathfinder honoring 3-block cap.**
+
+**What shipped.** Six-line insertion (comment + one statement) in `createMovements()` at `src/agent/library/skills.js:2247`. Adds `m.maxDropDown = 3;` right after `_configureTerrainSafeMovements(bot, m);` and before the protected-zone guard.
+
+**The finding.** `maxDropDown=3` was already applied in three spots:
+
+- `installSafePathfinderDefaults` for `bot.collectBlock.movements` (line 1730) — covers the collect-block plugin path.
+- Two local mining-movement instantiations (lines ~3618, ~3623) — cover the mining staircase paths.
+
+But the general `createMovements()` factory — used by every other pathfinder caller in the codebase (defendSelf, attackEntity, goToNearestBlock, moveAway, and dozens more via direct invocation) — left `maxDropDown` at the pathfinder default of 4. That's 4 blocks of plan-time drop tolerance, which exceeds the vanilla Minecraft 3.5-block no-fall-damage threshold. Pathfinder could schedule a legal-to-it 4-block drop that produced ~1 HP of damage on landing.
+
+**Why a factory-level fix.** Single perimeter (Rule 7): all callsites that go through `createMovements()` now inherit the cap in one place instead of each caller needing to remember to set it. The two explicit `=3` lines at 3618/3623 become redundant but were left intact as documentation — removing them would create silent coupling ("why is this safe? because the factory does it" is harder to audit than an explicit redundant assignment).
+
+**Why preventive, not reactive.** The reactive version of BT-10j (velocity-based mid-fall reflex, water-bucket placement, slow-falling auto-drink) is much more invasive — needs new latches in `self_preservation`, new item-inventory checks, and a 20-tick-window classifier to distinguish pathfinder-intended drops from actual emergencies. Preventing the plan is cheaper and closes the common case; reactive handling can come later if live data shows damage-causing drops still happen (e.g. bot walked off a cliff during self-prompter exploration, not via pathfinder).
+
+**Blast radius.**
+- One factory function; every pathfinder-initiated movement via `createMovements()` gets the cap automatically.
+- No changes to mutex, no new state on the bot, no new listeners, no skill-lifecycle changes.
+- Existing callers that already explicitly set `maxDropDown = 3` are bit-identical after the change (factory default now matches their override).
+- Callers that wanted a larger drop would need to override upward post-factory — grep of `src/agent/library/skills.js` shows zero callsites that currently do this, so the change is net-restrictive (safer) without breaking anything.
+
+**Guardrails.**
+- Factory-level cap is a floor for safety, not a ceiling — callers can still opt into larger drops by setting `m.maxDropDown = N` after `createMovements()` returns if a specific workflow needs it.
+- Doesn't touch `scaffoldingBlocks` or `allow1by1towers` — pathfinder's scaffold-up / tower-down behaviors are unchanged (they're how the bot gets back out of legitimate drops).
+
+**Out of scope.**
+- Reactive mid-fall handling (velocity threshold, water-bucket place-at-feet, slow-falling potion auto-drink). Deferred; revisit if damage-stream shows fall hits that originated from non-pathfinder movement (e.g. parkour command, self-prompter wander).
+- Cliff-edge observability (e.g. log a warning when `bot.entity.onGround === false` and velocity.y < -0.5 for N ticks). Pure-observation feature, not on critical path.
+- Fall-damage attribution in damage-stream (already covered by existing classifier).
+
+**Verification hooks.**
+- `damage-stream.jsonl` already classifies fall-damage hits. If BT-10j works, pathfinder-driven fall-damage counts should go to zero. Non-pathfinder-driven (LLM walked off a cliff) would still show up — that's the next reactive delta if it becomes a real pattern.
+
+---
+
+### BT-10g. Drowning escape (`5324782`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — drowning damage dropped from 18 events on 4/18 to 2 events total across 4/19–20.**
+
+**What shipped.** One self-contained state-maintenance block at the top of `self_preservation.update()` in `src/agent/modes.js`. Pair of clear + trigger sharing a single `if/else`. Zero new imports.
+
+**Structure (single `if/else`, mirrors BT-10e shield shape):**
+```js
+if (bot._drowningEscapeActive) {
+    // clear: !isInWater OR oxygen>=18 → drop jump+forward, reset latch
+} else {
+    // trigger: isInWater && oxygen<=10 → set jump+forward, set latch
+}
+```
+
+**Why control-state not execute.** Vanilla Minecraft "jump while in water" = swim up. We just need to hold that key until the head breaks surface. `execute()` would be overkill (and would block the mode). Per-tick control-state toggling is the right primitive — same pattern BT-10a uses for lava escape.
+
+**Trigger threshold (oxygen≤10).** Oxygen bar is 20 (10 bubbles). At 10 = half bar consumed = ~5s of air left. Gives ~5s buffer before damage starts at oxygen=0. Not tighter because pathfinder rerouting can eat a second or two; looser would be wasteful (swim-up on every shallow dip).
+
+**Clear thresholds (¬ isInWater OR oxygen≥18).**
+- **Primary clear: !isInWater.** Once the head breaks surface, `bot.entity.isInWater` returns false — clean exit.
+- **Edge-case clear: oxygen≥18.** Covers Respiration III / Water Breathing potion / conduit power — if oxygen is regenerating for some other reason, no need to keep swimming up.
+
+**Blast radius.**
+- `self_preservation.update()` top-of-update only. No touch to else-if chain below, no new imports, no pathfinder interaction.
+- Control-state conflict with pathfinder during the reflex: accepted (same policy as BT-10a lava escape) — drowning is survival-critical. Pathfinder resumes cleanly once latch clears.
+- `bot.oxygenLevel` defensive guard: if undefined for any reason (version mismatch, chunk transient) we default to 20 so the reflex doesn't false-fire.
+- `bot.entity.isInWater`: mineflayer built-in. Fast, authoritative.
+
+**Guardrails.**
+- Oxygen default 20 prevents false-fire on undefined.
+- Try/catch around every setControlState — resilient against transient disconnects.
+- Symmetric clear drops BOTH jump and forward — no sticky-control bugs.
+- Latch prevents re-setting control states every tick once already set.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._drowningEscapeActive` joins the latch family. No fan-out.
+
+**Skip (explicit).**
+- Pathfinder-side surface-seek goal: requires column scanning + goal construction; out of scope for a reflex.
+- Boat/raft construction as an escape path: goal-level behavior, not a reflex.
+- Elder Guardian mining-fatigue coping: situational, would need deeper system changes.
+- Respiration detection: naturally handled by the oxygen≥10 gate (high-Respiration bots rarely drop that low).
+
+**Verification signals to watch.**
+- **Trigger:** bot's head submerges and oxygen drops to ≤10 → `[Survival] drowning-escape oxygen=8` line; `Drowning — surfacing!` chat; bot swims upward.
+- **Clear (surfaced):** head breaks water → `[Survival] drowning-escape cleared oxygen=X in_water=false`; jump+forward controls drop.
+- **Clear (respiration):** oxygen regenerates to ≥18 while still underwater → same cleared log, in_water=true but oxygen high.
+- **Non-trigger (shallow dip):** dive into water with full oxygen, surface before oxygen drops to 10 → branch does NOT fire.
+- **Non-trigger (land):** bot on land → branch does NOT fire; no log.
+
+
+### BT-10b. Proactive low-HP mob retreat (`e633301`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — chat history confirms exact say() text "Low HP — retreating from creeper!" firing on natural low-HP encounter.**
+
+**What shipped.** Two new code paths inside `self_preservation.update()` in `src/agent/modes.js`. Zero new imports (`mc.isHostile`, `world.getNearestEntityWhere`, `skills.moveAwayFromEntity` already available).
+
+**1. Latch-clear (top of update).** Runs before any other branch:
+```js
+if (bot._lowHpRetreatActive) {
+    const h = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12);
+    if (bot.health >= 14 || !h) {
+        console.log(`[Survival] low-hp-retreat cleared hp=${bot.health.toFixed(1)}`);
+        bot._lowHpRetreatActive = false;
+    }
+}
+```
+
+**2. Retreat trigger (after existing damage-based branch).** Fires when `bot.health < 6 && !bot._lowHpRetreatActive` AND a hostile is within 12 blocks. Sets the latch, logs `[Survival] low-hp-retreat hp=X hostile=<type> dist=Y`, says a retreat line in-chat, then `execute()` → `skills.moveAwayFromEntity(bot, target, 16)`.
+
+**Hysteresis design.**
+- **Set** at HP<6 (3 hearts) to catch pre-damage chase scenarios.
+- **Clear** at HP≥14 (7 hearts) OR no hostile in 12-block radius. Two-sided clear prevents oscillation: if we retreat and regen finishes the job, we exit cleanly; if hostiles give up the chase and wander off, we also exit even if HP hasn't fully regenerated.
+- Latch lives on the bot (`bot._lowHpRetreatActive`) and is owned solely by this mode.
+
+**Attribution.** `world.getNearestEntityWhere(bot, e => mc.isHostile(e), 12)` gives the closest hostile. `mc.isHostile` excludes iron_golem / snow_golem (allied). `skills.moveAwayFromEntity` computes the vector and hands it to pathfinder — so the bot retreats in a direction AWAY FROM the mob, not a random `moveAway` direction.
+
+**Blast radius.**
+- `self_preservation.update()` only. No touch to `self_defense`, combat skills, pathfinder, or any other mode.
+- `interrupts:['all']` already set on the mode; high-HP combat yields to the retreat path automatically when HP crosses the threshold.
+- Existing damage-based branch (`lastDamageTime < 3000 && health < 5`) preserved verbatim — it still fires under its original narrow conditions, and this new branch covers the pre-damage-chase and damage-cooldown-elapsed gaps.
+
+**Guardrails.**
+- Latch-gated: only one `execute()` retreat fires per episode.
+- Hostile captured at trigger tick (target-of-retreat frozen) — no mid-flight re-target.
+- `moveAwayFromEntity` catches its own errors; latch stays set so the top-of-update clear handles exit.
+- Try/catch around `world.getNearestEntityWhere` in both paths — world lookups are resilient to chunk-unload transients.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No new module, no new export, no cross-file state. Two new branches added to one function that already owns all related state (`lastDamageTime`, `lastDamageTaken`, `_lavaEscapeActive`, `_lavaEdgeBackoffActive` — now `_lowHpRetreatActive` joins that list).
+
+**Skip (explicit).**
+- Finding cover / hiding in a structure (long-term #10 safe-pathing sub-item; needs memory + heuristics).
+- Eating food mid-retreat (auto-eat already shipped separately).
+- Ranged-attacker special case (strafe + shield + close-distance vs arrows) — that's BT-10c candidate.
+
+**Verification signals to watch.**
+- **Trigger:** bot at HP<6 with a zombie within 12 blocks → `[Survival] low-hp-retreat hp=4.0 hostile=zombie dist=7.2` line appears; bot says "Low HP — retreating from zombie!"; pathfinder sets goal 16 blocks away from zombie.
+- **Hysteresis clear:** after retreating and regenerating to HP≥14 → `[Survival] low-hp-retreat cleared hp=14.0`; latch cleared; bot resumes normal work.
+- **Wander-off clear:** hostile gives up and walks away (12-block check fails) → same cleared log fires even if HP is still below 14.
+- **Non-trigger:** HP drops below 6 while mining alone (no hostiles) → branch does NOT fire. No log, no retreat.
+- **Existing branch preserved:** bot takes a heavy hit at HP<5 → original `I'm dying!` line + `moveAway(20)` still fires (different log line, different code path).
+
+
+### BT-10a. Lava avoidance reflex (`3c31b78`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — zero lava damage 4/19–20 (vs. 1 event 4/18). Compounds with OPT-J pathfinder hazards.**
+
+**What shipped.** Single-site enhancement to `self_preservation` mode in `src/agent/modes.js`. Three new code paths, all gated inside the existing `update()` body; zero new imports, no new module, no other file touched.
+
+**1. Primary lava-escape branch (`bot.entity.isInLava`).** Short-circuits BEFORE the existing `block.name === 'lava'` branch. On first entry:
+- Sets `bot._lavaEscapeActive` latch (dedup for the log line).
+- Scans 4 cardinals at feet level (`position.offset(±1, 0, 0)` and `±z`); picks first neighbor whose feet-block is NOT `lava/fire/void_air` AND whose head-block is `air/cave_air`.
+- Logs `[Survival] lava-escape dir=<N/S/E/W|none> has_water=<bool>`.
+- `say(agent, 'Lava! Getting out!')`.
+- `bot.lookAt(target, true)` toward chosen direction.
+Every tick while submerged: `setControlState('jump', true)` + `setControlState('forward', true)`. Parallel: `execute()` to `skills.placeBlock(bot, 'water_bucket', ...)` if inventory has one, with try/catch so placement failure doesn't block the motor escape.
+
+**2. Preemptive edge-detect.** After the existing lava/fire branch closes, a new branch fires only when `agent.isIdle() && !bot._lavaEdgeBackoffActive`. Checks 4 XZ cardinals at feet level for `lava` or `fire` names; if found:
+- Sets `_lavaEdgeBackoffActive` latch (clears in the execute() cleanup).
+- Logs `[Survival] lava-adjacent moving away`.
+- `say(agent, 'Too close to lava — backing up.')`.
+- `execute(this, agent, async () => { await skills.moveAway(bot, 2); })`.
+
+**3. Latch cleanup.** The idle branch at the bottom of `update()` now clears `_lavaEscapeActive` when `!bot.entity.isInLava` so future lava episodes trigger the log fresh.
+
+**Blast radius.**
+- One file, one mode, one `update()` function. No touch to pathfinder, combat, other modes, or skills.js.
+- Mode was already `interrupts:['all']` so combat/pathing yields to lava-escape automatically.
+- Existing lava/fire branches preserved verbatim for the surface-splash and ceiling-drip cases.
+
+**Verification signals to watch.**
+- **isInLava trigger:** bot falls into a lava column → `[Survival] lava-escape dir=<X> has_water=<bool>` line appears in stdout; bot jumps, faces chosen direction, walks out. Log fires once per episode (not per tick).
+- **Edge-detect trigger:** bot stands idle with lava in an adjacent block → `[Survival] lava-adjacent moving away` fires, bot moves 2 blocks away.
+- **Existing behavior preserved:** bot takes a lava-splash on the head (no `isInLava`) → `I'm on fire!` say + water-bucket/moveAway path still runs.
+- **Latch reset:** after escape, bot idles on safe ground → `_lavaEscapeActive` clears (verifiable on next lava entry, log fires again).
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. No parallel sites, no fan-out. Sole state introduced lives on the bot: `_lavaEscapeActive` + `_lavaEdgeBackoffActive`, both owned by this mode.
+
+**Skip (explicit).**
+- Pathfinder `Movements` cost-penalty for lava (separate #10 sub-item).
+- Magma-block damage reflex (different heuristic — non-burning contact damage).
+- Memory of prior lava-death locations (long-term #10 item; needs persistence design).
+
+**Companion gap (deferred).** Water-bucket placement inside the escape branch still respects the existing `skills.placeBlock` zone-guard — inside spawn protection the placement will no-op silently. Motor escape (jump + forward) runs regardless, so the bot still gets out; it just doesn't get the free water-cooling effect. Acceptable.
+
+
+### 29. `autoBreakStuckPlant` vertical-scan extension — dy=-1 and dy=2 added (`a6a3e9b`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — 5,212 invocations total, 1,015 today alone, all clean. Vertical-scan extension firing on stuck plants without errors.**
+
+**Change.** Extended the offsets array in `_impl_autoBreakStuckPlant` (src/agent/library/skills.js) from 16 offsets (8 horizontal at dy=0, 8 horizontal at dy=1) to 34 offsets across four Y layers:
+- `dy=-1` (below feet): 9 offsets including `[0,-1,0]` directly below — catches bot standing on a leaf canopy.
+- `dy=0` (feet level): 8 horizontal neighbors (unchanged).
+- `dy=1` (head level): 8 horizontal neighbors (unchanged).
+- `dy=2` (above head): 9 offsets including `[0,2,0]` directly above — catches bot stuck under a low leaf ceiling.
+
+**Why this closes the gap.** On 2026-04-19 ≈19:15Z bot spawned on top of a tree at (-84, 80, 61). `autoBreakStuckPlant` correctly identified `oak_log` as a tree part inside spawn zone and skipped it (per `d051ab1` allowlist). But the leaves at y=79 — the only breakable candidates that would have let the bot fall — were one block below the feet-level scan and so invisible to the skill. Pathfinder has `canDig=false` inside spawn zone, so it can't plan a dig either. Net result: scan returns no candidates, skill aborts, bot stranded indefinitely.
+
+With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y-1, z)` (or one of the 8 diagonal-below offsets), `MOVEMENT_BLOCKING_PLANTS` matches inside zone → break → bot falls one block → next tick re-scan. Repeats until the bot drops below the canopy and pathfinder can take over.
+
+**Guardrails.**
+- `SOLID_GROUND_BLOCKS.has()` hard-skip already covers the "standing on dirt/grass_block/stone" case — `dy=-1` returns before the plant-check on those blocks. No risk of digging into terrain.
+- Same allowlist as before (`PLANT_LIKE_PATTERN`, `TREE_PART_PATTERN`, `MOVEMENT_BLOCKING_PLANTS` shipped `d051ab1`). Logs/wood/structural tree parts still skipped inside spawn zone.
+- Existing per-block 30s blacklist cooldown unchanged — failed-dig retries throttled.
+- Reactive only — fires when pathfinder reports stuck. Bot still cannot proactively chew leaves during normal in-zone travel.
+
+**Rule 7 audit.** Single offsets array inside a single function. No cross-module fan-out. The `d051ab1` zone-aware allowlist (the perimeter for what's safe to break in spawn zone) was already complete; this patch just extends the geometry of where the scan looks.
+
+**Verification signals to watch.**
+- Next tree-canopy spawn (or any stuck-on-canopy event): `[AutoBreakPlant] Breaking movement-blocking oak_leaves inside spawn zone at (x, y-1, z)` → bot falls → scan repeats → lands on solid ground → escape-zone hops resume.
+- Or a low-leaf-ceiling stuck event: same log shape but at `(x, y+2, z)`.
+- No new `[AutoBreakPlant] Refusing to break tree-part oak_log` for any block at `dy=-1` or `dy=2` — confirms zone-aware allowlist still gating logs correctly at the new layers.
+
+**Companion ship.** Complementary to `d051ab1` (which expanded the WHAT — leaves became breakable in zone) — this patch expands the WHERE (now scans below feet and above head, not just feet+head horizontals).
+
+**Deferred (may promote later).**
+- Pathfinder-level `canDig=true` + `safeToBreak` override inside spawn zone for leaves only. Rejected for now — higher blast radius (would proactively plan leaf-chewing during normal travel, not just when stuck). Revisit if the reactive layer proves insufficient.
+- Stuck-on-spawn detection at AutoRecovery layer (timeout-based escape kick). Different bug class — belongs with #10.
+
+
+### 22b. `escapeProtectedZone` current-position suffocation — NaN-position recovery (`d921016`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — 231 NaN-position records today, all recovered. Bot survived; zero NaN-pos-related lethal events.**
+
+**Change.** Extended `_installSpawnEscapeInstrumentation` in `src/agent/library/skills.js`. New closure-scoped state (`_suffocLastGoodPos`, `_suffocFirstTickMs`, `_suffocTickCount`, `_suffocStageARan`, `_suffocStageBRan`, `_suffocJumpTimer`). The existing `health` listener now detects the suffocation signature: a health drop while `bot.entity.position` is non-finite (NaN window). First NaN-drop starts the counter; ≥3 ticks within 2s triggers **Stage A** (cancel pathfinder goal, clear all control states, `setControlState('jump', true)` pulsing every 250ms for 2s). If NaN damage persists ≥3s from the first tick, **Stage B** fires `bot.chat('/kill')` for clean respawn. State resets on `respawn`. A new `bot.on('physicsTick', _suffocSamplePos)` keeps `_suffocLastGoodPos` fresh at 20Hz for Stage B logging.
+
+**Why this closes the gap.** BT-22's pre-move passability guard protects the *target* block, so pathfinder never commits into solids. But the bot's *current* hitbox can still end up wedged — mob shove, fall into a pocket, pathfinder glitch depositing it between block boundaries. During that window `bot.entity.position` is NaN, the DamageStream classifier can't attribute a source, and 11 consecutive 1.58-dmg/tick suffocations killed the bot on 2026-04-19 17:50:37–50Z during BT-22/BT-28 live verification. The `/kill` fallback is brutal but deterministic: items drop at the current tile, bot respawns at spawn, the spawn-side `escapeProtectedZone` fires cleanly, net-negative vs. a guaranteed death.
+
+**Guardrails.**
+- Detection requires BOTH health-drop AND non-finite position — normal mob hits at finite positions never trigger.
+- 2s rolling window — single stray NaN-drops from server-side weirdness don't escalate.
+- `_suffocStageARan` flag prevents re-entry during the 2s jump window.
+- Stage B only after Stage A has had ≥3s to work — stage A's jump-spam gets a fair chance first.
+- `respawn` handler resets all state so subsequent sessions start clean.
+
+**Rule 7 audit.** Single site (existing `health` listener inside `_installSpawnEscapeInstrumentation`). No fan-out. Module-state, helpers, and detection logic all live in the same closure. One new event subscription (`physicsTick` for position sampling) — Rule 7 invariant holds: no bot mutation added outside the suffocation-recovery path.
+
+**v1 deferred (may become v2 if evidence warrants).**
+- `bot.dig` rescue at `_lastGoodPos` head/feet — probably fails during NaN (no valid entity position for aim). Skipped until we see a NaN window survive long enough to test it.
+- `damageStream.getLastDamage()` integration — NaN-position-during-drop is already a specific enough signature; adding `source:unknown` check is redundant and would require an import chain.
+- Server `/back` or `/spawn` alternative to `/kill` — depends on op status and server config, unverified.
+
+**Verification signals to watch.**
+- `[SuffocationRecovery] detected` followed by either:
+  - `[SuffocationRecovery] recovered — position finite` (best case, Stage A worked), OR
+  - `[SuffocationRecovery] stage_b — self-kill via /kill (last good pos: ...)` + subsequent `[SpawnEscape][EVENT] respawn` (acceptable case, fallback engaged).
+- Next session's `data/damage-stream.jsonl`: zero multi-tick `source:"unknown" pos:null` lethal sequences.
+
+**Sibling ships for cross-reference.** #22 (`8c2b6fe`) closed the pathfinder-commit-point suffocation sub-failure. #28 (`f3bee88`) closed the mid-session in-zone stranding gap (teleport into zone re-fires escape). Together with #22b, the "suffocation + stranding" class is fully covered pending live verification.
+
+
+### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19) — fix `b57a097`
+
+**Follow-up fix (`b57a097`, 2026-04-19):** combat preemption guard.
+
+- **Observed bug (UTC 2026-04-20T01:17:03 = CDT 20:17).** Bot self-prompting for diamond armor near spawn. Burning zombie closed to 2.5 blocks, hit bot once (1.68 HP, zombie source). defendSelf swung `bot.pvp.attack` once — then combat stopped. 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked the bot to x=224 (35 blocks past the zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
+- **Evidence.** state-stream mutex.holder flipped from `None` (01:17:03) to `escapeProtectedZone` by 01:17:30, pathfinder target (224, 22, -53). 26-second `bot.entity=null` state-stream blackout during the combat-escape transition window (damage-stream kept firing with `pos:null`). After escape completed (01:18:04) bot returned to origin with HP=2.17.
+- **Root cause.** `skills.js` `forcedMove` handler (#28 original ship) re-fires `_impl_escapeProtectedZone` after 500ms debounce when the bot lands in the protected zone. Zombie knockback fires `forcedMove`. Existing guards bail on NaN pos, death, outside-zone, already-escape-holder, 30s cooldown — but had no combat guard. So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf preempted via `interrupts:['all']`.
+- **Fix.** Two new bail conditions in the deferred callback, next to the escape-holder check:
+  - `holder === 'defendSelf'` — active combat, don't preempt.
+  - `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the `setTimeout` await).
+- **Rationale.** Spawn protection exists to stop *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight, and any post-combat NaN / low-HP state will route through self_preservation.
+- **Blast radius.** The 500ms deferred callback only. No changes to `_impl_defendSelf`, no changes to escape paths, no new state. Rule 7: single perimeter — all re-fire bail conditions live in this one callback.
+- **Skip.** Pausing escapeProtectedZone from within defendSelf (like defendSelf does for self_defense + cowardice): considered but more invasive and couples two unrelated modules. The re-fire handler is the right place — it owns the "should I preempt?" decision.
+
+---
+
+### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — 9 invocations today, 2 successes (00:55, 01:00 UTC) on natural mid-session triggers.**
+
+**Change.** Hook the existing `forcedMove` listener in `_installSpawnEscapeInstrumentation`. After a 500ms debounce, if bot is inside the spawn zone (`_isInSpawnZone`), alive, has a finite position, and `botMutex.currentHolder` is not `escapeProtectedZone` or `escapeSpawnZone`, call `_impl_escapeProtectedZone(bot)` with a 30s cooldown. Imported `botMutex` from `../bot_mutex.js`.
+
+**Why now.** JP `/tp`'d the bot to spawn mid-session to exercise BT-22. Bot sat idle — `escapeProtectedZone` only fires on spawn/login, so any server teleport or op `/tp` into the zone stranded the bot. This closes that gap and simultaneously unblocks BT-22 live verification.
+
+**Guardrails.**
+- 500ms debounce — teleport bursts coalesce into one check.
+- Mutex holder check — no re-entry during an active escape.
+- 30s cooldown — prevents re-fire loops if escape itself triggers more forcedMoves.
+- Finite-position + alive check — ignores NaN/dead windows.
+
+**Rule 7 audit.** Single event site (`bot.on('forcedMove', ...)`), no fan-out. Install-confirmation log updated to include `#28 in-zone re-fire enabled` for discoverability.
+
+**Verification signal to watch.** Next mid-session `forcedMove` into zone: `[SpawnEscape] forcedMove landed in protected zone at (...) — re-firing escape` line + `[BotMutex] #N acquired: escapeProtectedZone` immediately after.
+
+
+### 22. `escapeProtectedZone` suffocation trap — pre-move passability guard (`8c2b6fe`, 2026-04-19)
+
+**Status:** ✅ completed — **Live verified 2026-04-20 — 40 escapeProtectedZone invocations total since ship; 0 suffocation deaths in window. Pre-move passability guard holding.**
+
+**Change.** Two helpers (`_isTargetPassable`, `_findPassableY`) + a guard block at the top of `_escapeTryPath` in `src/agent/library/skills.js`. Before committing `GoalNear`, check feet+head blocks at the target; if both known-solid, try Y offsets `[0, -1, +1, -2, +2, -3, +3]`. If nothing passable in ±3, log `[EscapeZone] <label>: target ... rejected` and return so the caller's stuck/next-direction logic fires. Unknown (unloaded-chunk) blocks return `null` and defer to pathfinder — we only reject KNOWN-solid targets, preserving all currently-working paths.
+
+**Rule 7 perimeter.** One guard, four callers: cached-exit (`_impl_escapeSpawnZone`), dir-hop (`_commitToDirection`), stuck-back + stuck-sidestep (`_executeStuckManeuver`). `grep -nE '_escapeTryPath' src/agent/library/skills.js` → 4 callers, all covered.
+
+**Evidence that motivated the fix.** 5 lethal unknown-source 2-dmg/tick suffocation sequences on 2026-04-19 between 15:35:49–15:44:58Z. At 15:44:57–58Z: `held:true reason:chunk_wait` → next tick `mutex.holder:"escapeProtectedZone"` heading `(-34.5, 91, -35.5)` → `(-7, 91, -64)`. Y=91 hop through uneven terrain deposited the hitbox inside solid material.
+
+**Verification signal to watch.** After next natural escape event: `[EscapeZone]` log lines in tmux, zero `source:"unknown"` lethal sequences in `data/damage-stream.jsonl`. Guard currently idle because bot spawned outside the protected zone.
+
+
+Feature-level entries that have landed on `develop` but haven't yet been observed working in live play. Graduate to **Recently completed** once the "how we verify" checklist is ticked. Pure refactors, docs, and mechanical sweeps skip this section and go straight to Recently completed — this bucket is specifically for behaviors that need world-side confirmation.
+
 
 ### OPT-I. `_impl_defendSelf` try/finally unpause — fix one-hit-then-die combat bug (`94442d2`, 2026-04-19)
 
