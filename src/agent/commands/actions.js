@@ -316,6 +316,36 @@ export const actionsList = [
         })
     },
     {
+        // L1.4-wire BT 1: till the block below the bot's feet and sow a seed.
+        // Mirrors !placeHere — uses bot.entity.position, no coord params.
+        // NOTE: currently tripwired inside protected zones (calls breakBlockAt
+        // + placeBlock). BT 2 will add a protected-zone allowlist so this
+        // works near spawn / player structures.
+        name: '!tillHere',
+        description: 'Till the block under the bot and sow a seed. Works on grass_block, dirt, or farmland.',
+        params: {
+            'seed_type': { type: 'ItemName', description: 'The seed to sow (e.g. wheat_seeds, beetroot_seeds, carrot, potato).' },
+        },
+        perform: runAsAction(async (agent, seed_type) => {
+            let pos = agent.bot.entity.position;
+            await skills.tillAndSow(agent.bot, Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z), seed_type);
+        })
+    },
+    {
+        // L1.4-wire BT 1: right-click interaction with the nearest block of a
+        // given type. Useful for levers, buttons, doors, crafting tables,
+        // brewing stands, anvils, etc. Uses bot.activateBlock — does NOT hit
+        // the break/place tripwires, so it already works in protected zones.
+        name: '!activate',
+        description: 'Activate (right-click) the nearest block of the given type within 16 blocks. Use for levers, buttons, doors, crafting tables.',
+        params: {
+            'type': { type: 'BlockName', description: 'The block type to activate.' },
+        },
+        perform: runAsAction(async (agent, type) => {
+            await skills.activateNearestBlock(agent.bot, type);
+        })
+    },
+    {
         name: '!attack',
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},
