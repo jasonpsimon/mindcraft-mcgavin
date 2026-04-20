@@ -281,6 +281,17 @@ export class Agent {
                     console.warn('[PlayerStructureScan] startPlayerStructureScanner threw:', scanErr.message);
                 }
 
+                // #7d (2026-04-20): live blockUpdate watcher — complements
+                // the 30s scanner by catching structures placed while the
+                // bot is nearby with sub-second latency. Idempotent via
+                // reference-identity gate inside the skill, so soft
+                // reconnects are safe.
+                try {
+                    skills.startPlayerStructureWatcher(this.bot);
+                } catch (watchErr) {
+                    console.warn('[PlayerStructureWatch] startPlayerStructureWatcher threw:', watchErr.message);
+                }
+
                 // BT-12: wire observability BEFORE the spawn-escape await so
                 // any damage taken during escape, path decisions, mutex
                 // contention, and general bot state during the 45-60s

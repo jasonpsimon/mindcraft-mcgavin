@@ -2209,7 +2209,95 @@ function startPlayerStructureScanner(bot) {
     }, PLAYER_STRUCTURE_SCAN_INTERVAL_MS);
 }
 
-export { detectNearbyPlayerStructures, startPlayerStructureScanner };
+/**
+ * #7d — Block-update watcher for runtime-placed structures.
+ *
+ * Live counterpart to `startPlayerStructureScanner` (which is a 30s poll).
+ * Hooks `bot.on('blockUpdate')` and keeps a 10-minute sliding window of
+ * player-characteristic block placements. On each qualifying placement,
+ * runs one cluster pass over the window; promotes any cluster that hits
+ * `PLAYER_MIN_SIGNALS` (and isn't already within `PLAYER_DEDUP_RADIUS` of
+ * a registered zone) via the same `_playerBaseZoneFromCenter` used by the
+ * scanner — identical zone shape, identical dedup.
+ *
+ * Why both scanner AND watcher:
+ *   - Scanner handles bases the bot walks into (bot moves, structures are
+ *     static).
+ *   - Watcher handles bases the player builds while the bot is nearby
+ *     (bot stationary, structures change) — sub-second latency instead of
+ *     up to 40s on the poll.
+ *
+ * These are complementary capabilities, not duplicates (Principle 5).
+ *
+ * Filter: newBlock.name in `PLAYER_CHARACTERISTIC_BLOCKS` AND oldBlock was
+ * air / water / a replaceable (cave_air, void_air, water, lava, bubble_column,
+ * null) — skips state-only changes (water flow, redstone toggles, leaf decay,
+ * fire spread, furnace-burning ticks) which fire `blockUpdate` constantly in
+ * loaded chunks.
+ *
+ * Idempotent: `bot._playerStructureWatcherHooked` reference-identity gate so
+ * soft reconnects never double-hook the same bot instance.
+ */
+
+const PLAYER_WATCHER_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const _PLACEMENT_OLD_ALLOWED = new Set([
+    'air', 'cave_air', 'void_air',
+    'water', 'lava', 'bubble_column',
+    'snow', 'short_grass', 'tall_grass', 'fern', 'large_fern',
+    'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant',
+]);
+
+function startPlayerStructureWatcher(bot) {
+    if (bot._playerStructureWatcherHooked === bot) return;
+    bot._playerStructureWatcherHooked = bot;
+
+    // Window: Map<"x,y,z", {ts, name}>
+    const window = new Map();
+
+    const allowedIds = new Set();
+    for (const name of PLAYER_CHARACTERISTIC_BLOCKS) {
+        const b = bot.registry?.blocksByName?.[name];
+        if (b) allowedIds.add(b.id);
+    }
+
+    bot.on('blockUpdate', (oldBlock, newBlock) => {
+        try {
+            if (!newBlock || !allowedIds.has(newBlock.type)) return;
+            const oldName = oldBlock ? oldBlock.name : 'air';
+            if (!_PLACEMENT_OLD_ALLOWED.has(oldName)) return;
+
+            const pos = newBlock.position;
+            if (!pos) return;
+            const key = `${pos.x},${pos.y},${pos.z}`;
+            const now = Date.now();
+            window.set(key, { ts: now, name: newBlock.name, x: pos.x, y: pos.y, z: pos.z });
+
+            // Prune aged-out entries.
+            const cutoff = now - PLAYER_WATCHER_WINDOW_MS;
+            for (const [k, v] of window) {
+                if (v.ts < cutoff) window.delete(k);
+            }
+
+            if (window.size < PLAYER_MIN_SIGNALS) return;
+
+            // Cluster the window's positions using the same helper as #7c.
+            const positions = Array.from(window.values()).map(v => ({ x: v.x, y: v.y, z: v.z }));
+            const clusters = _clusterPositions(positions, PLAYER_CLUSTER_RADIUS);
+            for (const c of clusters) {
+                if (c.count < PLAYER_MIN_SIGNALS) continue;
+                if (_playerBaseAlreadyRegistered(bot, c.centerX, c.centerZ)) continue;
+                const zone = _playerBaseZoneFromCenter(c.centerX, c.centerY, c.centerZ, c.count);
+                bot.protectedZones = bot.protectedZones || [];
+                bot.protectedZones.push(zone);
+                console.log(`[PlayerStructureWatch] live cluster at (${c.centerX}, ${c.centerZ}) — ${c.count} signals; registering zone ${zone.name} (radius ${zone.radius})`);
+            }
+        } catch (err) {
+            console.warn('[PlayerStructureWatch] handler failed:', err.message);
+        }
+    });
+}
+
+export { detectNearbyPlayerStructures, startPlayerStructureScanner, startPlayerStructureWatcher };
 
 
 /**
