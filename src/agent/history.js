@@ -160,7 +160,14 @@ export class History {
                 return null;
             }
             const data = JSON.parse(readFileSync(this.memory_fp, 'utf8'));
-            this.memory = data.memory || '';
+            // #27 (2026-04-20): Finish D1. Under CB the whole `memory` pipeline
+            // is dead — producer is skipped in storeMemories (line ~66) and the
+            // only consumer ($MEMORY substitution in prompter.js) short-circuits
+            // to empty under CB too. Skipping the load means: (a) stale legacy
+            // residue from before D1 doesn't resurrect across restarts, and
+            // (b) the next save() writes `memory: ''` — disk wipes itself.
+            // Non-CB path preserves the legacy hydration exactly.
+            this.memory = settings.use_context_builder ? '' : (data.memory || '');
             this.turns = data.turns || [];
             console.log('Loaded memory:', this.memory);
             return data;

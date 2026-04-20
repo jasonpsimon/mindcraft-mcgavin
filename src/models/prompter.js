@@ -255,28 +255,40 @@ export class Prompter {
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY')) {
-            // #21 L1.4: only runs when the prompt template literally contains
-            // $MEMORY. mcgavin default CB profiles no longer include it
-            // (removed in D1, 2026-04-15), so this branch is effectively dead
-            // for the default profile. Retained for non-CB / legacy-profile use.
-            // Combine legacy summary with episodic memory retrieval.
-            let memoryText = this.agent.history.memory;
-            try {
-                if (this.agent.history.episodic && messages?.length > 0) {
-                    const contextQuery = this._getContextQuery(messages);
-                    const episodicText = await this.agent.history.episodic.getFormattedMemories(
-                        contextQuery
-                    );
-                    if (episodicText) {
-                        memoryText = memoryText
-                            ? memoryText + '\n' + episodicText
-                            : episodicText;
+            // #27 (2026-04-20): Finish D1 consumer teardown under CB.
+            //   - `history.memory` is '' under CB (load skipped — see history.js).
+            //   - Episodic + long-term memory are already injected by
+            //     `_buildContextPrompt` at priority 6; running the legacy episodic
+            //     fetch here would double-inject the same content in CB-fallback
+            //     and `promptConvoFast` paths, which both still use replaceStrings.
+            //   - Profiles (e.g. ThatCoolGuyDude.json) had the
+            //     `Summarized memory:'$MEMORY'` line stripped; this short-circuit
+            //     is the defense-in-depth for any legacy-shaped profile that
+            //     still references the token.
+            // Legacy non-CB path preserved verbatim below.
+            if (settings.use_context_builder) {
+                prompt = prompt.replaceAll('$MEMORY', '');
+            } else {
+                // #21 L1.4 context (pre-#27): this was the original combined path
+                // mixing legacy 500-char summary with episodic memory retrieval.
+                let memoryText = this.agent.history.memory;
+                try {
+                    if (this.agent.history.episodic && messages?.length > 0) {
+                        const contextQuery = this._getContextQuery(messages);
+                        const episodicText = await this.agent.history.episodic.getFormattedMemories(
+                            contextQuery
+                        );
+                        if (episodicText) {
+                            memoryText = memoryText
+                                ? memoryText + '\n' + episodicText
+                                : episodicText;
+                        }
                     }
+                } catch (err) {
+                    console.warn('[Prompter] Episodic memory retrieval failed:', err.message);
                 }
-            } catch (err) {
-                console.warn('[Prompter] Episodic memory retrieval failed:', err.message);
+                prompt = prompt.replaceAll('$MEMORY', memoryText);
             }
-            prompt = prompt.replaceAll('$MEMORY', memoryText);
         }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
