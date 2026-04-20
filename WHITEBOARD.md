@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** OPT-D — hoist `_isDangerous` block-name list to module-level Set (avoid per-call array allocation + O(n) `.includes` scan). **Shipped 4/20:** OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `178ebe2` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,19 +66,38 @@ _Last updated: 2026-04-20. HEAD `9a7b7eb` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### OPT-D — hoist `_isDangerous` block-name list to module-level Set
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding.** `_isDangerous(name)` at skills.js:3303 builds a 5-element array + runs `.includes()` on every call: `['lava', 'water', 'bedrock', 'air', 'cave_air'].includes(name)`. Called from 9 callsites throughout skills.js, many inside tight tunnel-scan / safeToss direction-validation loops (lines 1287–1524 cluster, plus 2405).
-
-**Scope.** Hoist the list to module scope as a `Set`. Change function body to `return DANGEROUS_BLOCK_NAMES.has(name)`. O(1) lookup instead of O(n) array-scan + allocation per call.
-
-**Expected diff.** ~6 lines — add `const DANGEROUS_BLOCK_NAMES = new Set([...])` at top of skills.js, simplify `_isDangerous` body. All 9 callsites unchanged (same function signature, same return).
-
-**Why it matters.** Tunnel-scanning and safeToss direction-validation iterate over many block candidates per invocation. For each candidate, `_isDangerous` is called 1-2 times. Over a typical mining session, this is called thousands of times per minute. Cheap per-call savings compound.
+_(empty — OPT-D shipped `178ebe2`; sixteen items awaiting live verification on next natural events. OPT-bundle queue now empty — B/C/D all shipped.)_
 
 ## Shipped — awaiting live verification
+
+### OPT-D. Hoist `_isDangerous` block-name list to module-level Set (`178ebe2`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: tunnel-scanning and safeToss continue to correctly refuse lava/water/bedrock/air as landing blocks; no regression in dig-vs-walk or toss-direction behavior).
+
+**What shipped.** One file, 10 lines (8 insertions, 2 deletions). Added `const DANGEROUS_BLOCK_NAMES = new Set(['lava', 'water', 'bedrock', 'air', 'cave_air'])` at module scope right above `_isDangerous`. Function body simplified from `return [...].includes(name)` to `return DANGEROUS_BLOCK_NAMES.has(name)`. All 9 callsites unchanged.
+
+**Why it matters.** `_isDangerous` is a hot-path predicate called from 9 sites in skills.js — tunnel-scan validation (lines 1287, 1299, 1308, 1364, 1443, 1455, 1464, 1524) and safeToss direction scoring (line 2405). Several of these are inside tight nested loops that iterate over every block in a scan radius. Previously every call allocated a fresh 5-element array and ran linear `.includes()` scan. Now it's O(1) `Set.has()` against a single pre-allocated Set.
+
+**Measurable impact estimate.** Over a typical mining session, `_isDangerous` is invoked on the order of 10k+ times per minute during active tunnel-scan windows. Per-call savings are small but the allocation pressure (5 string literals → V8 string-intern lookups + array object) was non-trivial GC churn that this removes.
+
+**Blast radius.**
+- One file, one function body + one new module-scope constant.
+- Function signature, name, return semantics all unchanged.
+- 9 callsites unchanged.
+- Set contents identical to the old array contents. Behavior bit-for-bit identical.
+
+**Rule 2 audit.** Read `_isDangerous` definition, all 9 callsites, and verified no caller depends on the exact mechanism (e.g. none passed a non-string and relied on `.includes()`'s strict-equality weirdness with NaN or mixed types — all callers pass `block.name` strings).
+
+**OPT-bundle status.** With OPT-D shipped, the 2026-04-16 optimization-audit bundle (B, C, D) is fully closed. B/C/D all shipped 2026-04-20. No further OPT items queued from that audit.
+
+**Verification signals to watch.**
+- Bot boots cleanly — **observed during restart 2026-04-20 (HEAD 178ebe2)**.
+- Tunnel-scan and safeToss continue to classify lava/water/bedrock as dangerous — watch `data/damage-stream.jsonl` for continued zero lava/water landing incidents.
+- No `TypeError: Set is not a constructor` or similar (V8 ≥ 3.x supports Set; node version is modern, safe).
+- Regression absence: any safeToss cycle observed in `data/skill-stream.jsonl` should show the same refusal patterns it did pre-ship.
+
+---
+
 
 ### OPT-C. Delete dead Movements block in `pickupNearbyItems` loop (`9a7b7eb`, 2026-04-20)
 
