@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `ddbf4c8` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d (`ddbf4c8`) — ranged-attacker close-distance: skeleton/stray/pillager in [6,20] at HP≥6 → `goToPosition(min_dist=4)` to break the kite and hand off to melee. Fourteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `f7239ef` on `origin/develop`. **In-progress:** BT-10e — shield auto-raise (sub-item of #10). If a shield is in the offhand slot, activate it when threats are near (blocks ~50% of incoming arrows, soaks melee). Currently the shield just sits there unused — combat never raises it, and the LLM rarely thinks to command it. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d. Fourteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,51 @@ _Last updated: 2026-04-19. HEAD `ddbf4c8` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10d shipped `ddbf4c8`; fourteen items awaiting live verification on next natural events.)_
+### BT-10e. Shield auto-raise (sub-item of #10 survival hardening)
+
+**Status:** in-progress (code phase) • **Priority:** medium (free HP-saver whenever shield is in offhand; zero cost when it's not)
+
+**Problem.** Vanilla mineflayer does nothing with offhand shield. Combat skills don't raise it. The LLM almost never issues `!activate`/hold-use-item commands in the middle of a fight. Result: the shield is carried but never used — a pure dead-weight item unless the player manually activates it (which doesn't happen in bot mode).
+
+**Design (extend existing `self_preservation`).**
+
+1. **New branch placed AFTER BT-10d ranged-close.** Order: low-HP bail > ranged-close > shield-raise. Shield is a force multiplier, not an escape — the escapes get priority.
+2. **Pre-gate: shield in offhand.** Check `bot.inventory.slots[45]?.name?.includes('shield')`. No auto-equip from main inventory — user/combat owns equipment decisions. If the user put the shield in offhand, we use it; if not, we no-op.
+3. **Trigger:** any threat in range. Threat = `mc.isHostile(e)` AND within `16` (wide net — arrow range for skeletons, approach-detection for melee). Latch gate: `!bot._shieldRaiseActive`.
+4. **Action:**
+   - Set `bot._shieldRaiseActive = true`.
+   - `bot.activateItem(true)` (offhand activation → raises the shield).
+   - Log `[Survival] shield-raise threat=<name> dist=<d>`.
+   - No chat line (this fires often; don't spam).
+5. **Clear:** top-of-update. Clear when (a) no hostile within 16, OR (b) shield no longer in offhand (dropped, swapped). On clear: `bot.deactivateItem()` + log + latch reset.
+
+**Files.**
+- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. No new imports.
+
+**Blast radius.**
+- One mode. `bot.activateItem(true)` / `bot.deactivateItem()` are mineflayer built-ins — no new skill, no pathfinder interaction, no control-state conflicts.
+- Raising the shield slows movement slightly in vanilla Minecraft (20% speed penalty when blocking). Acceptable: if threats are near, slower movement is a good trade for arrow blocking.
+- Eating requires activateItem to be free. Auto-eat modules typically call `bot.deactivateItem()` before eating. If they don't, this branch can conflict — but the clear-on-no-threat path gives a natural release point.
+
+**Guardrails.**
+- Pre-gate means zero effect when no shield — safe default.
+- Latch + symmetric clear prevents repeated activate/deactivate churn every tick.
+- Clear on shield-gone prevents stuck-activated-on-nothing state.
+- No auto-swap from inventory: we don't fight the user's equipment decisions.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._shieldRaiseActive` joins the latch family. No fan-out; both set and clear live in the same function.
+
+**Skip (explicit).**
+- Auto-equip shield from main inventory: user/combat territory, not self_preservation's.
+- Sword/offhand swap (putting a shield into offhand automatically): same reason.
+- Shield timing against specific attacks (ender pearls, tridents, etc.): vanilla shield handles most cases; specialized timing isn't worth the complexity.
+- Deactivating on blocked-by-axe (axe disables shield for 5s): even if disabled, keeping it raised is fine — no damage taken from the attempt.
+
+**Success signal (live verification).**
+- Skeleton at 12 blocks + shield in offhand → `[Survival] shield-raise threat=skeleton dist=12.0` line; bot visibly raises shield (third-person view).
+- Skeleton dies / leaves → `[Survival] shield-raise cleared`; shield lowers.
+- No shield in offhand → branch does NOT fire. No log, no activation.
+- Shield in offhand but no hostiles → branch does NOT fire. Shield stays stowed.
 
 
 ## Shipped — awaiting live verification
