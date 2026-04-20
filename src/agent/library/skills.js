@@ -2264,6 +2264,10 @@ function _configureTerrainSafeMovements(bot, movements) {
  * modifications. Direct bot.dig / bot.placeBlock calls are guarded by their
  * own per-function zone checks (breakBlockAt, placeBlock, collectBlock, etc.).
  *
+ * **Invariant:** no raw `new pf.Movements(bot)` anywhere in mindcraft-mcgavin
+ * outside this factory. Enforced by `scripts/check-movements-invariant.sh`.
+ * Audit #12 (2026-04-20) confirmed zero raw callsites in `src/`.
+ *
  * @param {object} bot - The mineflayer bot
  * @returns {pf.Movements} Zone-aware movements object
  */
