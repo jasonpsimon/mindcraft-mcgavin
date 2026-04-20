@@ -770,9 +770,11 @@ async function _impl_pickupNearbyItems(bot) {
     let nearestItem = getNearestItem(bot);
     let pickedUp = 0;
     while (nearestItem) {
-        let movements = createMovements(bot);
-        movements.canDig = false;
-        bot.pathfinder.setMovements(movements);
+        // OPT-C: no local Movements setup — goToGoal() unconditionally calls
+        // bot.pathfinder.setMovements(final_movements) with its own safe factory
+        // build (non-destructive first, destructive fallback), so any Movements
+        // object set here is immediately overridden. canDig=false intent is
+        // already satisfied by goToGoal's non-destructive-first strategy.
         await goToGoal(bot, new pf.goals.GoalFollow(nearestItem, 1));
         await new Promise(resolve => setTimeout(resolve, 200));
         let prev = nearestItem;
