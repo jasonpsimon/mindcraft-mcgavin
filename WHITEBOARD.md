@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `ba75ea3` on `origin/develop`. **In-progress:** #28 fix — escapeProtectedZone re-fire preempting active combat (zombie knockback fires `forcedMove`, re-fire handler takes mutex via `interrupts:['all']`, defendSelf loop is killed after one swing). **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. Seventeen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `b57a097` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g. **#28 fix:** diagnosed via state-stream + damage-stream — zombie knockback fired `forcedMove`, re-fire handler preempted defendSelf via `withBotLock('escapeProtectedZone')`. Added two bail conditions: `holder==='defendSelf'` and `bot.pvp.target` truthy. Eighteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,28 +66,7 @@ _Last updated: 2026-04-19. HEAD `ba75ea3` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### #28 fix. Combat vs spawn-protection conflict — re-fire must bail during active combat
-
-**Observed bug (2026-04-19 ≈20:17 CDT, UTC 01:17:03):** bot self-prompting for diamond armor, walking near spawn. Burning zombie closed to 2.5 blocks, landed one hit (1.68 HP zombie source). `self_defense` engaged, `defendSelf` ran one `bot.pvp.attack` swing — then combat stopped. Bot took 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked it out to x=224 (35 blocks past the protected zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
-
-**Evidence (state-stream + damage-stream):**
-
-- 01:17:02–03: pathfinder active, zombie closing 10 → 2.5 blocks, mutex=None, HP=20.
-- 01:17:04–29: 26-second state-stream blackout (`bot.entity`=null symptom, damage-stream keeps firing with `pos:null`). Fire ticks drain HP 20 → 2.17.
-- 01:17:30: state-stream recovers. `mutex.holder = escapeProtectedZone`, pathfinder target (224, 22, -53). Zombie 20+ blocks away.
-- 01:18:04: escape completes, bot returns to origin, mutex=None.
-
-**Root cause (`skills.js` ~L2649–2686, #28 handler):** the `forcedMove` bot-event handler re-fires `_impl_escapeProtectedZone` after a 500ms debounce whenever the bot lands inside the protected zone. **Zombie knockback fires `forcedMove`.** Existing guards bail on (a) NaN position, (b) health≤0, (c) outside zone, (d) already-escape holder, (e) 30s cooldown. **No guard for active combat.** So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf loop preempted.
-
-**Fix shape:** add two bail conditions in the deferred callback, next to the existing escape-holder check:
-
-1. `holder === 'defendSelf'` — combat actively running, do not preempt.
-2. `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the 500ms `setTimeout` await).
-
-Single perimeter. No new state. No changes to `_impl_defendSelf` itself. Rationale: spawn protection exists to prevent *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight ends (and if bot ends up NaN'd or low-HP, `self_preservation` routes to escape via its own paths).
-
-**Blast radius:** the 500ms deferred callback in the `forcedMove` handler only. Counter / cooldown state unchanged. All other escape pathways (spawn/login, autoRecovery ESCAPE_SPAWN_ZONE pattern, safety-net) unaffected.
-
+_(empty — #28 fix shipped `b57a097`; eighteen items awaiting live verification on next natural events.)_
 
 ## Shipped — awaiting live verification
 
@@ -785,6 +764,22 @@ With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y
 
 **Sibling ships for cross-reference.** #22 (`8c2b6fe`) closed the pathfinder-commit-point suffocation sub-failure. #28 (`f3bee88`) closed the mid-session in-zone stranding gap (teleport into zone re-fires escape). Together with #22b, the "suffocation + stranding" class is fully covered pending live verification.
 
+
+### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19) — fix `b57a097`
+
+**Follow-up fix (`b57a097`, 2026-04-19):** combat preemption guard.
+
+- **Observed bug (UTC 2026-04-20T01:17:03 = CDT 20:17).** Bot self-prompting for diamond armor near spawn. Burning zombie closed to 2.5 blocks, hit bot once (1.68 HP, zombie source). defendSelf swung `bot.pvp.attack` once — then combat stopped. 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked the bot to x=224 (35 blocks past the zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
+- **Evidence.** state-stream mutex.holder flipped from `None` (01:17:03) to `escapeProtectedZone` by 01:17:30, pathfinder target (224, 22, -53). 26-second `bot.entity=null` state-stream blackout during the combat-escape transition window (damage-stream kept firing with `pos:null`). After escape completed (01:18:04) bot returned to origin with HP=2.17.
+- **Root cause.** `skills.js` `forcedMove` handler (#28 original ship) re-fires `_impl_escapeProtectedZone` after 500ms debounce when the bot lands in the protected zone. Zombie knockback fires `forcedMove`. Existing guards bail on NaN pos, death, outside-zone, already-escape-holder, 30s cooldown — but had no combat guard. So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf preempted via `interrupts:['all']`.
+- **Fix.** Two new bail conditions in the deferred callback, next to the escape-holder check:
+  - `holder === 'defendSelf'` — active combat, don't preempt.
+  - `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the `setTimeout` await).
+- **Rationale.** Spawn protection exists to stop *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight, and any post-combat NaN / low-HP state will route through self_preservation.
+- **Blast radius.** The 500ms deferred callback only. No changes to `_impl_defendSelf`, no changes to escape paths, no new state. Rule 7: single perimeter — all re-fire bail conditions live in this one callback.
+- **Skip.** Pausing escapeProtectedZone from within defendSelf (like defendSelf does for self_defense + cowardice): considered but more invasive and couples two unrelated modules. The re-fire handler is the right place — it owns the "should I preempt?" decision.
+
+---
 
 ### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19)
 
