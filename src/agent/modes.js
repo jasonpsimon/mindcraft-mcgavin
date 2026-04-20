@@ -116,6 +116,32 @@ const modes_list = [
                 }
             }
 
+            // BT-10g (2026-04-19): drowning escape state maintenance.
+            // Runs at top of update() independently of the else-if chain.
+            // Control-state based (not execute): vanilla Minecraft jump
+            // while in water = swim up. Symmetric set/clear around the
+            // latch keeps controls from sticking.
+            if (bot._drowningEscapeActive) {
+                const inWater = !!bot.entity.isInWater;
+                const oxygen = typeof bot.oxygenLevel === 'number' ? bot.oxygenLevel : 20;
+                if (!inWater || oxygen >= 18) {
+                    try { bot.setControlState('jump', false); } catch (_) {}
+                    try { bot.setControlState('forward', false); } catch (_) {}
+                    console.log(`[Survival] drowning-escape cleared oxygen=${oxygen} in_water=${inWater}`);
+                    bot._drowningEscapeActive = false;
+                }
+            } else {
+                const inWater = !!bot.entity.isInWater;
+                const oxygen = typeof bot.oxygenLevel === 'number' ? bot.oxygenLevel : 20;
+                if (inWater && oxygen <= 10) {
+                    bot._drowningEscapeActive = true;
+                    console.log(`[Survival] drowning-escape oxygen=${oxygen}`);
+                    say(agent, 'Drowning — surfacing!');
+                    try { bot.setControlState('jump', true); } catch (_) {}
+                    try { bot.setControlState('forward', true); } catch (_) {}
+                }
+            }
+
             // BT-10e (2026-04-19): shield auto-raise state maintenance.
             // Runs at the top of update() independently of the else-if chain
             // below — this is state maintenance, not an alternative action.
