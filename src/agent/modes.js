@@ -214,6 +214,36 @@ const modes_list = [
                 }
             }
 
+            // BT-2-L3 (2026-04-20): turtle helmet auto-equip on water entry.
+            // Runs at top of update() as state maintenance, not an action branch.
+            // Latch via _turtleHelmetEquipped — equip at most once per session.
+            // Skip if head slot already holds diamond/netherite (turtle armor=2,
+            // same as iron, so we won't downgrade higher tiers). Turtle gives
+            // 10s underwater breathing buffer + slow Water Breathing while worn,
+            // which complements the BT-10g drowning-escape reflex (last-resort
+            // surface-and-jump). This is the "wear the right gear before you
+            // need to panic" layer.
+            if (!bot._turtleHelmetEquipped) {
+                if (bot.entity.isInWater) {
+                    const head = bot.inventory.slots[5];
+                    if (head && head.name === 'turtle_helmet') {
+                        bot._turtleHelmetEquipped = true;
+                    } else if (head && (head.name === 'diamond_helmet' || head.name === 'netherite_helmet')) {
+                        // Don't downgrade — leave the better helmet on.
+                    } else {
+                        const turtle = bot.inventory.items().find(i => i.name === 'turtle_helmet');
+                        if (turtle) {
+                            bot.equip(turtle, 'head').then(() => {
+                                bot._turtleHelmetEquipped = true;
+                                console.log('[Survival] turtle-helmet equipped (water entry)');
+                            }).catch(err => {
+                                console.log('[Survival] turtle-helmet equip failed: ' + err.message);
+                            });
+                        }
+                    }
+                }
+            }
+
             // BT-10e (2026-04-19): shield auto-raise state maintenance.
             // Runs at the top of update() independently of the else-if chain
             // below — this is state maintenance, not an alternative action.
