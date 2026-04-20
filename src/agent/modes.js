@@ -59,7 +59,23 @@ const modes_list = [
                 }
             }
 
-            // BT-10c (2026-04-19): suffocation latch clear. Cleared when the
+            // BT-10c (2026-04-19 fix): reset the suffocation debounce counter
+            // whenever head is NOT solid. This is the "not suffocating" check
+            // that the trigger's `else` would do, hoisted to top-of-update so
+            // we don't break the else-if chain. blockAbove was already computed
+            // at the start of update().
+            if (blockAbove) {
+                const passableTop = ['air', 'cave_air', 'void_air', 'water', 'lava'];
+                const headSolid = (
+                    blockAbove.boundingBox === 'block' &&
+                    !passableTop.includes(blockAbove.name)
+                );
+                if (!headSolid && bot._suffocationSolidTicks) {
+                    bot._suffocationSolidTicks = 0;
+                }
+            }
+
+                        // BT-10c (2026-04-19): suffocation latch clear. Cleared when the
             // head block is no longer a solid bounding-box block. Runs every
             // tick at the top so we exit the latch immediately after the dig
             // (or any external rescue) lands.
@@ -197,28 +213,46 @@ const modes_list = [
             // collapses, world-edit drops, cave-ins, mob shoves into walls,
             // griefer towers. Lava-as-head-block is excluded — the lava
             // branch handles that case with its own escape primitives.
+            //
+            // 2026-04-19 fix: false-positive debounce. We observed a trigger
+            // in a cave with head=air per the game's own NEARBY_BLOCKS snapshot.
+            // `bot.blockAt(position.offset(0,1,0))` can return stale/wrong
+            // results during fractional-y transitions (jumps, slabs, post-dig
+            // ticks). Real suffocation persists many seconds; a glitch clears
+            // in 1-2 ticks. Require 5 consecutive solid-head ticks (~0.25s)
+            // before firing. Counter reset is at top-of-update() (preserves
+            // else-if chain below). Diagnostic log now includes pos + legs.
             else if (
                 blockAbove &&
                 blockAbove.boundingBox === 'block' &&
                 !['air', 'cave_air', 'void_air', 'water', 'lava'].includes(blockAbove.name) &&
                 !bot._suffocationEscapeActive
             ) {
-                bot._suffocationEscapeActive = true;
-                const headType = blockAbove.name;
-                console.log(`[Survival] suffocation-escape type=${headType}`);
-                say(agent, 'Suffocating — digging up!');
-                execute(this, agent, async () => {
+                bot._suffocationSolidTicks = (bot._suffocationSolidTicks || 0) + 1;
+                if (bot._suffocationSolidTicks >= 5) {
+                    bot._suffocationEscapeActive = true;
+                    bot._suffocationSolidTicks = 0;
+                    const headType = blockAbove.name;
+                    const pos = bot.entity.position;
+                    let legsType = 'unknown';
                     try {
-                        const pos = bot.entity.position;
-                        await skills.breakBlockAt(bot,
-                            Math.floor(pos.x),
-                            Math.floor(pos.y) + 1,
-                            Math.floor(pos.z));
-                    } catch (_) {
-                        // Latch stays set; top-of-update clear handles the
-                        // case where head clears via any other means.
-                    }
-                });
+                        const legsBlock = bot.blockAt(pos);
+                        if (legsBlock) legsType = legsBlock.name;
+                    } catch (_) { /* ignore */ }
+                    console.log(`[Survival] suffocation-escape head=${headType} legs=${legsType} pos=${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)}`);
+                    say(agent, 'Suffocating — digging up!');
+                    execute(this, agent, async () => {
+                        try {
+                            await skills.breakBlockAt(bot,
+                                Math.floor(pos.x),
+                                Math.floor(pos.y) + 1,
+                                Math.floor(pos.z));
+                        } catch (_) {
+                            // Latch stays set; top-of-update clear handles
+                            // the case where head clears via any other means.
+                        }
+                    });
+                }
             }
             else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
                 execute(this, agent, async () => {
