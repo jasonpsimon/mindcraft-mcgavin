@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `9dd17a4` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **In flight:** L1.4-wire BT 1 — register `!tillHere` + `!activate` in actions.js (agricultural + interactive LLM surface; BT 2 follow-up will add protected-zone allowlist for tillAndSow). **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `01a82b6` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. BT 2 follow-up queued for protected-zone allowlist (tillAndSow only — activate doesn't hit tripwires). **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,25 +66,44 @@ _Last updated: 2026-04-20. HEAD `9dd17a4` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-### L1.4-wire — register `!tillHere` and `!activate` commands (BT 1 of 2)
-
-**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
-
-**Finding.** L1.4 surfaced two "possibly-dead" exports in `skills.js`: `tillAndSow` (line 4206) and `activateNearestBlock` (line 4296). Both are fully implemented. Neither is registered as a `!command` in `actions.js`. No LLM-reach path. JP confirmed intent: wire both as LLM-visible commands (agricultural + interactive surface).
-
-**Split into 2 BTs:**
-- **BT 1 (this ship):** Register `!tillHere <seed>` and `!activate <block_type>` in `actions.js`. Mirrors `!placeHere` pattern (uses `bot.entity.position`). Both commands LLM-visible. Zero risk — command-registration only, no skill-logic changes.
-- **BT 2 (future ship):** Thread a protected-zone allowlist/bypass so `tillAndSow` works inside protected zones. `tillAndSow` calls `breakBlockAt` + `placeBlock`, both currently tripwired. `activateNearestBlock` and `consume` (eat/drink, already wired) do NOT touch block tripwires — they already work in protected zones today.
-
-**BT 1 scope.** Two command registrations in `src/agent/commands/actions.js`:
-- `!tillHere <seed_name>`: tills block at `(floor(x), floor(y)-1, floor(z))`, sows `seed_name`. Uses `skills.tillAndSow(agent.bot, pos.x, pos.y-1, pos.z, seed)`.
-- `!activate <type>`: calls `skills.activateNearestBlock(agent.bot, type)`. 16-block search radius (built-in to skill). Uses `BlockName` param type.
-
-**Expected diff.** ~24 lines added in `actions.js`, no deletions. `skills.js` untouched.
-
-**BT 2 teaser (for next session).** Allowlist shape: module-level `Set` checked at `breakBlockAt` + `placeBlock` tripwire sites; needs caller-context propagation (wrapSkill already tracks skill-name via actionLabel). Rule 2 audit will read both enforcement points before proposing hook shape.
+_(empty — L1.4-wire BT 1 shipped `01a82b6`; nineteen items awaiting live verification on natural triggers. Next session: L1.4-wire BT 2 (protected-zone allowlist for tillAndSow), or pick from to-do queue.)_
 
 ## Shipped — awaiting live verification
+
+### L1.4-wire BT 1. Register `!tillHere` + `!activate` commands (`01a82b6`, 2026-04-20)
+
+**Status:** ✅ shipped — **awaiting live verification** (signal: next `!tillHere <seed>` and `!activate <block_type>` invocations resolve without `unknown command` errors; agricultural/interactive behavior observable).
+
+**What shipped.** One file (`src/agent/commands/actions.js`), ~30 lines added. Two new command registrations inserted after `!placeHere`:
+- `!tillHere <seed_type>` → `skills.tillAndSow(bot, floor(x), floor(y)-1, floor(z), seed_type)`. Mirrors `!placeHere` convention (uses bot's current position). Sows the seed on the block directly under the bot's feet.
+- `!activate <type>` → `skills.activateNearestBlock(bot, type)`. 16-block search radius. `BlockName` param type for LLM-side validation.
+
+**Why it matters.** L1.4 audit (2026-04-15) flagged two fully-implemented skills with zero `!command` reach: `tillAndSow` and `activateNearestBlock`. JP confirmed 2026-04-20: both are intentional library surface, wire them. This ship graduates them from "dead exports" to "LLM-usable commands."
+
+**Blast radius.**
+- One file touched; no `skills.js` changes.
+- Existing commands untouched — anchor-based patch (before `!attack`).
+- `skills.tillAndSow` internals unchanged; `skills.activateNearestBlock` internals unchanged.
+- Bot rebooted clean on HEAD `01a82b6` — StateTicker 1Hz, inventory preserved, nearby_entities tracking live, health 20/20, no parse or command-registration errors.
+
+**Rule 2 audit.**
+- Confirmed no prior `!till`, `!tillHere`, `!activate` registration (grep clean).
+- Param types (`BlockName`, `ItemName`) match existing conventions (see `!placeHere` for BlockOrItemName, `!consume` for ItemName).
+- `tillAndSow` signature: `(bot, x, y, z, seedType=null)` — all four args supplied.
+- `activateNearestBlock` signature: `(bot, type)` — both args supplied.
+- `runAsAction` wrapper matches all sibling registrations.
+
+**Protected-zone behavior (BT 2 scope — follow-up).** `!activate` is tripwire-safe: `bot.activateBlock()` is a right-click interaction, not break/place. Works in protected zones today with no further work. `!tillHere` WILL fail inside protected zones because `tillAndSow` internally calls `breakBlockAt` (clear block above) and `placeBlock` (sow seed) — both tripwired. BT 2 will add a protected-zone allowlist at the tripwire sites so `tillAndSow` passes through.
+
+**Verification signals to watch.**
+- Bot boots cleanly — **observed during restart 2026-04-20 (HEAD 01a82b6)**. Health 20, food 15, inventory intact, nearby_entities list populated (creepers + skeleton at ~10 blocks distance).
+- Next LLM attempt to invoke `!tillHere <seed>` or `!activate <block_type>`: no `unknown command` response; skill executes.
+- Outside protected zones: `!tillHere wheat_seeds` on grass_block → farmland + wheat_seeds planted, `log(bot, 'Planting wheat_seeds at ...')`.
+- Inside protected zone: `!tillHere ...` fails at breakBlockAt/placeBlock step — expected until BT 2 ships.
+- `!activate crafting_table` (or any interactive block): `log(bot, 'Activated crafting_table at ...')`, interaction emits (opens GUI, toggles lever, etc.).
+
+---
+
 
 ### OPT-I. Delete dead `setMovements(createMovements())` in `_impl_moveAway` (`9dd17a4`, 2026-04-20)
 
@@ -874,18 +893,20 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 
 
-### L1.4 verification — possibly-dead exports (pending JP confirmation)
+### L1.4-wire BT 2 — protected-zone allowlist for tillAndSow
 
-**Status:** ⏳ pending JP confirmation • **Priority:** low • **Source:** audit finding L1.4
+**Status:** ⏳ not started • **Priority:** medium (BT 1 shipped; BT 2 is the carve-out that makes `!tillHere` actually useful near spawn / player structures) • **Source:** audit finding L1.4 + JP 2026-04-20
 
-Two exports in `src/agent/library/skills.js` have no internal caller, no `!command` registration in `actions.js`, and no external grep hit:
+**Context.** BT 1 (`01a82b6`, 2026-04-20) wired `!tillHere` and `!activate` as LLM-visible commands. `!activate` already works in protected zones (right-click, no tripwire). `!tillHere` currently fails inside protected zones because `tillAndSow` internally calls `breakBlockAt` + `placeBlock`, both gated by the spawn/protected-zone tripwires.
 
-- `tillAndSow` (line 3071)
-- `activateNearestBlock` (line 3160)
+**Scope.** Add a named-skill allowlist (JP chose option A, per-op list — NOT the broader taxonomy) at the tripwire sites. Shape:
+- Module-level `PROTECTED_ZONE_ALLOWLIST = new Set(['tillAndSow'])` in skills.js near the tripwire code.
+- `breakBlockAt` + `placeBlock` (or whatever the shared enforcement function is — Rule 2 pass will identify) check the calling-skill name via `wrapSkill` actionLabel context; pass through if allowlisted.
+- Future-me extension: adding new allowlisted ops = one-line append to the Set.
 
-The LLM can reach them only via `coder.js`-generated code addressing `skills.X()` by name, but there's no documentation path for the LLM to know they exist. May be intentional library surface for future commands, or forgotten leftovers.
+**Why not taxonomy.** JP considered op-categories (destructive/constructive/agricultural/interactive/etc.) but concluded: too much surface for two commands, too many unintended consequences. Per-op allowlist is YAGNI-correct.
 
-**Question for JP:** were these ever wired, are they planned surface, or forgotten? If planned, convert to tracked command-registration work. If forgotten, remove per Principle 5.
+**Rule 2 pre-work.** Find exact enforcement sites for breakBlockAt + placeBlock in protected zones. `_getProtectedZone` + `_isInSpawnZone` are the query helpers; the enforcement lives in the ops themselves. Also confirm wrapSkill propagates the calling skill-name into a scope the tripwire can read.
 
 ### OPT-bundle. Unverified optimization findings from 2026-04-16 audit — ✅ CLOSED 6/6
 
