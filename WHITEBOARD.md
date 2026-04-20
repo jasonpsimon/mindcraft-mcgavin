@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `0cd2d11` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d, BT-10e, BT-10f (`0cd2d11`) — creeper proximity evade: creeper ≤5 + HP≥6 → `moveAwayFromEntity(8)` to clear blast radius before fuse. Sixteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `1ff6d3c` on `origin/develop`. **In-progress:** BT-10g — drowning escape (sub-item of #10). Bot takes drown damage if its head stays submerged past oxygen=0 (≈15s); existing code has no reflex to swim up when oxygen runs low. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d, BT-10e, BT-10f. Sixteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,47 @@ _Last updated: 2026-04-19. HEAD `0cd2d11` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10f shipped `0cd2d11`; sixteen items awaiting live verification on next natural events.)_
+### BT-10g. Drowning escape (sub-item of #10 survival hardening)
+
+**Status:** in-progress (code phase) • **Priority:** medium (slow-bleed death — 2 dmg/tick after oxygen=0; kills in ~10s without intervention; common in rivers/oceans during pathing)
+
+**Problem.** Mineflayer does not auto-surface-seek when the bot's head is underwater and oxygen is depleting. Pathfinder can route the bot through water columns; once in it, if the surface is even 2 blocks up, the bot may sit there mining, crafting, or idling while drowning. Vanilla Minecraft "jump" while in water = swim up — so the fix is spatial: apply jump control when oxygen runs low.
+
+**Design (extend existing `self_preservation`).**
+
+1. **New state-maintenance block placed at top of update() alongside BT-10e shield pair.** Like shield auto-raise, this is state-maintenance (control-state based), not an alternative action. Runs independently of the else-if chain.
+2. **Trigger gate:** `bot.entity.isInWater && bot.oxygenLevel <= 10 && !bot._drowningEscapeActive`. Oxygen≤10 = roughly half bar consumed; gives 5-6s buffer before damage starts.
+3. **Action:** Set latch. `bot.setControlState('jump', true)`, `bot.setControlState('forward', true)`. Log `[Survival] drowning-escape oxygen=<X>`. `say(agent, 'Drowning — surfacing!')`.
+4. **Clear:** top-of-update. When `!isInWater` (broke the surface, got onto land, or swam into an air pocket) OR `oxygenLevel >= 18` (nearly full bar — surface reached or edge case where we regenerated). On clear: drop jump + forward control states, log, reset latch.
+
+**Files.**
+- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. No new imports.
+
+**Blast radius.**
+- One mode. No touch to pathfinder, skills, combat.
+- `bot.setControlState` already used by BT-10a lava escape — known-good pattern.
+- Conflict with pathfinder: when pathfinder owns movement, `setControlState('forward', true)` might fight it. But drowning is survival-critical; accepting the conflict is correct (same policy as BT-10a lava escape). Pathfinder resumes cleanly after the latch clears.
+
+**Guardrails.**
+- Oxygen trigger at 10 (not 0) gives margin before damage starts.
+- Symmetric clear drops controls cleanly — no stuck-jump-forever state.
+- Clear on `!isInWater` handles the case where the bot swims into an air pocket underground: still in water column top-down, but `isInWater` would be false once head is out.
+- Clear on oxygen≥18 handles edge cases (regen via water-breathing potion, Respiration enchant, etc.).
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._drowningEscapeActive` joins the latch family. No fan-out.
+
+**Skip (explicit).**
+- Pathfinder-side surface-seeking (find nearest-up-air-column goal): requires more geometry + integrates poorly with in-progress tasks. Control-state swim-up handles the common case.
+- Boat/raft construction as an escape: out of scope; that's a goal-level behavior.
+- Respiration / Water Breathing detection: skip the trigger if oxygen never drops, but we already gate on oxygen≤10 so this is naturally handled.
+- Elder Guardian debuff (mining fatigue slows surfacing): situational; no special-case needed.
+
+**Success signal (live verification).**
+- Bot pathfinds into water, head submerged, oxygen drops to ≤10 → `[Survival] drowning-escape oxygen=8` line; `Drowning — surfacing!` chat; bot swims upward (jump+forward control states applied).
+- Head breaks surface (`isInWater=false`) → `[Survival] drowning-escape cleared oxygen=X`; controls released; pathfinder resumes.
+- Oxygen fully regenerates underwater (Respiration III etc.) → cleared at oxygen≥18; controls released.
+- Bot on land, no trigger.
+- Bot in water but oxygen≥18 (just dove in) → no trigger yet; only fires once oxygen actually drops.
 
 
 ## Shipped — awaiting live verification
