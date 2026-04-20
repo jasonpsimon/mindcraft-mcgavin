@@ -2244,7 +2244,7 @@ function _configureTerrainSafeMovements(bot, movements) {
  * @param {object} bot - The mineflayer bot
  * @returns {pf.Movements} Zone-aware movements object
  */
-function createMovements(bot) {
+export function createMovements(bot) {
     const m = new pf.Movements(bot);
     _configureTerrainSafeMovements(bot, m);
 

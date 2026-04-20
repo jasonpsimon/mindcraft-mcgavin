@@ -1,5 +1,10 @@
 import pf from 'mineflayer-pathfinder';
 import * as mc from '../../utils/mcdata.js';
+// #12 Stage 2: route isClearPath through the shared createMovements() factory
+// so the clear-path probe honors OPT-J hazard avoidance and BT-10j maxDropDown.
+// Circular with skills.js, but safe because the import is only dereferenced at
+// call time inside isClearPath (not at module-load).
+import { createMovements } from './skills.js';
 
 
 export function getNearestFreeSpace(bot, size=1, distance=8) {
@@ -394,7 +399,10 @@ export async function isClearPath(bot, target) {
      * @param {Entity} target - The target to path to.
      * @returns {boolean} - True if there is a clear path, false otherwise.
      */
-    let movements = new pf.Movements(bot)
+    // #12 Stage 2: start from the shared safe factory (OPT-J hazards,
+    // BT-10j maxDropDown=3, protected-zone dig/scaffold guard), then apply
+    // the non-destructive probe overrides below.
+    let movements = createMovements(bot);
     movements.canDig = false;
     movements.canPlaceOn = false;
     movements.canOpenDoors = false;
