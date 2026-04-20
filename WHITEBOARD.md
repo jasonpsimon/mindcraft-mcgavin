@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `178ebe2` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `178ebe2` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **In flight:** #21 L1 cleanup bundle — 4 comment upgrades across modes.js / prompter.js / history.js (docs-only, zero behavior change). **Shipped 4/20:** OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,21 @@ _Last updated: 2026-04-20. HEAD `178ebe2` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — OPT-D shipped `178ebe2`; sixteen items awaiting live verification on next natural events. OPT-bundle queue now empty — B/C/D all shipped.)_
+### #21 — L1 cleanup bundle (comment upgrades, docs-only)
+
+**Status:** 🟡 in-progress (2026-04-20) — research pass complete; implementation pending.
+
+**Scope.** Four comment upgrades across three files. Zero behavior change. Single code commit.
+
+**L1.1 — `modes.js:67`.** Upgrade `// hacky fix when blocks are not loaded` to explain that treating missing blocks as `air` is the correct defensive fallback for the sand/gravel fall-block detector (blockAt returns null when chunks aren't loaded yet; treating as air means "don't trigger the self_preservation reflex on null", which is the safe default).
+
+**L1.2 — `prompter.js:573`.** Upgrade bare `// deprecated` on `promptGoalSetting`. SURPRISE finding during research: the method is still called from `npc/controller.js:100`. Not actually deprecated — retained for NPC controller path. Comment should say "NPC-only — not used by the main agent loop" so the next reader doesn't delete it.
+
+**L1.3 — `history.js:66`.** Existing comment block above the `if (!settings.use_context_builder)` branch is thorough, but has no pointer to where `use_context_builder` actually lives. Add a one-line pointer to `settings.js:100` (default `true`).
+
+**L1.4 — `prompter.js:258`.** Clarify the `$MEMORY` branch gating. Currently the comment just says "Combine legacy summary with episodic memory retrieval" — doesn't tell you when this branch runs. Add: only runs when the prompt template literally contains `$MEMORY`; CB profiles no longer include it post-D1 (2026-04-15), so this path is effectively dead for mcgavin default profiles. Retained for non-CB / legacy-profile use.
+
+**Why bundled.** All four are 1-3 line comment edits, zero runtime change, same semantic category (clarifying why-not-what). Bundling avoids three trivial commits and keeps the history readable. Per CLAUDE.md "Recently completed for pure refactors/docs/mechanical sweeps" — commit 3 graduates directly to Recently completed, skipping "Shipped — awaiting live verification".
 
 ## Shipped — awaiting live verification
 
