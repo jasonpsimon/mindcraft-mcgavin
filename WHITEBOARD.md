@@ -66,7 +66,25 @@ _Last updated: 2026-04-20. HEAD `e6e7b5a` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — #8 Humanized action delays shipped `e6e7b5a`; L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2`; #12-follow-up shipped `85d93f7`; #2 Layer 3 shipped `71df242`; #2 Layer 2 + #3 Swamp biome closed as redundant. Twenty-three items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6.)_
+### #7d. Block-update watcher for runtime-placed structures
+
+**Status:** 🛠️ in progress 2026-04-20 • **Priority:** low (complements #7c — catches live placements as they happen rather than waiting for the 30s polling scan)
+
+**Picked up from to-do queue.** Post-#7c, player-built structures are auto-registered by a 30s polling scan. That's good for bases the bot walks into, but a player building while the bot is nearby waits up to 40s (10s initial + 30s cadence) before the new zone is live. #7d closes that window by listening to `bot.on('blockUpdate')` for player-characteristic blocks and clustering in real time.
+
+**Plan:**
+- New `startPlayerStructureWatcher(bot)` in `src/agent/library/skills.js`, placed right after `startPlayerStructureScanner` (2212-ish). Reuses the existing `PLAYER_CHARACTERISTIC_BLOCKS` allowlist + `_clusterPositions` + `_playerBaseAlreadyRegistered` + `_playerBaseZoneFromCenter` — zero duplication.
+- Hook: `bot.on('blockUpdate', (oldBlock, newBlock) => …)`. Filter: newBlock.name in allowlist AND oldBlock was air/water/replaceable (skip state-only changes — water flow, redstone toggles, leaf decay, fire spread, furnace-burning ticks).
+- Sliding window: `Map` keyed by `x,y,z` → `{ts, name}`, 10-minute retention. Prune on each event. On every qualifying placement, run one cluster pass on the window; promote any cluster that hits `PLAYER_MIN_SIGNALS=6` and isn't already within `PLAYER_DEDUP_RADIUS=30` of a registered zone.
+- Log prefix: `[PlayerStructureWatch]` — distinguishable from `[PlayerStructureScan]`.
+- Idempotent via `bot._playerStructureWatcherHooked` reference-identity gate (observability module pattern from CLAUDE.md — soft reconnects don't double-hook).
+- Wire in `src/agent/agent.js` right after the `startPlayerStructureScanner` call.
+
+**Scope guard.** Watcher and scanner coexist cleanly — same dedup, same zone shape (`_playerBaseZoneFromCenter`), no behavioral conflict. Scanner catches structures the bot walks into; watcher catches structures placed while bot is nearby. No Rule 2 violation — watcher adds a new capability the scanner doesn't have (sub-second vs 30s latency), so this isn't a wrapper on existing functionality (Principle 5 clear).
+
+**Acceptance.** `node --check` clean on `skills.js` and `agent.js`; bot reboots clean; natural trigger (JP places 6+ player-characteristic blocks within 12 blocks of each other while bot is within 64 blocks) → `[PlayerStructureWatch] live cluster at (x,z) — N signals; registering zone …` line in tmux capture.
+
+_(All other previous items stable: #8 Humanized action delays shipped `e6e7b5a`; L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190`; #27 D1 migration closed `5663aa2`; #12-follow-up shipped `85d93f7`; #2 Layer 3 shipped `71df242`; #2 Layer 2 + #3 Swamp biome closed as redundant. Twenty-three items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6.)_
 
 ## Shipped — awaiting live verification
 
@@ -1007,11 +1025,9 @@ This section retained as the audit-trail entry; remove on next hygiene sweep.
 
 ---
 
-### 7d. Block-update watcher for runtime-placed structures
+### 7d. Block-update watcher for runtime-placed structures — 🛠️ MOVED TO IN-PROGRESS 2026-04-20
 
-**Status:** ⏳ not started • **Priority:** low (complements 7c — catches live placements as they happen)
-
-Listen to mineflayer's `blockUpdate` events, filter to player-placed (not world-generation), record `{player, block, x, y, z, timestamp}`. Cluster by proximity + time. Promote to protected zone after N placements within X blocks/Y minutes. Pairs well with 7c (startup heuristic) + live tracking.
+Moved to In-progress section above. Original fix sketch preserved there; reuses #7c's `PLAYER_CHARACTERISTIC_BLOCKS` + `_clusterPositions` + `_playerBaseAlreadyRegistered` + `_playerBaseZoneFromCenter` (no duplication).
 
 ### 8. Humanized action delays — 🛠️ MOVED TO IN-PROGRESS 2026-04-20
 
