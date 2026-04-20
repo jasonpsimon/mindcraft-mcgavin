@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-20. HEAD `ea48e1d` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-20. HEAD `b4f0190` on `origin/develop`. **Shipped 4/19:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I, OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i, BT-10j. **Verification pass 4/20:** nine items graduated to Recently completed (BT-10a, BT-10b, BT-10g, BT-10j, #22, #22b, #28 +fix, #29) based on log evidence across 22h live-run window. Twelve items still awaiting natural-event triggers (BT-10c/d/e/f/h/i, BT-7b, BT-7f, #7c, #23, #24, #25). **Shipped 4/20:** OPT-I (`9dd17a4`) — deleted dead first `setMovements(createMovements())` in `_impl_moveAway`; value was immediately overwritten by `goToGoal`'s own factory build, and the cheat-branch uses its own locally-scoped instance. **Shipped 4/20:** L1.4-wire BT 1 (`01a82b6`) — registered `!tillHere <seed_type>` and `!activate <block_type>` in actions.js; two previously-dead skills (`tillAndSow`, `activateNearestBlock`) now LLM-visible. **Shipped 4/20:** L1.4-wire BT 2 (`ea48e1d`) — protected-zone allowlist for `tillAndSow` via `bot._allowProtectedZoneOps` flag (BT-7b shape); `!tillHere` now works inside spawn / player-protected zones; LLM-issued `!placeBlock` / `!collectBlock` still blocked. **Shipped 4/20:** #12 Movements safety audit close-out (`b4f0190`) — added explicit `createMovements` JSDoc invariant + `scripts/check-movements-invariant.sh` lint script (greps `src/` for raw `new pf.Movements(bot)` outside the factory; exits non-zero on violation). Rule 7 perimeter now machine-checkable; #12 graduates — `digCost`/`placeCost` tuning tracked as low-priority follow-up. **2026-04-16 optimization-audit bundle closed: 6/6 (B/C/D/E/F/I).** OPT-F (`d16658b`) — extracted `_yawToCardinal(yaw) -> {dx,dz,name}` helper; 14-line block deduped across `digDown` and `digUp`. OPT-E (`85c9241`) — hoisted `scanForCaverns` `rockTypes` Set to module-scope `CAVERN_ROCK_TYPES`; single caller (`digDown`), behavior bit-for-bit identical. #21 L1 cleanup bundle (`e49c75c`) — 4 comment upgrades across modes.js / prompter.js / history.js explaining treat-as-air fallback (L1.1), NPC-only `promptGoalSetting` retention (L1.2), `use_context_builder` default pointer (L1.3), and `$MEMORY` branch dead-for-CB note (L1.4). Docs-only, zero behavior change. OPT-D (`178ebe2`) — hoisted `_isDangerous` block-name list to a module-level `Set`; O(1) `.has()` replaces per-call array allocation + O(n) `.includes` scan across 9 callsites. OPT-C (`9a7b7eb`) — deleted dead Movements block in `pickupNearbyItems` loop (`goToGoal` override made it a no-op; `canDig=false` intent already covered by non-destructive-first strategy). OPT-B (`9887d62`) — `goToGoal` now lazy-builds `destructiveMovements` only when non-destructive path lookup fails; happy-path calls pay for one `createMovements()` instead of two. #12 Stage 2 (`93d7986`) — last raw `new pf.Movements(bot)` callsite (`world.js:isClearPath`) now routes through the `createMovements()` factory; zero raw callers remain outside the factory definition. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,7 @@ _Last updated: 2026-04-20. HEAD `ea48e1d` on `origin/develop`. **Shipped 4/19:**
 
 ## In-progress
 
-_(empty — L1.4-wire BT 2 shipped `ea48e1d`; twenty items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
+_(empty — L1.4-wire BT 2 shipped `ea48e1d`; #12 Movements safety audit closed `b4f0190` (machine-checkable via `scripts/check-movements-invariant.sh`). Twenty items awaiting live verification on natural triggers. 2026-04-16 optimization-audit bundle closed at 6/6 (B/C/D/E/F/I).)_
 
 ## Shipped — awaiting live verification
 
@@ -1011,57 +1011,24 @@ Given world seed + MC version, regenerate each chunk deterministically and diff 
 - **Suffocation escape** — extend `self_preservation` to detect head-in-block (sand/gravel collapse) and dig up.
 - **Dimension safety** — if bot accidentally enters Nether or End via portal, retreat immediately. No dimension awareness currently.
 
-### 12. Movements safety audit — Rule 7 follow-through
+### 12-follow-up. Movements cost tuning — `digCost` / `placeCost`
 
-**Status:** 🟡 Stage 1 shipped (commit `e59a307` — `bot.collectBlock.movements` now safety-configured); full audit deferred • **Priority:** medium-high (bot safety; currently ~20 sites use raw pathfinder defaults)
+**Status:** ⏳ not started • **Priority:** low (polish; no known live bug) • **Source:** carried over from #12 Movements safety audit (close-out `b4f0190`, 2026-04-20) at JP's request.
 
-**Audit update 2026-04-15 (L2 findings):** full perimeter sweep confirmed 20+ raw-default callsites. Five are hot-path and should be prioritized before the broader refactor:
+**Context.** #12 closed with every `pf.Movements` instance now routing through `createMovements(bot)` (factory applies `_configureTerrainSafeMovements`, `maxDropDown=3` from BT-10j, and protected-zone `canDig=false` / empty scaffold Set). The original #12 fix sketch also proposed biasing the pathfinder against mining-through and over-placing via cost tuning — never shipped, captured here so it isn't lost.
 
-- `skills.js:426, 432` — enemyKite combat (bot chased into lava/cactus = unnecessary damage)
-- `skills.js:740` — breakBlockAt approach (target buried → straight-down shaft risk, same class as Stage-1 fix)
-- `skills.js:937, 943` — placeBlock approach (2 sites, same pattern as breakBlockAt)
-- `skills.js:2889, 2920, 2939, 3131, 3176` — moveAwayFromEntity / moveAwayFromPosition / avoidEnemies / activateNearestBlock / activateFarmland
-
-Other raw sites (`collectBlock:506`, `pickupNearbyItems:681`, `followPlayer:2824`) carry lower risk and are acceptable as "deferred to full audit." Stage 2 (the `createSafeMovements` helper) unblocks #17 (skills.js decomposition — the helper extraction is a natural first module boundary).
-
-Rule 7 (Complete the perimeter) calls for every `pf.Movements` instance in the codebase to be constructed via a shared helper so the safety invariant — `maxDropDown=3`, `canSwim=true`, `_configureTerrainSafeMovements`, sensible `digCost` — holds everywhere. Right now only `goToGoal` (for its two internal Movements objects) and `bot.collectBlock.movements` (as of Stage 1) apply the safer config. Every other `new pf.Movements(bot)` in `skills.js` uses raw pathfinder defaults.
-
-**Known raw-defaults callsites (grep output 2026-04-15):**
-
-- `world.js:397` — isClearPath (read-only, low risk)
-- `skills.js:426/432` — defendSelf (hostile follow, short-lived)
-- `skills.js:506` — collectBlock local movements (short-lived, already has ProtectedZone filter)
-- `skills.js:681` — breakBlockAt approach (short-lived)
-- `skills.js:740` — breakBlockAt internal retry (short-lived)
-- `skills.js:937/943` — goToPlayer (destructive path to player)
-- `skills.js:2783/2848/2851/2879/2898/3090/3135` — various pathfinder setup blocks
-- `skills.js:3493` — digDown cavern-path pre-check (non-destructive, OK)
-- `CollectBlock.js` (plugin) — fixed via Stage 1
-
-Short-lived and short-distance pathfinding (breakBlockAt approach, defendSelf, unstuck) carries less straight-shaft risk because targets are usually at bot height. The biggest risks were `collectBlock` (fixed) and potentially `goToPlayer` if the player is buried.
-
-**Fix sketch:**
-
-1. New `createSafeMovements(bot, opts = {})` helper in `skills.js`. Returns a `new pf.Movements(bot)` with safety defaults applied:
+**Proposed tuning (from original #12 sketch).**
 
 ```js
-const m = new pf.Movements(bot);
-m.maxDropDown = opts.maxDropDown ?? 3;
-m.canSwim = opts.canSwim ?? true;
-m.digCost = opts.digCost ?? 10;  // discourage mining-through
-m.placeCost = opts.placeCost ?? 2;
-if (opts.canDig !== undefined) m.canDig = opts.canDig;
-_configureTerrainSafeMovements(bot, m);
-return m;
+m.digCost = 10;    // discourage mining-through
+m.placeCost = 2;
 ```
 
-2. Route every `new pf.Movements(bot)` in `src/agent/library/skills.js` through `createSafeMovements(bot, {...})`. Per-site opts let callers override (e.g., `canDig=false` for non-destructive probes).
+Intent: make the pathfinder prefer walking around obstacles over breaking through them, and prefer a short detour over scaffolding. Today the factory leaves both at pathfinder defaults (1 and 1 respectively), so digging/placing ties with walking.
 
-3. Document the invariant in the helper's header — "No bare `new pf.Movements(bot)` anywhere in mindcraft-mcgavin code; use `createSafeMovements`."
+**Why low priority.** No observed incident. BT-10j's `maxDropDown=3` + the terrain-safe hazard-avoid list already handle the fall/lava/drowning cases that were the #12 motivation. `digCost` bias is a "bot feels more natural" polish, not a safety fix.
 
-4. Optional lint-style check (sibling to the 29-test classification harness): a script that greps `src/` for `new pf.Movements(bot)` outside `createSafeMovements` itself and fails if any are found.
-
-**Signals to watch:** no more straight-down digging during `!collectBlocks`, `!goToPlayer`, or any other pathfinder-driven command. Bot consistently uses staircases and walks around obstacles rather than mining through.
+**Acceptance sketch.** One-line additions inside `createMovements` after `maxDropDown = 3`. Consider `opts` overrides if any callsite genuinely wants mining-through (none known today). Verify via pathfinder telemetry: `[Path]` events should show more `walkaround` and fewer `dig` entries on the same terrain post-change.
 
 ### 2. Bot swim capabilities
 
@@ -1142,6 +1109,26 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 ---
 
 ## Recently completed
+
+### #12. Movements safety audit close-out (`b4f0190`, 2026-04-20)
+
+**Docs + lint sweep.** Rule 7 perimeter closure for pathfinder Movements is now machine-checkable. Graduated direct to Recently completed per CLAUDE.md ("Recently completed for pure refactors/docs/mechanical sweeps").
+
+**What shipped.** Two files, 39 insertions:
+- **`src/agent/library/skills.js`** — 4-line **Invariant** block added to `createMovements` JSDoc, naming the lint script and recording audit date: "no raw `new pf.Movements(bot)` anywhere in mindcraft-mcgavin outside this factory. Enforced by `scripts/check-movements-invariant.sh`. Audit #12 (2026-04-20) confirmed zero raw callsites in `src/`."
+- **`scripts/check-movements-invariant.sh`** — new 35-line bash script. `grep -rn 'new pf\.Movements' src/`, filters out comment lines (leading `*` or `//`) and the single factory line, non-zero exits on violation with remediation hint.
+
+**Stale-WB correction.** The pre-close-out to-do entry claimed ~20 raw callsites across `skills.js` and `world.js`. Current grep shows **zero** raw callsites outside the factory — all were migrated earlier (`93d7986` #12 Stage 2 routed `world.js:isClearPath` through the factory; BT-10j follow-ups consolidated the `skills.js` sites). The audit was functionally complete; only the invariant documentation + lint enforcement were missing. This close-out ships those.
+
+**Verification.**
+- `node --check src/agent/library/skills.js` passed post-patch.
+- `bash scripts/check-movements-invariant.sh` → `OK: no raw 'new pf.Movements' callsites outside createMovements factory.` (first run caught the new JSDoc comment line as a false-positive; script filter was tightened to skip leading-`*`/`//` comment lines before ship.)
+- No tmux restart needed — docs/tooling only, no runtime change.
+
+**Follow-up captured.** `digCost` / `placeCost` tuning from the original #12 fix sketch moved to low-priority to-do item "12-follow-up. Movements cost tuning" so it isn't lost. Values from the original plan (`digCost=10`, `placeCost=2`, intent: discourage mining-through) preserved verbatim.
+
+---
+
 
 ### #21. L1 cleanup bundle — 4 comment upgrades (`e49c75c`, 2026-04-20)
 
