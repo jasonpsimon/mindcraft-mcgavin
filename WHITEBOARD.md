@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `5f274f1`. Most recent ship 2026-04-18: self-prompter recoverable circuit-breaker + `stoppedReason` attribution + watchdog telemetry (see Recently completed). Prior nineteen ships on 2026-04-17: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
+- Branch: `develop` — HEAD `0da5c2d`. Most recent ship 2026-04-18: self-prompter recoverable circuit-breaker + `stoppedReason` attribution + watchdog telemetry (see Recently completed). Prior nineteen ships on 2026-04-17: eighteen observability items (BT-1 through BT-12, BT-3b, BT-7b, Goal lifecycle, BT-bundle(a/b/c)) + one migration-discovered bug fix (#26 phantom self_defense). Two-tier observability story complete: lifecycle layer (BT-7+BT-7b skills + Goal + BT-6 paths) sits underneath measurement layer (BT-5 AutoRecovery stats); BT-11 closes the prompt-construction counterpart alongside BT-4. Migration phase has nothing trigger-gated remaining. See Recently completed for per-item detail.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,7 +64,38 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_(empty)_
+### #33. Auto-craft basic-need items (starting with torches)
+
+**Status:** 🛠️ in progress 2026-04-20 • **Priority:** medium (closes known silent-skip in #5/#6 torch pipeline) • **Source:** concrete extraction from #9 ongoing theme
+
+**Motivating incident.** 2026-04-14: bot's #5/#6 underground torch-placement features silent-skipped because the bot had never crafted any torches. The placement logic ran, noted zero torches in inventory, and returned cleanly — no error, no recovery trigger. Classic Principle 1 gap: a mechanical decision ("I have coal + stick, I should make torches") left to an LLM that never reliably made it.
+
+**Scope (MVP).** Auto-craft torches on a periodic state-maintenance tick:
+- Condition: `torch_count < THRESHOLD` (e.g., 16) AND `coal` OR `charcoal` in inventory AND `stick` in inventory AND bot is not in a critical state.
+- Action: reuse `getCraftingPlan` + existing craft execution path to make one recipe output (4 torches). Repeat per tick until threshold satisfied or materials exhausted.
+- Gating: skip if `self_preservation` is firing, if HP/food critical, if bot is in combat, or if bot is mid-pathfind. Reuse existing state checks — no new gate logic.
+- Log prefix: `[AutoCraft]`. Emit one line per craft attempt: `[AutoCraft] torches low (N/16) + have coal+stick → crafting 4`.
+- Idempotent hook via reference-identity gate (`bot._autoCraftHooked`) — matches observability module pattern from CLAUDE.md.
+
+**Explicitly out-of-scope for this BT (candidates for follow-up):**
+- Auto-craft sticks from planks when stick count low.
+- Auto-craft tools at best tier inventory supports.
+- Auto-craft food-related items (cooked meat prep, etc.).
+- Config knobs for thresholds / recipe targets (hardcoded for MVP).
+
+**Survey before coding.** First commit is a research pass — inventory these before writing code:
+- `getCraftingPlan` call paths today: which command(s) invoke it, what input shape does it accept, does it auto-execute or just plan?
+- State-maintenance tick cadence: `self_preservation.update()` frequency, other `modes.js` update hooks that fire periodically.
+- Inventory query helpers: `countItem(bot, name)` or equivalent — don't reinvent.
+- Critical-state checks: how does `self_preservation` signal "currently firing a reflex"? What's the right predicate to gate on?
+- Rule 2 check: is there any existing auto-craft logic anywhere (AutoRecovery pattern, init-time craft, etc.)? If yes, extend it.
+
+**Acceptance (commit 2).**
+- `node --check` clean on any modified file.
+- Bot reboots clean on the new HEAD; StateTicker 1Hz; zero `[AutoCraft]` handler-failed lines in 30s of boot capture.
+- Live verification (commit 3 / natural trigger): bot acquires coal + sticks → `[AutoCraft] torches low (N/16) + have coal+stick → crafting 4` line appears in tmux capture; torch count in inventory increments; #5/#6 breadcrumb placement starts firing on subsequent `digDown` sweeps.
+
+**3-commit BT arc.** Commit 1 (this): WB → In-progress, pushed. Commit 2: survey + code ship. Commit 3: WB full-refresh → Shipped-awaiting-verification.
 
 ## Shipped — awaiting live verification
 
@@ -1193,7 +1224,7 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 - **Combat reflexes** — `self_defense` auto-equips best weapon (✅ partially via #4); program: strafe, block with shield, retreat at low health.
 - **Crafting plans** — auto-execute when prerequisites met (already have `getCraftingPlan`, just need auto-trigger).
 - **Pattern-matched chat responses** — common greetings, status queries → canned. Only escalate to LLM for unusual input.
-- **Auto-craft basic-need items** — torches when coal+stick available, sticks when oak_planks low, tools (best tier inventory supports). _(Surfaced 2026-04-14: bot's #5/#6 torch features silent-skipped because bot hadn't crafted any torches.)_
+- **Auto-craft basic-need items** — torches when coal+stick available, sticks when oak_planks low, tools (best tier inventory supports). _(Surfaced 2026-04-14: bot's #5/#6 torch features silent-skipped because bot hadn't crafted any torches. **Torches extracted as #33 in In-progress 2026-04-20** — concrete BT for the first item in this candidate list; sticks/tools follow-ups deferred.)_
 
 ---
 
