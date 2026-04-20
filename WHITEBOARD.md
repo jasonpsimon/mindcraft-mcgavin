@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `0d8029b` on `origin/develop`. **In-progress:** BT-10i — pre-fight equip polish (shield to offhand before combat, filter low-durability weapons out of equipHighestAttack pick). **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h. Nineteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `30de1f4` on `origin/develop`. **Shipped today:** #22, #28 (+fix `b57a097`), #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c (+fix `e1f47ac`), BT-10d, BT-10e, BT-10f, BT-10g, BT-10h, BT-10i. **BT-10i:** pre-fight equip polish — shield to offhand before combat loop, <5% durability filter in equipHighestAttack pick. Twenty items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,20 +66,45 @@ _Last updated: 2026-04-19. HEAD `0d8029b` on `origin/develop`. **In-progress:** 
 
 ## In-progress
 
-### BT-10i. Pre-fight equip polish
+_(empty — BT-10i shipped `30de1f4`; twenty items awaiting live verification on next natural events.)_
 
-**Goal.** Two small combat-prep upgrades inside `_impl_defendSelf` / `equipHighestAttack` in `src/agent/library/skills.js`. No new modes, no new state, no pathfinder changes.
+## Shipped — awaiting live verification
+
+### BT-10i. Pre-fight equip polish (`30de1f4`, 2026-04-19)
+
+**Status:** ✅ shipped — **awaiting live verification** (needs bot to engage a hostile with a shield in inventory — observe shield in offhand before first swing; also verify near-broken weapon is skipped when a healthy alternative exists).
+
+**What shipped.** One file (`src/agent/library/skills.js`), two functions (`equipHighestAttack`, `_impl_defendSelf`). 27 insertions, 0 deletions. Zero new imports, zero new modes.
 
 **Two deltas:**
 
-1. **Shield to offhand before combat.** Once at the top of `_impl_defendSelf` (before the enemy-search loop), if the inventory contains a shield and the offhand isn't already a shield, `await bot.equip(shield, 'off-hand')`. One-shot per defendSelf call, not per iteration. Errors logged and swallowed (same policy as `_equipBestToolFor`).
-2. **Durability filter in `equipHighestAttack`.** Before sorting by `attackDamage`, drop weapons with <5% remaining durability (`(maxDurability - item.durabilityUsed) / maxDurability < 0.05`). Don't pick a sword that'll shatter mid-swing and leave the bot empty-handed. If filtering leaves zero weapons, fall back to the original unfiltered list (better to swing a near-broken weapon than fists).
+1. **`equipHighestAttack` durability filter.** Before the `attackDamage` descending sort, filter out weapons with `(maxDurability - durabilityUsed) / maxDurability < 0.05`. If filtering leaves zero weapons, fall back to the original unfiltered list (swinging a near-broken weapon beats fists). Defensive: if `maxDurability` or `durabilityUsed` is missing/non-numeric, treat as fine (don't accidentally drop a perfectly good item due to a schema quirk).
+2. **`_impl_defendSelf` shield-to-offhand.** One-shot block at the top of the `try`, before the enemy-search loop: `bot.inventory.items().find(it => it.name === 'shield')` — if found and offhand slot (index 45) isn't already that item, `await bot.equip(_shield, 'off-hand')`. Errors logged via `console.warn` and swallowed (same policy as `_equipBestToolFor`).
 
-**Blast radius.** One file (`src/agent/library/skills.js`), two functions (`equipHighestAttack`, `_impl_defendSelf`). No changes to the fight loop itself, no changes to pathfinder or pvp wiring, no changes to #28 fix guards.
+**Why once-per-call, not per-iteration.** Mineflayer's pvp handles shield-blocking when offhand is equipped; re-equipping every 500ms would be wasteful and would re-trigger on every fight-loop pass. The weapon-side early-return (`bot.heldItem?.type !== weapon.type`) already rate-limits main-hand equips cheaply.
 
-**Out of scope.** Enchantment weighting (Sharpness/Smite tiers). Per-iteration rate-limiting of `equipHighestAttack` (existing `bot.heldItem?.type !== weapon.type` early-return already handles the common case). Autocrafting a shield if none exists.
+**Why `inventory.slots[45]` for offhand.** Mineflayer exposes the offhand slot at index 45 (standard Minecraft slot numbering: 0-8 crafting, 9-35 main inventory, 36-44 hotbar, 45 offhand). No cleaner API for "what's in offhand" that works in all mineflayer versions we target.
 
-## Shipped — awaiting live verification
+**Blast radius.**
+- Two functions touched, both localized. No pathfinder changes, no mutex changes, no new listeners, no new state on the bot.
+- Fight loop and pvp wiring untouched — shield just shows up in the offhand before the loop starts.
+- #28 fix guards (`holder === 'defendSelf'`, `bot.pvp?.target`) unaffected: shield equip happens before the pvp engagement begins, so mutex holder is still `defendSelf` throughout.
+
+**Guardrails.**
+- Shield equip wrapped in its own try/catch — an equip failure (inventory full, offhand locked) is logged once and combat continues bare-offhand.
+- Durability filter defensive-default is "assume healthy" when either `maxDurability` or `durabilityUsed` is missing — avoids dropping otherwise-usable weapons due to schema inconsistency.
+- Empty-inventory path unchanged: `if (weapons.length === 0) return;` still runs first, so the durability filter only sees a non-empty list.
+
+**Out of scope.**
+- Enchantment weighting (Sharpness/Smite tier preference). The attackDamage field already reflects base damage; enchantments would need NBT parsing and tier mapping. Deferred.
+- Autocrafting a shield if none exists. Similar to the BT-ReplaceArmor pattern but more invasive — needs a crafting-table proximity check and planks+iron availability check. Deferred.
+- Moving `equipHighestAttack` out of the fight-loop inner call. The early-return guard is already cheap enough in the common case (weapon unchanged between iterations).
+
+**Verification hooks.**
+- Combat with a shield-in-inventory bot: expect main-hand swap to best weapon AND offhand to `shield` before first swing. Observable in state-stream (`equipped.mainHand` / `equipped.offHand`) and `tmux` `[Skill] name=defendSelf` lifecycle line.
+- Combat with a near-broken sword + healthy fallback: expect `bot.heldItem` to be the fallback, not the near-broken sword. Same observable.
+
+---
 
 ### BT-10h. Dimension-aware survival tuning (`8956d33`, 2026-04-19)
 
