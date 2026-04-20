@@ -2,7 +2,7 @@
 
 Digital workspace for mindcraft-mcgavin bot development. Holds current state, active work, to-do queue, recent history, and known-but-deferred issues. Update freely as work lands — this is meant to be edited, not preserved.
 
-_Last updated: 2026-04-19. HEAD `cd39540` on `origin/develop`. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d, BT-10e (`cd39540`) — shield auto-raise: offhand shield + hostile within 16 → `bot.activateItem(true)`; symmetric clear on threat-gone or shield-unequipped. Fifteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
+_Last updated: 2026-04-19. HEAD `134b34f` on `origin/develop`. **In-progress:** BT-10f — creeper proximity evade (sub-item of #10). Creeper fuse is ≈1.5s from within 3 blocks; vanilla combat shoots back but the bot is often already dead. Back off FIRST, fight second. **Shipped today:** #22, #28, #22b, #23, #24, #29, #25, #7c, OPT-H, OPT-I (live verified), OPT-J, BT-7b, BT-7f, BT-10a, BT-10b, BT-10c, BT-10d, BT-10e. Fifteen items awaiting live verification. Prior ship: **Self-prompter recoverable circuit-breaker** (2026-04-18)._
 
 ---
 
@@ -66,7 +66,47 @@ _Last updated: 2026-04-19. HEAD `cd39540` on `origin/develop`. **Shipped today:*
 
 ## In-progress
 
-_(empty — BT-10e shipped `cd39540`; fifteen items awaiting live verification on next natural events.)_
+### BT-10f. Creeper proximity evade (sub-item of #10 survival hardening)
+
+**Status:** in-progress (code phase) • **Priority:** high (single creeper blast can delete a session's worth of work — HP gone, inventory scattered, terrain wrecked)
+
+**Problem.** Creepers fuse in ≈1.5 seconds once the bot enters the 3-block range. Vanilla combat shoots back but usually too late — the bot is inside the blast radius when the creeper ignites. The deterministic fix is spatial: back off BEFORE combat attempts to shoot.
+
+**Design (extend existing `self_preservation`).**
+
+1. **New branch placed AFTER BT-10d ranged-close.** Creepers aren't ranged-hostile-named and aren't clean melee targets; they need their own branch.
+2. **Gate:** creeper within `5` blocks, `bot.health >= 6`, `!bot._creeperEvadeActive`. The 5-block trigger gives one block of margin past the 3-block fuse zone + 1-block travel lag.
+3. **Action:** `execute()` → `skills.moveAwayFromEntity(bot, creeper, 8)`. 8 blocks is safely outside creeper's 3-block blast radius (TNT-powered is 7). Plus `say(agent, 'Creeper! Backing off!')`.
+4. **Latch clear:** top-of-update group. Clear when (a) no creeper within 10, OR (b) nearest creeper distance > 8 (we got out), OR (c) HP<6 (hand-off to BT-10b retreat).
+
+**Files.**
+- `src/agent/modes.js` — enhance `self_preservation.update()`. Single-site edit. No new imports.
+
+**Blast radius.**
+- One mode. Reuses `skills.moveAwayFromEntity` (same primitive BT-10b uses) — battle-tested pathfinder vector math.
+- Does NOT disable combat's later attempt to shoot the creeper — once the bot is at 8 blocks, combat can ranged-attack safely.
+- Interaction with BT-10d: creeper is not in BT-10d's name allowlist, so no conflict. Both can route the bot simultaneously toward their respective targets (different entities, different goals) — but latch gates mean only one `execute()` fires per branch per episode.
+
+**Guardrails.**
+- Name-filter on `creeper` exactly (not `charged_creeper` edge case — still name `creeper` in mineflayer).
+- HP≥6 gate hands off to BT-10b under duress.
+- Latch prevents re-pathing every tick.
+- Two-sided clear (no-creeper vs. distance>8) prevents oscillation at the 5-block boundary.
+
+**Rule 7 audit.** Single perimeter: `self_preservation.update()`. `bot._creeperEvadeActive` joins the latch family. No fan-out.
+
+**Skip (explicit).**
+- Shooting creepers at range: combat's job, not self_preservation's.
+- Creeper-kiting (hit-and-run loops): combat-loop territory.
+- Cat-proximity de-aggro (cats scare creepers in vanilla): wouldn't hurt, but too niche for a reflex.
+- Charged creeper extra-distance (they have ~2× blast radius): same 8-block retreat is still outside charged blast (≈6 radius). Acceptable.
+
+**Success signal (live verification).**
+- Creeper walks within 5 blocks at HP≥6 → `[Survival] creeper-evade dist=4.8` line; `Creeper! Backing off!` chat; pathfinder routes away from creeper.
+- Bot reaches 8+ blocks → `[Survival] creeper-evade cleared dist=8.2`; latch cleared; combat can engage if desired.
+- HP<6 mid-retreat → cleared + BT-10b takes over next tick.
+- Creeper gone (died/despawned) → cleared dist=none.
+- Skeleton at 5 blocks, no creeper → branch does NOT fire.
 
 
 ## Shipped — awaiting live verification
