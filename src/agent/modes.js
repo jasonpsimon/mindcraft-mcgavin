@@ -75,6 +75,27 @@ const modes_list = [
                     bot._suffocationEscapeActive = false;
                 }
             }
+
+            // BT-10d (2026-04-19): ranged-evade latch clear. Clears when no
+            // ranged hostile remains within 20 blocks OR nearest ranged is
+            // already within 5 (we closed the gap, melee combat takes over)
+            // OR HP has dropped below 6 (hand-off to BT-10b retreat).
+            if (bot._rangedEvadeActive) {
+                let nearestRangedDist = Infinity;
+                try {
+                    const rangedNames = ['skeleton', 'stray', 'pillager'];
+                    const h = world.getNearestEntityWhere(
+                        bot,
+                        e => mc.isHostile(e) && rangedNames.includes(e.name),
+                        20
+                    );
+                    if (h) nearestRangedDist = bot.entity.position.distanceTo(h.position);
+                } catch (_) { /* ignore */ }
+                if (nearestRangedDist === Infinity || nearestRangedDist <= 5 || bot.health < 6) {
+                    console.log(`[Survival] ranged-close cleared dist=${nearestRangedDist === Infinity ? 'none' : nearestRangedDist.toFixed(1)} hp=${bot.health.toFixed(1)}`);
+                    bot._rangedEvadeActive = false;
+                }
+            }
             // Drowning check: head in water OR oxygen dropping while submerged.
             // Always hold jump when drowning, even during an active pathfind —
             // mineflayer tolerates setControlState('jump', true) while pathfinder
@@ -265,6 +286,45 @@ const modes_list = [
                             await skills.moveAwayFromEntity(bot, target, 16);
                         } catch (_) { /* ignore — latch stays set until HP recovers */ }
                     });
+                }
+            }
+            // BT-10d (2026-04-19): ranged-attacker close-distance reflex.
+            // Fires when a skeleton/stray/pillager is within [6, 20] blocks
+            // and the bot is healthy (HP>=6). Closes to 4 blocks so the
+            // existing melee combat takes over and the kite is broken. Melee
+            // hostiles are not handled here — self_defense already does the
+            // right thing at close range. Lower bound of 6 avoids fighting
+            // combat's own target-tracking. Latch-gated via _rangedEvadeActive.
+            else if (bot.health >= 6 && !bot._rangedEvadeActive) {
+                let ranged = null;
+                try {
+                    const rangedNames = ['skeleton', 'stray', 'pillager'];
+                    ranged = world.getNearestEntityWhere(
+                        bot,
+                        e => mc.isHostile(e) && rangedNames.includes(e.name),
+                        20
+                    );
+                } catch (_) { /* ignore */ }
+                if (ranged) {
+                    const dist = bot.entity.position.distanceTo(ranged.position);
+                    if (dist >= 6) {
+                        bot._rangedEvadeActive = true;
+                        console.log(`[Survival] ranged-close type=${ranged.name} dist=${dist.toFixed(1)}`);
+                        say(agent, `Closing on ${ranged.name}!`);
+                        const target = ranged;
+                        execute(this, agent, async () => {
+                            try {
+                                const pos = target.position;
+                                await skills.goToPosition(
+                                    bot,
+                                    Math.floor(pos.x),
+                                    Math.floor(pos.y),
+                                    Math.floor(pos.z),
+                                    4
+                                );
+                            } catch (_) { /* latch stays set; top-of-update clear handles exit */ }
+                        });
+                    }
                 }
             }
             else if (agent.isIdle()) {
