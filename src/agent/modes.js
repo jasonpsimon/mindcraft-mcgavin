@@ -244,6 +244,114 @@ const modes_list = [
                 }
             }
 
+            // BT-#2-follow-up (2026-04-20): water-breathing potion auto-use.
+            // Preemptive drown defense — fires while oxygen is still comfortable
+            // (threshold 14 by default, configurable per profile) so the drink
+            // animation completes before BT-10g's reactive ≤10 surface-and-jump
+            // reflex would kick in. Layer 3 turtle-helmet (above) handles the
+            // common case; this layer handles the "no turtle helmet, but I have
+            // potions" fallback and the "long dive on purpose" case.
+            //
+            // Selection priority (Rule 1 table):
+            //   1. splash water_breathing — self-throw aimed down, no offhand
+            //      contention window, instant.
+            //   2. drinkable water_breathing — offhand swap → activateItem(true)
+            //      → wait 1700ms (32-tick drink animation + buffer) → restore
+            //      prior offhand. Mainhand is left untouched so tools/weapons
+            //      stay ready.
+            //
+            // Offhand contention with BT-10e shield-raise: both want slot 45.
+            // Skip-guard checks _shieldRaiseActive — if a threat is near, the
+            // shield wins (drowning is slower than a creeper). _potionDrinking
+            // latch prevents shield-raise from stomping mid-animation.
+            //
+            // Latches:
+            //   _potionDrinking       — true during 1.7s drink animation
+            //   _waterBreathingActive — true while effect should still be live;
+            //                           cleared after ~170s so we can re-dose
+            //                           before a base (180s) potion expires.
+            //
+            // Lingering potions, threat-aware splash angling, and stacking
+            // other effects (Night Vision, etc.) deliberately not handled —
+            // simple reflex first, expand later if observability shows need.
+            if (!bot._waterBreathingActive && !bot._potionDrinking && !bot._shieldRaiseActive
+                    && bot.entity.isInWater && typeof bot.oxygenLevel === 'number') {
+                // Threshold 14 = ~70% oxygen. Comfortably above BT-10g's
+                // reactive ≤10 surface-and-jump threshold so the 1.6s drink
+                // animation finishes with margin. Hardcoded for now; promote
+                // to profile config if playtest shows playstyle variation.
+                if (bot.oxygenLevel <= 14) {
+                    // isWaterBreathingPotion: handles both 1.20.5+ components and
+                    // legacy NBT shapes. Accepts 'water_breathing', 'long_water_breathing',
+                    // 'strong_water_breathing' (latter is technically invalid but
+                    // some server plugins emit it — be liberal in what we accept).
+                    const isWBPotion = (item) => {
+                        if (!item) return false;
+                        try {
+                            // Modern: components.minecraft:potion_contents.potion
+                            const comps = item.components;
+                            if (comps) {
+                                const pc = Array.isArray(comps)
+                                    ? comps.find(c => c && c.type && c.type.toString().endsWith('potion_contents'))
+                                    : comps['minecraft:potion_contents'] || comps.potion_contents;
+                                const pid = pc && (pc.data ? pc.data.potion_id ?? pc.data.potion : pc.potion);
+                                if (typeof pid === 'string' && pid.includes('water_breathing')) return true;
+                            }
+                            // Legacy: nbt.value.Potion.value = "minecraft:water_breathing"
+                            const pot = item.nbt && item.nbt.value && item.nbt.value.Potion;
+                            if (pot && typeof pot.value === 'string' && pot.value.includes('water_breathing')) return true;
+                        } catch (_) { /* malformed NBT — treat as no-match */ }
+                        return false;
+                    };
+                    const items = bot.inventory.items();
+                    const splash = items.find(i => i.name === 'splash_potion' && isWBPotion(i));
+                    const drink  = !splash ? items.find(i => i.name === 'potion' && isWBPotion(i)) : null;
+                    if (splash) {
+                        // Splash path: aim down, equip mainhand, throw. Mineflayer
+                        // sends use_item with whatever mainhand held item is current,
+                        // so a quick equip+activate is all we need. We don't wait —
+                        // packet fires instantly and the cloud hits us immediately.
+                        bot._potionDrinking = true; // reuse latch to block shield-raise briefly
+                        bot.lookAt(bot.entity.position.offset(0, -1, 0), true).then(() => {
+                            return bot.equip(splash, 'hand');
+                        }).then(() => {
+                            bot.activateItem(); // mainhand throw
+                            bot._waterBreathingActive = true;
+                            setTimeout(() => { bot._waterBreathingActive = false; }, 170000);
+                            console.log(`[Survival] potion_splash water_breathing oxy=${bot.oxygenLevel}`);
+                        }).catch(err => {
+                            console.log('[Survival] potion_splash failed: ' + err.message);
+                        }).finally(() => {
+                            bot._potionDrinking = false;
+                        });
+                    } else if (drink) {
+                        // Drink path: swap offhand → activate offhand → 1.7s wait
+                        // → restore. Mainhand stays untouched (weapon stays ready).
+                        const priorOffhand = bot.inventory.slots[45];
+                        bot._potionDrinking = true;
+                        bot.equip(drink, 'off-hand').then(() => {
+                            bot.activateItem(true); // offhand drink
+                            setTimeout(() => {
+                                bot._waterBreathingActive = true;
+                                setTimeout(() => { bot._waterBreathingActive = false; }, 170000);
+                                // Restore prior offhand if we had one (and the slot
+                                // isn't already something else due to inventory churn).
+                                const restore = priorOffhand
+                                    && bot.inventory.items().find(i => i.type === priorOffhand.type);
+                                if (restore) {
+                                    bot.equip(restore, 'off-hand').catch(() => { /* best effort */ });
+                                }
+                                bot._potionDrinking = false;
+                                console.log(`[Survival] potion_drink water_breathing oxy=${bot.oxygenLevel}`);
+                            }, 1700);
+                        }).catch(err => {
+                            bot._potionDrinking = false;
+                            console.log('[Survival] potion_drink failed: ' + err.message);
+                        });
+                    }
+                }
+            }
+
             // BT-10e (2026-04-19): shield auto-raise state maintenance.
             // Runs at the top of update() independently of the else-if chain
             // below — this is state maintenance, not an alternative action.
