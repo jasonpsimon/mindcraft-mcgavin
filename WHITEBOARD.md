@@ -1090,20 +1090,6 @@ Items grouped by status (🟡 Partial → ⏳ Not started → 🔁 Ongoing). Wit
 
 ---
 
-**🟡 Partial**
-
-### 17. `skills.js` decomposition (long-term)
-
-**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
-
-`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
-
-**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
-
-Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
-
----
-
 **⏳ Not started**
 
 ### 30. Bot modes: Auto / Assistant / Survivor
@@ -1242,7 +1228,21 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 
 ## Known issues (deferred — out of scope for current to-do)
 
-_Empty. All prior entries either shipped as fixes or migrated into more accurate to-do items. Add new entries here only when a current concern can't yet be addressed._
+### #17. `skills.js` decomposition — deferred (2026-04-21)
+
+**Status:** known issue, not actively planned • **Origin:** audit finding L6.1
+
+`src/agent/library/skills.js` is ~5,500 lines and remains 4× the next-largest file. Every perimeter-audit (Rule 7) still walks the full file, and every new skill lands here by default. The pain is real but slow-burn.
+
+**Why deferred.** Considered a staged movement extraction 2026-04-21 (movements.js scaffold → goTo* family → escape*). Judged unsafe given: (a) movement is the hottest path in the bot, (b) the nested hold-point stack (wrapSkill → withBotLock → spawn-protection → escape zones) spans this file and would need to be split across a new file boundary while still evolving, (c) multi-BT surgery on tangled code without a visual call-graph tool puts the verification burden on Claude alone, which JP flagged as exceeding current tooling safety margin.
+
+**Revisit when any of these hit:**
+- A visual call-graph / flowchart tool is available for diff review.
+- skills.js grows past ~8,000 lines.
+- A specific audit gets concretely blocked by file scope (not just "the grep is long").
+- #12 Stage 2's `createMovements` extraction point demands follow-through.
+
+**Down-payment option if the pain acute-flares before a full revisit:** extract only pure-helper leaves (`_isDangerous`, `autoBreakStuckPlant`) in one tiny BT, no `_core.js`, no goTo* touched.
 
 ---
 
