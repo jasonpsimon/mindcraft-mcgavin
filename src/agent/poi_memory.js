@@ -494,3 +494,11 @@ function _onBlockUpdate(agent, oldBlock, newBlock) {
         _stats.watcher_promoted++;
     }
 }
+
+// ---- Oracle integration (BT-7f) ---------------------------------------------
+// Public wrapper used by src/oracle/structure_oracle.js. The 'oracle' source
+// label tags records so downstream consumers can distinguish cubiomes-resolved
+// POIs from scanner/village_scanner/watcher-origin records.
+export function registerFromOracle(agent, record) {
+    return _register(agent, record, 'oracle');
+}

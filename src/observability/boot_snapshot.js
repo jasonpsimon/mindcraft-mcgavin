@@ -148,6 +148,27 @@ function _settingsHash(settings) {
  * @param {object} settings  The full resolved settings object.
  * @returns {object}  The snapshot record (useful for tests / callers).
  */
+/**
+ * Recursively strip any key matching /seed/i from an object before it gets
+ * serialized to disk or to a log line. BT-7f (Structure Oracle) introduces
+ * a path where the world seed could transitively appear inside settings —
+ * this redaction ensures the seed value never lands in boot-snapshot.json.
+ */
+function _redactSensitive(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(_redactSensitive);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+        if (/seed/i.test(k)) {
+            out[k] = '[REDACTED]';
+        } else {
+            out[k] = _redactSensitive(v);
+        }
+    }
+    return out;
+}
+
 export function captureBootSnapshot(agent, settings) {
     const prompter = agent?.prompter;
     const profile = prompter?.profile ?? {};
@@ -181,7 +202,7 @@ export function captureBootSnapshot(agent, settings) {
         settings_hash: _settingsHash(settings),
         // Full resolved settings are dumped to the JSON file for bug-report
         // reproducibility. Omitted from the log line (too large).
-        settings: settings,
+        settings: _redactSensitive(settings),
     };
 
     // --- Structured log line --------------------------------------------

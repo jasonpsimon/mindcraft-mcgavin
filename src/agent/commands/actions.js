@@ -2,6 +2,7 @@ import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { autoDiscard } from '../../utils/inventory_utils.js';
+import { getStructuresNear } from '../../oracle/structure_oracle.js';
 
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
@@ -711,6 +712,24 @@ export const actionsList = [
             const goal = agent.self_prompter?.isStopped() ? null : agent.self_prompter?.prompt;
             const result = await autoDiscard(agent.bot, slots_needed, goal);
             return result;
+        }
+    },
+    {
+        name: '!findStructure',
+        description: "Use the seed-aware Structure Oracle (cubiomes) to resolve the nearest structure of a given type from the bot's current position. Returns coords and distance. Oracle must be enabled and world seed discoverable. Supported types: village, outpost, ancient_city, mansion, monument, trail_ruins, fortress, bastion, end_city, stronghold, igloo, swamp_hut, jungle_temple, desert_pyramid, shipwreck, ocean_ruin, ruined_portal, trial_chambers.",
+        params: {
+            'structure_type': { type: 'string', description: 'Structure type to find (e.g. "village", "ancient_city").' }
+        },
+        perform: async function (agent, structure_type) {
+            const bot = agent.bot;
+            const x = Math.floor(bot.entity.position.x);
+            const z = Math.floor(bot.entity.position.z);
+            const results = getStructuresNear(x, z, 16, [structure_type]);
+            if (!results || results.length === 0) {
+                return `Oracle could not resolve a nearby '${structure_type}'. The oracle may be disabled (world seed unavailable) or the type name may be unsupported.`;
+            }
+            const r = results[0];
+            return `Nearest ${r.subtype} is at x=${r.x}, z=${r.z} (${r.distance} blocks away).`;
         }
     },
 ];

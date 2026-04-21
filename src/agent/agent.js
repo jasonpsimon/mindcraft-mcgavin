@@ -31,6 +31,7 @@ import { hookPathTelemetry, configurePathTelemetry } from '../observability/path
 import { hookPlacementTracker, configurePlacementTracker } from '../observability/placement_tracker.js';
 import { hookDoorTracker, configureDoorTracker } from '../observability/door_tracker.js';
 import { hookPoiMemory, configurePoiMemory, getPoiSnapshot } from './poi_memory.js';
+import { hookOracle, configureOracle, getOracleSnapshot } from '../oracle/structure_oracle.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -383,6 +384,22 @@ export class Agent {
                     }
                 } catch (poiErr) {
                     console.warn('[POI] failed to start:', poiErr.message);
+                }
+
+                // BT-7f: Seed-aware Structure Oracle (cubiomes-WASM).
+                // Default-on (profile-gated); reads level.dat to resolve structures
+                // deterministically. Graceful-disables if seed/level.dat unavailable.
+                try {
+                    const oracleSettings = settings.structure_oracle || {};
+                    if (this.prompter.profile.worldPath && !oracleSettings.worldPath) {
+                        oracleSettings.worldPath = this.prompter.profile.worldPath;
+                    }
+                    if (this.prompter.profile.enableStructureOracle !== false) {
+                        configureOracle(oracleSettings);
+                        hookOracle(this);
+                    }
+                } catch (oracleErr) {
+                    console.warn('[Oracle] failed to start:', oracleErr.message);
                 }
 
                 // Vacate any protected zone before anything else happens.

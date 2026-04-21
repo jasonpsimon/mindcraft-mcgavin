@@ -251,6 +251,6 @@
             {"role": "assistant", "content": "```js\nconst position = world.getPosition(bot);\nconst startX = position.x;\nconst startY = position.y;\nconst startZ = position.z;\nconst width = 7;\nconst depth = 7;\nconst height = 4;\n\n// Build front wall (z = startZ)\nfor (let x = startX; x < startX + width; x++) {\n  for (let y = startY; y < startY + height; y++) {\n    await skills.placeBlock(bot, 'oak_planks', x, y, startZ);\n  }\n}\n\n// Build back wall (z = startZ + depth - 1)\nfor (let x = startX; x < startX + width; x++) {\n  for (let y = startY; y < startY + height; y++) {\n    await skills.placeBlock(bot, 'oak_planks', x, y, startZ + depth - 1);\n  }\n}\n\n// Build left wall (x = startX)\nfor (let z = startZ; z < startZ + depth; z++) {\n  for (let y = startY; y < startY + height; y++) {\n    await skills.placeBlock(bot, 'oak_planks', startX, y, z);\n  }\n}\n\n// Build right wall (x = startX + width - 1)\nfor (let z = startZ; z < startZ + depth; z++) {\n  for (let y = startY; y < startY + height; y++) {\n    await skills.placeBlock(bot, 'oak_planks', startX + width - 1, y, z);\n  }\n}\n\n// Build floor (y = startY)\nfor (let x = startX; x < startX + width; x++) {\n  for (let z = startZ; z < startZ + depth; z++) {\n    await skills.placeBlock(bot, 'oak_planks', x, startY, z);\n  }\n}\n\n// Build ceiling (y = startY + height - 1)\nfor (let x = startX; x < startX + width; x++) {\n  for (let z = startZ; z < startZ + depth; z++) {\n    await skills.placeBlock(bot, 'oak_planks', x, startY + height - 1, z);\n  }\n}\n```"}
         ]
         
-    ]
-
+    ],
+    "enableStructureOracle": true
 }
