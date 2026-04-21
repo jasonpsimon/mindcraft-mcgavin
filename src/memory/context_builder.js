@@ -95,6 +95,14 @@ export class ContextBuilder {
             stats.sections.nearbyBlocks = nearbyStr.length + 1;
         }
 
+        // --- PRIORITY 3.6: Known POIs (BT-31 — auto-captured world features) ---
+        const poiStr = params.poiContext || '';
+        if (poiStr.length > 0) {
+            sections.push(poiStr + '\n');
+            usedChars += poiStr.length + 1;
+            stats.sections.poiContext = poiStr.length + 1;
+        }
+
         // --- PRIORITY 4: Command docs (goal-filtered, high value) ---
         const cmdBudget = Math.min(
             this.minCommands + Math.floor((this.availableChars - usedChars) * 0.25),

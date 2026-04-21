@@ -427,6 +427,15 @@ export class Prompter {
                 console.warn('[ContextBuilder] nearbyBlocks failed:', e.message);
             }
 
+            // BT-31: POI context — top-N nearest auto-captured POIs in current dimension.
+            let poiContext = '';
+            try {
+                const poiMod = await import('../agent/poi_memory.js');
+                poiContext = poiMod.getPoiContext(agent) || '';
+            } catch (e) {
+                console.warn('[ContextBuilder] poiContext failed:', e.message);
+            }
+
             const goalQueue = agent.self_prompter.goalQueue || [];
             const { systemPrompt, stats } = this.contextBuilder.build({
                 botName: agent.name,
@@ -435,6 +444,7 @@ export class Prompter {
                 action,
                 deltaState,
                 nearbyBlocks,
+                poiContext,
                 turns: messages,
                 commandDocs,
                 episodicMemory,
@@ -444,7 +454,7 @@ export class Prompter {
                 profile: this.profile
             });
 
-            console.log(`[ContextBuilder] ${stats.usedTokens}/${Math.ceil(this.contextBuilder.availableChars / this.contextBuilder.charsPerToken)} tokens | conv:${stats.sections.conversation || 0} cmd:${stats.sections.commands || 0} mem:${stats.sections.memory || 0} ex:${stats.sections.examples || 0} nb:${stats.sections.nearbyBlocks || 0} | SP:${isSelfPrompting}`);
+            console.log(`[ContextBuilder] ${stats.usedTokens}/${Math.ceil(this.contextBuilder.availableChars / this.contextBuilder.charsPerToken)} tokens | conv:${stats.sections.conversation || 0} cmd:${stats.sections.commands || 0} mem:${stats.sections.memory || 0} ex:${stats.sections.examples || 0} nb:${stats.sections.nearbyBlocks || 0} poi:${stats.sections.poiContext || 0} | SP:${isSelfPrompting}`);
             return systemPrompt;
         } catch (err) {
             console.warn('[ContextBuilder] Failed, falling back to replaceStrings:', err.message);

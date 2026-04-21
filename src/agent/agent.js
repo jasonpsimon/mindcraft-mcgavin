@@ -30,6 +30,7 @@ import { DamageStream } from '../observability/damage_stream.js';
 import { hookPathTelemetry, configurePathTelemetry } from '../observability/path_telemetry.js';
 import { hookPlacementTracker, configurePlacementTracker } from '../observability/placement_tracker.js';
 import { hookDoorTracker, configureDoorTracker } from '../observability/door_tracker.js';
+import { hookPoiMemory, configurePoiMemory, getPoiSnapshot } from './poi_memory.js';
 import { Priority } from './generation_lock.js';
 import { withBotLock } from './bot_mutex.js';
 import * as skills from './library/skills.js';
@@ -367,6 +368,21 @@ export class Agent {
                     }
                 } catch (dtErr) {
                     console.warn('[Doors] failed to start:', dtErr.message);
+                }
+
+                // BT-31 (2026-04-20): POI location memory. Two-tier detection
+                // (60s scanner + blockUpdate watcher). Stamps villages and
+                // player_base zones from bot.protectedZones (no duplication),
+                // plus signature-block scan for portals/beacons/structures.
+                // Idempotent hook; safe on soft reconnect.
+                try {
+                    const poiSettings = settings.poi_memory || {};
+                    configurePoiMemory(poiSettings);
+                    if (poiSettings.enabled !== false) {
+                        hookPoiMemory(this);
+                    }
+                } catch (poiErr) {
+                    console.warn('[POI] failed to start:', poiErr.message);
                 }
 
                 // Vacate any protected zone before anything else happens.
