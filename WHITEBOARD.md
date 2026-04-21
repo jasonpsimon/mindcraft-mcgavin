@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `eefdb52` (WB shipped-move for #2-follow-up lands on top of this). Most recent code ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). Prior ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features (portals, beacons/conduits/lodestones, generated structures, villages + player-base zones); two-tier detection (60s scanner + blockUpdate watcher) with JSONL sink at `data/poi-stream.jsonl`; ContextBuilder Priority 3.6 "Known POIs" injection. See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `ccf3f53` (WB shipped-move for #6 lands on top of this). Most recent code ship 2026-04-20: **#6 strategic torch placement (left-wall convention)** (`ccf3f53`) — new `placeBreadcrumbTorch` helper in `src/agent/library/skills.js` (~100 lines) plus 1-Hz motion cache on `bot._lastMovement` in `modes.js self_preservation.update()`; strict left-wall torch placement with behind-bot floor fallback for open shafts; `digDown` + `torch_placing` both swapped to the new helper; `goToSurface` warn-logs non-left-wall torches on ascent as a wrong-direction signal. Prior ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,35 +64,25 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-### #6. Strategic torch placement underground — strict left-wall convention
-
-**Status:** 🛠️ in-progress 2026-04-20 (was 🟡 partial; promoted to finish strict-left-wall convention) • **Priority:** low (refines existing breadcrumb placement; convention payoff is direction-home signal in branched mines)
-
-**Context.** Breadcrumb placement shipped 2026-04-14: `placeTorchAt` records every torch in `bot.placedTorches`, `digDown` drops one every 4 descended blocks (behind bot, on floor), `goToSurface` ascends the chain in y-order. Strict left-wall geometry was deferred — current placement is "behind bot on floor", convention-agnostic. The classic mining convention: **torches on left going in → torches on right coming out means you walked past that point.** Gives the bot (and any human follower) an unambiguous direction-home signal in a branched cave.
-
-**Scope decisions (agreed 2026-04-20).**
-- **Fall back to floor torch** when left wall isn't solid (open cavern, junction, 2-wide tunnel). Breadcrumb value > convention purity.
-- **Cache last movement** for "left" derivation. Tick-driven sample in `modes.js self_preservation.update()` updates `bot._lastMovement = {dx, dz}` whenever bot has moved ≥1 block since last sample. `placeBreadcrumbTorch` reads this; falls back to caller-provided dx/dz (digDown loop), then to bot.entity.yaw.
-- **Actively prefer right-side torches and warn-log left-side ones** in `goToSurface`. Doesn't change pathing — just emits `[goToSurface] left-side torch at (x,y,z) — wrong direction signal` so forensics can spot a wrong-branch ascent.
-- **Three bullets only.** No DESIGN_PHILOSOPHY surfacing, no MEMORY.md entry. Convention encoded in code + ship-note + this WB body.
-
-**Implementation.**
-- `modes.js self_preservation.update()`: ~6-line motion-cache block at top of update — sample position, compute signed (dx,dz) when distance ≥1, store on `bot._lastMovement` and `bot._lastTorchSamplePos`.
-- `skills.js`: new helper `placeBreadcrumbTorch(bot, fallbackDx, fallbackDz)` — derives left direction, probes wall solidity, calls `placeTorchAt` with computed wall-position+face OR floor-fallback. Stores `face` + `placedFacing` on the torch record.
-- `skills.js digDown` (line 5004): swap `placeTorchAt(...,'bottom')` → `placeBreadcrumbTorch(bot, dx, dz)`.
-- `modes.js torch_placing` (line 827): swap `skills.placeTorchAt(...,'bottom')` → `skills.placeBreadcrumbTorch(agent.bot)`.
-- `skills.js goToSurface`: add right-side check in the ascending loop — for each torch with stored `face`, derive heading from previous waypoint, compute `right_of_heading`, mismatch → console.warn.
-
-**Ship plan.**
-- Commit 1 (this): WB-only, body moved into In-progress.
-- Commit 2: code ship — motion cache + new helper + two caller swaps + goToSurface warn-log.
-- Commit 3: WB → Shipped-awaiting-verification + HEAD bump.
-
-**Signals to watch post-ship.** Next mining dive: log `[Torch] Placed at (x,y,z) wall=<dir>` for wall-attached, `wall=floor` for fallback. On ascent, no `[goToSurface] left-side torch` warnings unless bot ascended a wrong branch. Breadcrumb count stays in `bot.placedTorches`; ratio of wall vs floor visible in successive entries.
+_(empty)_
 
 ---
 
 ## Shipped — awaiting live verification
+
+### #6. Strategic torch placement underground — strict left-wall convention (`ccf3f53`, 2026-04-20)
+
+**What shipped.** New `placeBreadcrumbTorch(bot, fallbackDx, fallbackDz)` helper in `src/agent/library/skills.js` (~100 lines) implementing the classic mining convention: torches on the left wall going in → torches on the right coming out. Plus a 1-Hz motion cache on `bot._lastMovement` added to `modes.js self_preservation.update()` (wrapped in try/catch — never breaks self-preservation). Heading source priority: live motion cache > caller-provided fallback > yaw snap. Computes `left = (dz, -dx)`; probes head-level block at `bot+left`; if solid, places wall torch attached to that face (face = -left cardinal). If not solid (open shaft, junction, 2-wide tunnel), falls back to legacy behind-bot floor torch — breadcrumb value > convention purity. Annotates each `bot.placedTorches` entry with `{face, placedFacing, headingDx, headingDz}` so the ascent can audit direction.
+
+Two callers swapped: `digDown` (skills.js:5004) passes the dig heading as fallback so the helper works before the modes-tick motion cache primes; `torch_placing` mode (modes.js:827) reads the live cache. `goToSurface`'s ascending loop now warn-logs `[goToSurface] non-left-wall torch at (x,y,z) facing=<x> — wrong direction signal` for any torch whose stored `placedFacing !== 'left-wall'` — wrong-direction signal in the breadcrumb chain. Pathing unchanged.
+
+Rule 7 perimeter: grep across `src/` for `placeTorchAt` / `placedTorches` confirmed only the two live callers (digDown + torch_placing), both swapped. `src/observability/placement_tracker.js` reads `bot.placedTorches` by `x/y/z` + `placedAt` only — added annotation fields don't conflict.
+
+Layers with: #33 auto-craft (keeps torch supply ≥16) and the existing #5/#6 breadcrumb infrastructure (placedTorches memory, goToSurface ascent).
+
+**Status:** ✅ shipped — **awaiting live verification** (signals: next mining dive shows `[Torch] Placed at (x,y,z)` lines mixing wall-position vs behind-bot-floor positions; `bot.placedTorches` entries carry `placedFacing: 'left-wall'` for the strict cases and `'behind-bot-fallback'` for the open-shaft cases; on `goToSurface`, no `[goToSurface] non-left-wall torch ... wrong direction signal` lines unless bot ascended a wrong branch.)
+
+---
 
 ### #2-follow-up. Water-breathing potion auto-use reflex (`eefdb52`, 2026-04-20)
 
