@@ -64,7 +64,31 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_None._
+### #6. Strategic torch placement underground — strict left-wall convention
+
+**Status:** 🛠️ in-progress 2026-04-20 (was 🟡 partial; promoted to finish strict-left-wall convention) • **Priority:** low (refines existing breadcrumb placement; convention payoff is direction-home signal in branched mines)
+
+**Context.** Breadcrumb placement shipped 2026-04-14: `placeTorchAt` records every torch in `bot.placedTorches`, `digDown` drops one every 4 descended blocks (behind bot, on floor), `goToSurface` ascends the chain in y-order. Strict left-wall geometry was deferred — current placement is "behind bot on floor", convention-agnostic. The classic mining convention: **torches on left going in → torches on right coming out means you walked past that point.** Gives the bot (and any human follower) an unambiguous direction-home signal in a branched cave.
+
+**Scope decisions (agreed 2026-04-20).**
+- **Fall back to floor torch** when left wall isn't solid (open cavern, junction, 2-wide tunnel). Breadcrumb value > convention purity.
+- **Cache last movement** for "left" derivation. Tick-driven sample in `modes.js self_preservation.update()` updates `bot._lastMovement = {dx, dz}` whenever bot has moved ≥1 block since last sample. `placeBreadcrumbTorch` reads this; falls back to caller-provided dx/dz (digDown loop), then to bot.entity.yaw.
+- **Actively prefer right-side torches and warn-log left-side ones** in `goToSurface`. Doesn't change pathing — just emits `[goToSurface] left-side torch at (x,y,z) — wrong direction signal` so forensics can spot a wrong-branch ascent.
+- **Three bullets only.** No DESIGN_PHILOSOPHY surfacing, no MEMORY.md entry. Convention encoded in code + ship-note + this WB body.
+
+**Implementation.**
+- `modes.js self_preservation.update()`: ~6-line motion-cache block at top of update — sample position, compute signed (dx,dz) when distance ≥1, store on `bot._lastMovement` and `bot._lastTorchSamplePos`.
+- `skills.js`: new helper `placeBreadcrumbTorch(bot, fallbackDx, fallbackDz)` — derives left direction, probes wall solidity, calls `placeTorchAt` with computed wall-position+face OR floor-fallback. Stores `face` + `placedFacing` on the torch record.
+- `skills.js digDown` (line 5004): swap `placeTorchAt(...,'bottom')` → `placeBreadcrumbTorch(bot, dx, dz)`.
+- `modes.js torch_placing` (line 827): swap `skills.placeTorchAt(...,'bottom')` → `skills.placeBreadcrumbTorch(agent.bot)`.
+- `skills.js goToSurface`: add right-side check in the ascending loop — for each torch with stored `face`, derive heading from previous waypoint, compute `right_of_heading`, mismatch → console.warn.
+
+**Ship plan.**
+- Commit 1 (this): WB-only, body moved into In-progress.
+- Commit 2: code ship — motion cache + new helper + two caller swaps + goToSurface warn-log.
+- Commit 3: WB → Shipped-awaiting-verification + HEAD bump.
+
+**Signals to watch post-ship.** Next mining dive: log `[Torch] Placed at (x,y,z) wall=<dir>` for wall-attached, `wall=floor` for fallback. On ascent, no `[goToSurface] left-side torch` warnings unless bot ascended a wrong branch. Breadcrumb count stays in `bot.placedTorches`; ratio of wall vs floor visible in successive entries.
 
 ---
 
@@ -1077,15 +1101,6 @@ Items grouped by status (🟡 Partial → ⏳ Not started → 🔁 Ongoing). Wit
 ---
 
 **🟡 Partial**
-
-### 6. Strategic torch placement underground — strict left-wall convention
-
-**Status:** 🟡 breadcrumb placement shipped 2026-04-14 (`placeTorchAt` + `digDown` every-4-blocks marker + `goToSurface` follows torches). Strict left-wall geometry deferred — current placement is "behind bot on floor". • **Priority:** low (current behind-bot placement works for breadcrumbs)
-
-**Remaining work:**
-- Compute "left of facing direction" wall position for each placement
-- Place wall_torch attached to left wall vs floor torch
-- Update `goToSurface` ordering hint (right-side torches = ascent direction)
 
 ### 17. `skills.js` decomposition (long-term)
 
