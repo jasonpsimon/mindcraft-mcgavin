@@ -70,19 +70,6 @@ _(empty)_
 
 ## Shipped — awaiting live verification
 
-### #6. Strategic torch placement underground — strict left-wall convention (`ccf3f53`, 2026-04-20)
-
-**What shipped.** New `placeBreadcrumbTorch(bot, fallbackDx, fallbackDz)` helper in `src/agent/library/skills.js` (~100 lines) implementing the classic mining convention: torches on the left wall going in → torches on the right coming out. Plus a 1-Hz motion cache on `bot._lastMovement` added to `modes.js self_preservation.update()` (wrapped in try/catch — never breaks self-preservation). Heading source priority: live motion cache > caller-provided fallback > yaw snap. Computes `left = (dz, -dx)`; probes head-level block at `bot+left`; if solid, places wall torch attached to that face (face = -left cardinal). If not solid (open shaft, junction, 2-wide tunnel), falls back to legacy behind-bot floor torch — breadcrumb value > convention purity. Annotates each `bot.placedTorches` entry with `{face, placedFacing, headingDx, headingDz}` so the ascent can audit direction.
-
-Two callers swapped: `digDown` (skills.js:5004) passes the dig heading as fallback so the helper works before the modes-tick motion cache primes; `torch_placing` mode (modes.js:827) reads the live cache. `goToSurface`'s ascending loop now warn-logs `[goToSurface] non-left-wall torch at (x,y,z) facing=<x> — wrong direction signal` for any torch whose stored `placedFacing !== 'left-wall'` — wrong-direction signal in the breadcrumb chain. Pathing unchanged.
-
-Rule 7 perimeter: grep across `src/` for `placeTorchAt` / `placedTorches` confirmed only the two live callers (digDown + torch_placing), both swapped. `src/observability/placement_tracker.js` reads `bot.placedTorches` by `x/y/z` + `placedAt` only — added annotation fields don't conflict.
-
-Layers with: #33 auto-craft (keeps torch supply ≥16) and the existing #5/#6 breadcrumb infrastructure (placedTorches memory, goToSurface ascent).
-
-**Status:** ✅ shipped — **awaiting live verification** (signals: next mining dive shows `[Torch] Placed at (x,y,z)` lines mixing wall-position vs behind-bot-floor positions; `bot.placedTorches` entries carry `placedFacing: 'left-wall'` for the strict cases and `'behind-bot-fallback'` for the open-shaft cases; on `goToSurface`, no `[goToSurface] non-left-wall torch ... wrong direction signal` lines unless bot ascended a wrong branch.)
-
----
 
 ### #2-follow-up. Water-breathing potion auto-use reflex (`eefdb52`, 2026-04-20)
 
@@ -1208,6 +1195,20 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### #6. Strategic torch placement underground — strict left-wall convention (`ccf3f53`, 2026-04-20)
+
+**What shipped.** New `placeBreadcrumbTorch(bot, fallbackDx, fallbackDz)` helper in `src/agent/library/skills.js` (~100 lines) implementing the classic mining convention: torches on the left wall going in → torches on the right coming out. Plus a 1-Hz motion cache on `bot._lastMovement` added to `modes.js self_preservation.update()` (wrapped in try/catch — never breaks self-preservation). Heading source priority: live motion cache > caller-provided fallback > yaw snap. Computes `left = (dz, -dx)`; probes head-level block at `bot+left`; if solid, places wall torch attached to that face (face = -left cardinal). If not solid (open shaft, junction, 2-wide tunnel), falls back to legacy behind-bot floor torch — breadcrumb value > convention purity. Annotates each `bot.placedTorches` entry with `{face, placedFacing, headingDx, headingDz}` so the ascent can audit direction.
+
+Two callers swapped: `digDown` (skills.js:5004) passes the dig heading as fallback so the helper works before the modes-tick motion cache primes; `torch_placing` mode (modes.js:827) reads the live cache. `goToSurface`'s ascending loop now warn-logs `[goToSurface] non-left-wall torch at (x,y,z) facing=<x> — wrong direction signal` for any torch whose stored `placedFacing !== 'left-wall'` — wrong-direction signal in the breadcrumb chain. Pathing unchanged.
+
+Rule 7 perimeter: grep across `src/` for `placeTorchAt` / `placedTorches` confirmed only the two live callers (digDown + torch_placing), both swapped. `src/observability/placement_tracker.js` reads `bot.placedTorches` by `x/y/z` + `placedAt` only — added annotation fields don't conflict.
+
+Layers with: #33 auto-craft (keeps torch supply ≥16) and the existing #5/#6 breadcrumb infrastructure (placedTorches memory, goToSurface ascent).
+
+**Status:** ✅ strict left-wall path verified 2026-04-21 — `data/placement-stream.jsonl` shows `wall_torch` events (2026-04-21 y=62–64) confirming left-wall placements. Fallback retry loop in open terrain is a pre-existing `torch_placing` design gap (no geometry precondition + unscoped mode), tracked separately as **#34**.
+
+---
 
 ### #31. POI location memory — auto-capture of notable world features (`2714f02`, 2026-04-20)
 
