@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `2714f02` (+ WB c3 pending). Most recent ship 2026-04-20: **#31 POI location memory** (`2714f02`, WB c1 `c39e4d3`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features as the bot moves (portals, beacons/conduits/lodestones, generated structures via signature blocks, villages + player-base zones by polling `bot.protectedZones`). Two-tier detection mirrors #7c/#7d (60s scanner + blockUpdate watcher with double-sided filter); closure-state observability pattern (configure/hook/getStats/JSONL sink at `data/poi-stream.jsonl`); persists to `bots/<profile>/poi_memory.json`; ContextBuilder Priority 3.6 "Known POIs" injection (top-N nearest in current dimension). Bot rebooted clean, awaiting live capture verification. Prior ship 2026-04-20: #33 auto-craft torches MVP (`22ed805`, debug iterations `cdd65e7` / `d07e57f`, transient-revert `2198a97`) — new `auto_craft` mode closes the silent-skip surfaced 2026-04-14; gate logic live-verified via one-cooldown probe. See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `672fdbe` (WB hygiene pass on top of #31 code ship). Most recent code ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features as the bot moves (portals, beacons/conduits/lodestones, generated structures via signature blocks, villages + player-base zones by polling `bot.protectedZones`). Two-tier detection mirrors #7c/#7d (60s scanner + blockUpdate watcher with double-sided filter); closure-state observability pattern (configure/hook/getStats/JSONL sink at `data/poi-stream.jsonl`); persists to `bots/<profile>/poi_memory.json`; ContextBuilder Priority 3.6 "Known POIs" injection (top-N nearest in current dimension). Bot rebooted clean, awaiting live capture verification. Prior ship 2026-04-20: #33 auto-craft torches MVP (`22ed805`, debug iterations `cdd65e7` / `d07e57f`, transient-revert `2198a97`) — new `auto_craft` mode closes the silent-skip surfaced 2026-04-14; gate logic live-verified via one-cooldown probe. See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -1075,18 +1075,6 @@ This section retained as the audit-trail entry; remove on next hygiene sweep.
 
 ---
 
-### 31. POI location memory — ✅ SHIPPED 2026-04-20 (`2714f02`)
-
-Shipped — see "Shipped — awaiting live verification" section above. Separate `poi_memory.json` storage, all POI types in one ship (portals, beacons/conduits/lodestones, villages, generated structures via signature blocks, player bases). Chat-labeled landmarks + `!goToPOI` deferred to follow-up.
-
-### 7d. Block-update watcher for runtime-placed structures — 🛠️ MOVED TO IN-PROGRESS 2026-04-20
-
-Moved to In-progress section above. Original fix sketch preserved there; reuses #7c's `PLAYER_CHARACTERISTIC_BLOCKS` + `_clusterPositions` + `_playerBaseAlreadyRegistered` + `_playerBaseZoneFromCenter` (no duplication).
-
-### 8. Humanized action delays — 🛠️ MOVED TO IN-PROGRESS 2026-04-20
-
-Moved to In-progress section above. Original fix sketch preserved there; see also `src/agent/commands/index.js:221` (`executeCommand` chokepoint — single wire-in point).
-
 ### 7e. Seed-based chunk-diff detection (research-only; original scope still parked)
 
 **Status:** ⏳ research-only (original scope); narrower pivot promoted to **#7f** • **Priority:** very low for original scope
@@ -1146,13 +1134,13 @@ Moved to In-progress section above. Original fix sketch preserved there; see als
 
 ### 17. `skills.js` decomposition (long-term)
 
-**Status:** 🟡 partial — gated on #12 Stage 2 shipping first • **Priority:** low (architectural; deferred until #12 lands) • **Source:** audit finding L6.1
+**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
 
 `src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
 
 **Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
 
-Defer until #12 Stage 2 actually ships — jumping ahead would create a split-refactor hazard. Keep flagged so it isn't forgotten.
+Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
 
 ---
 
@@ -1217,7 +1205,7 @@ When a player asks the bot for help ("come help me", `!comeHelp`), the bot navig
 
 ### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
 
-**Status:** ⏳ not started • **Priority:** low-medium (enhances #31 POI memory, #30 Survivor goals) • **Sequencing:** after #30 lands so a goal-queue consumer exists
+**Status:** ⏳ not started • **Priority:** low-medium • **Depends on:** #30 (for the goal-queue consumer) • **Enhances:** #31 POI memory, #30 Survivor goals
 
 Client-side structure finder. Bot reads world seed + MC version from its profile, queries a bundled cubiomes-WASM module for structure locations within a radius, and feeds results into #31 POI memory and/or #30 Survivor goal selection. No server-side component, no companion mod, no bot OP — the bot stays self-contained and server-agnostic.
 
