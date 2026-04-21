@@ -736,18 +736,9 @@ const modes_list = [
         cooldown: 10,
         torch_threshold: 16,
         last_attempt: 0,
-        _last_probe: 0,
         update: function (agent) {
-            const bot = agent.bot;
-            // #33 commit 2.6 transient probe: log gate-state every cooldown window
-            // regardless of early-return path, so we can see WHICH gate blocks.
-            const _nowp = Date.now();
-            if (_nowp - this._last_probe >= this.cooldown * 1000) {
-                this._last_probe = _nowp;
-                const _c = world.getInventoryCounts(bot);
-                console.log(`[AutoCraft][gate] torch=${_c['torch']||0} fuel=${(_c['coal']||0)+(_c['charcoal']||0)} stick=${_c['stick']||0} idle=${agent.isIdle()} hp=${bot.health} empty=${bot.inventory.emptySlotCount()} lowHp=${!!bot._lowHpRetreatActive} drown=${!!bot._drowningEscapeActive} creeper=${!!bot._creeperEvadeActive}`);
-            }
             if (Date.now() - this.last_attempt < this.cooldown * 1000) return;
+            const bot = agent.bot;
             // Don't interrupt the LLM or reflex latches.
             if (!agent.isIdle()) return;
             if (bot.health < 6) return;
@@ -760,14 +751,9 @@ const modes_list = [
             if (fuelCount < 1 || stickCount < 1) return;
             this.last_attempt = Date.now();
             execute(this, agent, async () => {
-                const torchKeys = Object.keys(counts).filter(k => k.includes('torch')).join(',') || 'none';
                 console.log(`[AutoCraft] torches low (${torchCount}/${this.torch_threshold}) + have coal+stick → crafting 4`);
-                console.log(`[AutoCraft][dbg-pre] emptySlots=${bot.inventory.emptySlotCount()} torchKeys=[${torchKeys}] stickBefore=${stickCount} fuelBefore=${fuelCount}`);
                 try {
-                    const ok = await skills.craftRecipe(bot, 'torch', 1);
-                    const after = world.getInventoryCounts(bot);
-                    const torchKeysAfter = Object.keys(after).filter(k => k.includes('torch')).join(',') || 'none';
-                    console.log(`[AutoCraft][dbg-post] returned=${ok} stickAfter=${after['stick']||0} torchAfter=${after['torch']||0} torchKeysAfter=[${torchKeysAfter}] totalKeys=${Object.keys(after).length}`);
+                    await skills.craftRecipe(bot, 'torch', 1);
                 } catch (err) {
                     console.warn(`[AutoCraft] craft failed: ${err.message}`);
                 }
