@@ -64,7 +64,36 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_Empty. Move items here when actively being worked on._
+### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
+
+**Status:** 🛠️ in-progress 2026-04-20 • **Priority:** low-medium (preemptive reflex; complements turtle-helmet Layer 3)
+
+**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
+
+**Scope decisions (agreed 2026-04-20).**
+- **Preemptive, not reactive.** Fires *before* BT-10g drowning-escape would. Threshold: oxygen drops below a safe margin (exact value set during survey — likely around 14/20 so a 3-min potion covers the whole crossing). Rationale: potion lasts 3:00/8:00, one drink covers the full transit vs. BT-10g firing over and over.
+- **Both drinkable variants.** `water_breathing` (3:00) and `long_water_breathing` (8:00). Cheap to support both — same NBT introspection path, different duration tags.
+- **Drinkable + splash self-throw.** Splash variant (`splash_potion` with water_breathing effect, ~2:15/6:00) aimed straight down via `bot.lookAt(bot.entity.position.offset(0,-1,0))` then `bot.activateItem()`. One extra branch (~10 lines). Accepts glass-bottle consumption. **Lingering deferred** — rare, requires stand-in-cloud sub-behavior that fights the swim goal; spin up a follow-up ticket if a real case ever appears.
+- **Offhand drinking.** Equip potion in offhand so mainhand tool stays in place. Restore offhand contents (shield, usually) after the 1.6s activation completes.
+
+**Skip conditions (copy the Layer 3 pattern, inverted).**
+- Already has `water_breathing` effect active (`bot.entity.effects`).
+- Already wearing a turtle helmet that's providing the slow Water Breathing tick.
+- Not underwater and oxygen not dropping (no need to preemptively burn a potion on land).
+- Currently in combat / holding mainhand-critical item (let combat win the tiebreak — defer to next low-oxygen tick).
+
+**Open questions for survey pass (commit 2's first step, before any code).**
+1. Does a `useItem` / `drink` / `consumePotion` primitive already exist in `skills.js` or `self_preservation.js`? BT-2 Layer 3 is the closest structural sibling — reuse its shape if possible.
+2. How does mineflayer expose potion NBT? Confirm `item.nbt` → `Potion` / `CustomPotionEffects` tag structure on 1.21.4. (Minecraft 1.20.5+ moved to the `potion_contents` component; verify which shape mineflayer surfaces after ViaBackwards translation.)
+3. Does `bot.lookAt` + `bot.activateItem()` work reliably underwater for the splash path? Rule-2 check.
+4. Profile surface — put the oxygen threshold in `ThatCoolGuyDude.json` (reflex config), or hardcode alongside the Layer 3 skip list?
+
+**Ship plan.**
+- Commit 1 (this): WB-only, body moved into In-progress.
+- Commit 2: survey pass + code ship — new helper next to Layer 3 in `self_preservation.update()`, `[SelfPreservation] potion_drink` / `potion_splash` log lines, Rule 7 single-perimeter audit.
+- Commit 3: WB move to Shipped-awaiting-verification + HEAD bump.
+
+**Signals to watch post-ship.** Natural river/ocean crossing where bot holds a water_breathing potion: `[SelfPreservation] potion_drink` log line + `bot.entity.effects` shows `water_breathing` active for 3:00. BT-10g fire count drops on repeat-dive terrain.
 
 ---
 
@@ -1054,16 +1083,6 @@ Items grouped by status (🟡 Partial → ⏳ Not started → 🔁 Ongoing). Wit
 ---
 
 **🟡 Partial**
-
-### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
-
-**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
-
-**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
-
-**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
-
-**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
 
 ### 6. Strategic torch placement underground — strict left-wall convention
 
