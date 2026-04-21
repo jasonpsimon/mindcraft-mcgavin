@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `ccf3f53` (WB shipped-move for #6 lands on top of this). Most recent code ship 2026-04-20: **#6 strategic torch placement (left-wall convention)** (`ccf3f53`) — new `placeBreadcrumbTorch` helper in `src/agent/library/skills.js` (~100 lines) plus 1-Hz motion cache on `bot._lastMovement` in `modes.js self_preservation.update()`; strict left-wall torch placement with behind-bot floor fallback for open shafts; `digDown` + `torch_placing` both swapped to the new helper; `goToSurface` warn-logs non-left-wall torches on ascent as a wrong-direction signal. Prior ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `d860661` (BT-34 code ship; WB shipped-move for #34 lands on top of this). Most recent code ship 2026-04-21: **#34 torch_placing guards** (`d860661`) — modes.js adds skyLight≥8 scope gate to the torch_placing mode update; skills.js `_impl_placeBreadcrumbTorch` fallback adds a solid-reference-block precondition returning `false` (wrapSkill abort) when no geometry exists, preventing the ~5s error loop that spammed placement-stream on every topside session. Prior ship 2026-04-20: **#6 strategic torch placement (left-wall convention)** (`ccf3f53`) — new `placeBreadcrumbTorch` helper in `src/agent/library/skills.js` (~100 lines) plus 1-Hz motion cache on `bot._lastMovement` in `modes.js self_preservation.update()`; strict left-wall torch placement with behind-bot floor fallback for open shafts; `digDown` + `torch_placing` both swapped to the new helper; `goToSurface` warn-logs non-left-wall torches on ascent as a wrong-direction signal. Prior ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,9 +64,15 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
+_(empty)_
+
+---
+
+## Shipped — awaiting live verification
+
 ### #34. `torch_placing` mode — geometry precondition + sky-light scope gate
 
-**Status:** 🔨 in-progress 2026-04-21 — BT started (commit 1 moves ticket here; commit 2 ships code; commit 3 moves to Shipped — awaiting live verification)
+**Status:** 🚢 shipped 2026-04-21 awaiting live verification (`d860661`) — modes.js `torch_placing` gains skyLight≥8 scope gate; skills.js `_impl_placeBreadcrumbTorch` fallback gains geometry precondition (returns `false` → wrapSkill `abort` when no reference block below fallback XYZ). Expect: `placement-stream.jsonl` error rows drop to near-zero topside; `stdout.log` loop signature vanishes; `skill-stream.jsonl` shows `placeBreadcrumbTorch outcome=abort` rows when conditions flicker. Live-verify next tunnel dig session.
 
 **Problem**
 `torch_placing` mode (`src/agent/modes.js` ~838) fires every 5s when `world.shouldPlaceTorch()` returns true, regardless of where the bot is. Topside in open terrain, the `placeBreadcrumbTorch` left-wall probe misses, the fallback picks a floating XYZ with no reference block, and `placeBlock(..., "bottom", true)` errors out because there is no solid face to attach to. The bot then re-enters the failure loop every 5 seconds for the entire duration it stays topside. Forensics: 34 active-session failures + 93 historical in `stdout.log` — pre-existing gap, not a #6 regression.
@@ -83,14 +89,14 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 - If non-solid, return `false` (abort cleanly — wrapSkill classifies as `abort`, not `error`; mode backs off per its cooldown).
 - Prevents the log-spam error path when fallback has no reference block.
 
-**Code Rules compliance**
-- Rule 1 (observability-first): both guards emit a `skill-stream` entry with reason (`skylight_gate` / `no_reference_block`) so the decision is auditable.
-- Rule 7 (complete the perimeter): grep all `torch_placing` / `placeBreadcrumbTorch` call sites to confirm no other code path bypasses these guards.
+**Code Rules compliance (as shipped)**
+- Rule 1 (observability-first): `wrapSkill` already emits `[Skill] outcome=abort` for Guard 2 returns (existing infrastructure — no new reason tags needed; the `abort` vs `error` distinction is the observability signal).
+- Rule 7 (complete the perimeter): `placeBreadcrumbTorch` has two call sites (`modes.js` `torch_placing` + the `wrapSkill` export consumed via `skills.placeBreadcrumbTorch`). Guard 1 covers the mode path; Guard 2 sits inside the skill body, so any future caller inherits Guard 2 automatically.
 
 **Forensics sources**
 - `data/placement-stream.jsonl` — expect far fewer `error` rows post-fix.
 - `stdout.log` — the loop signature ("Unable to place torch…") should vanish in topside sessions.
-- `data/skill-stream.jsonl` — expect new `abort`/`skip` rows with the new reason tags.
+- `data/skill-stream.jsonl` — expect `placeBreadcrumbTorch outcome=abort` rows when Guard 2 fires (instead of `outcome=error` from `placeBlock` throws).
 
 **Ship plan (three-commit BT)**
 1. WB: move body `⏳` → `In-progress`
@@ -100,8 +106,6 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 **Origin.** Surfaced 2026-04-21 during verification pass for #6. Fallback-loop behavior pre-dates #6 (visible in git show `ccf3f53^:src/agent/modes.js`); #6 preserved the pre-existing `torch_placing` mode unchanged.
 
 ---
-
-## Shipped — awaiting live verification
 
 
 ### #2-follow-up. Water-breathing potion auto-use reflex (`eefdb52`, 2026-04-20)
