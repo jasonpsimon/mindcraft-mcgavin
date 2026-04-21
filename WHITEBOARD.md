@@ -1049,7 +1049,40 @@ When the LLM requests a specific wood type (e.g., `oak_log`) that doesn’t exis
 
 ## To-do queue
 
-Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Within each status group, items are sorted by importance/impact/severity — highest first. Numbers preserved from project history.
+Items grouped by status (🟡 Partial → ⏳ Not started → 🔁 Ongoing). Within each status group, items are sorted by importance/impact/severity — highest first. Numbers preserved from project history.
+
+---
+
+**🟡 Partial**
+
+### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
+
+**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
+
+**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
+
+**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
+
+**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
+
+### 6. Strategic torch placement underground — strict left-wall convention
+
+**Status:** 🟡 breadcrumb placement shipped 2026-04-14 (`placeTorchAt` + `digDown` every-4-blocks marker + `goToSurface` follows torches). Strict left-wall geometry deferred — current placement is "behind bot on floor". • **Priority:** low (current behind-bot placement works for breadcrumbs)
+
+**Remaining work:**
+- Compute "left of facing direction" wall position for each placement
+- Place wall_torch attached to left wall vs floor torch
+- Update `goToSurface` ordering hint (right-side torches = ascent direction)
+
+### 17. `skills.js` decomposition (long-term)
+
+**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
+
+`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
+
+**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
+
+Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
 
 ---
 
@@ -1112,29 +1145,6 @@ When a player asks the bot for help ("come help me", `!comeHelp`), the bot navig
 
 **First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
 
-### 7e. Seed-based chunk-diff detection (research-only; original scope still parked)
-
-**Status:** ⏳ research-only (original scope); narrower pivot promoted to **#7f** • **Priority:** very low for original scope
-
-**Original scope.** Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. No 1.21-compatible JS terrain generator exists; porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) remains a major undertaking.
-
-**Research pass 2026-04-20 — ecosystem sweep.**
-
-- **`prismarine-pregenerator`** (extremeheat) — WIP, 2 commits, 1.16 only. Not active.
-- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — not vanilla-accurate. Toy worlds only.
-- **`cubiomes` npm package** — 5 years stale at 1.1.1; Node-addon port announced but never materialised.
-- **`cubiomes` C library** (Cubitect) — active, supports 1.21. Biome + structure-location logic only, NOT block-level terrain/caves.
-- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — cover up to 1.21.4 via cubiomes-derived logic. Same domain limit.
-- **Amidst** — discontinued post-1.17.1.
-
-**Verdict on original scope.** Still infeasible. No project has ported or reimplemented Java's full block-level terrain generator in JS, and the cost hasn't changed (50K+ lines, grows each MC version). Revisit only if a library genuinely emerges — watch `prismarine` org and `extremeheat/prismarine-pregenerator` for movement.
-
-**Server-side Fabric paths (considered, declined 2026-04-20).** A server-side companion (vanilla `/locate` + chat parse, Scarpet listener script, or custom Fabric mod) could sidestep the JS-generator problem entirely since the server already has the real generator loaded. JP declined all server-side paths: (a) won't OP the bot (rules out `/locate`), (b) prefers the bot stay self-contained and server-agnostic rather than depend on a companion mod. Kept documented here in case the calculus ever changes — e.g., if a companion mod ships for another reason (cf. #32) and adding a structure endpoint becomes near-free.
-
-**Narrower pivot promoted to its own ticket → #7f.** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM, fully client-side, no server changes. See #7f for scope, blockers, and sequencing.
-
-**Decision.** Keep #7e parked under original scope. Pivot work tracked under #7f.
-
 ### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
 
 **Status:** ⏳ not started • **Priority:** low-medium • **Depends on:** #30 (for the goal-queue consumer) • **Enhances:** #31 POI memory, #30 Survivor goals
@@ -1176,38 +1186,6 @@ Client-side structure finder. Bot reads world seed + MC version from its profile
 **B. Biome-aware movement profiles.** Current `createMovements` is biome-agnostic. Nothing anywhere in src/ switches pathfinder config based on `getBiomeName(bot)` — biome is purely read-only telemetry today. A biome-profile system could, e.g., lower `maxDropDown` in dripstone caves or tighten hazard lists in nether. No known incident motivating this — park as research-only.
 
 **Signals to watch:** bot repeatedly swimming across a lily-padded pocket and appearing "unnatural" in play; biome-specific terrain deaths that the generic hazard list missed.
-
-
-**🟡 Partial**
-
-### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
-
-**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
-
-**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
-
-**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
-
-**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
-
-### 6. Strategic torch placement underground — strict left-wall convention
-
-**Status:** 🟡 breadcrumb placement shipped 2026-04-14 (`placeTorchAt` + `digDown` every-4-blocks marker + `goToSurface` follows torches). Strict left-wall geometry deferred — current placement is "behind bot on floor". • **Priority:** low (current behind-bot placement works for breadcrumbs)
-
-**Remaining work:**
-- Compute "left of facing direction" wall position for each placement
-- Place wall_torch attached to left wall vs floor torch
-- Update `goToSurface` ordering hint (right-side torches = ascent direction)
-
-### 17. `skills.js` decomposition (long-term)
-
-**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
-
-`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
-
-**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
-
-Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
 
 ---
 
@@ -1273,6 +1251,16 @@ _Empty. All prior entries either shipped as fixes or migrated into more accurate
 **Why logged.** Principle 5 win — prevented a redundant skill surface area addition. The "just ship the spec" impulse was the wrong move; reading the existing pathfinder config and Layer 1 reflex before writing new code revealed the layer was already there. Captured here so future "why isn't there a dedicated swim skill?" questions have a pointer.
 
 **Follow-up.** Water-breathing-potion auto-use parked as 2-follow-up in the to-do queue (low priority; turtle-helmet Layer 3 already covers the common case).
+
+---
+
+### #7e. Seed-based chunk-diff detection — closed as research-only (no code, 2026-04-20)
+
+**Decision.** Original scope (regenerate each chunk from seed + MC version, diff against live state) closed without shipping. 2026-04-20 ecosystem sweep confirmed no 1.21-compatible JS terrain generator exists and porting Java's generator (~50K+ lines, grows each version) is not justified. Server-side Fabric paths (vanilla `/locate`, Scarpet, companion mod) considered and declined by JP — won't OP the bot, prefers the bot stay server-agnostic.
+
+**Narrower pivot kept alive as #7f** — client-side cubiomes-WASM for biome + structure-location queries only (villages, strongholds, monuments, etc.). See #7f for scope.
+
+**Why logged.** Audit trail for the "why isn't there seed-based chunk diffing?" question and the record of what ecosystem libraries were checked, so a future sweep doesn't re-do the same research from scratch. Watch points if JP ever wants to revisit: `prismarine` org, `extremeheat/prismarine-pregenerator`.
 
 ---
 
