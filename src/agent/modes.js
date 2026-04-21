@@ -751,9 +751,14 @@ const modes_list = [
             if (fuelCount < 1 || stickCount < 1) return;
             this.last_attempt = Date.now();
             execute(this, agent, async () => {
+                const torchKeys = Object.keys(counts).filter(k => k.includes('torch')).join(',') || 'none';
                 console.log(`[AutoCraft] torches low (${torchCount}/${this.torch_threshold}) + have coal+stick → crafting 4`);
+                console.log(`[AutoCraft][dbg-pre] emptySlots=${bot.inventory.emptySlotCount()} torchKeys=[${torchKeys}] stickBefore=${stickCount} fuelBefore=${fuelCount}`);
                 try {
-                    await skills.craftRecipe(bot, 'torch', 1);
+                    const ok = await skills.craftRecipe(bot, 'torch', 1);
+                    const after = world.getInventoryCounts(bot);
+                    const torchKeysAfter = Object.keys(after).filter(k => k.includes('torch')).join(',') || 'none';
+                    console.log(`[AutoCraft][dbg-post] returned=${ok} stickAfter=${after['stick']||0} torchAfter=${after['torch']||0} torchKeysAfter=[${torchKeysAfter}] totalKeys=${Object.keys(after).length}`);
                 } catch (err) {
                     console.warn(`[AutoCraft] craft failed: ${err.message}`);
                 }
