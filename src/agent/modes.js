@@ -845,6 +845,16 @@ const modes_list = [
         update: function (agent) {
             if (world.shouldPlaceTorch(agent.bot)) {
                 if (Date.now() - this.last_place < this.cooldown * 1000) return;
+                // #34 Guard 1: skyLight scope gate. Skip topside — breadcrumb
+                // torches are a tunnel/underground convention. Threshold 8 matches
+                // vanilla mob-spawn darkness boundary. skyLight is day/night-
+                // independent (sky-propagation at build time), so it cleanly
+                // discriminates "roof over head" from "open sky above".
+                try {
+                    const p = agent.bot.entity.position.floored();
+                    const sky = agent.bot.world.getSkyLight(p);
+                    if (sky >= 8) { this.last_place = Date.now(); return; }
+                } catch (_) { /* fall through — don't block on telemetry failure */ }
                 execute(this, agent, async () => {
                     // #6: prefer left-wall placement using cached motion heading.
                     // placeBreadcrumbTorch records the torch (with face + heading

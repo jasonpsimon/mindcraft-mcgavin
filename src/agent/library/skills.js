@@ -5343,6 +5343,17 @@ async function _impl_placeBreadcrumbTorch(bot, fallbackDx = 0, fallbackDz = 0) {
             torchZ = bz - dz;
             placedFace = 'bottom';
             placedFacing = 'behind-bot-fallback';
+            // #34 Guard 2: require a solid reference block below the torch XYZ.
+            // Without one, placeBlock(...,'bottom',true) errors every cycle. Return
+            // `false` (wrapSkill → abort) so the caller backs off on its cooldown
+            // instead of re-entering the error loop. Uses the same passable set as
+            // the wall probe above for consistency.
+            try {
+                const ref = bot.blockAt(new Vec3(torchX, torchY - 1, torchZ));
+                const passable = ['air', 'cave_air', 'void_air', 'water', 'lava'];
+                const refSolid = !!(ref && ref.boundingBox === 'block' && !passable.includes(ref.name));
+                if (!refSolid) return false;
+            } catch (_) { return false; }
         }
 
         const ok = await placeTorchAt(bot, torchX, torchY, torchZ, placedFace);
