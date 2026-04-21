@@ -64,7 +64,40 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_(empty)_
+### #34. `torch_placing` mode — geometry precondition + sky-light scope gate
+
+**Status:** 🔨 in-progress 2026-04-21 — BT started (commit 1 moves ticket here; commit 2 ships code; commit 3 moves to Shipped — awaiting live verification)
+
+**Problem**
+`torch_placing` mode (`src/agent/modes.js` ~838) fires every 5s when `world.shouldPlaceTorch()` returns true, regardless of where the bot is. Topside in open terrain, the `placeBreadcrumbTorch` left-wall probe misses, the fallback picks a floating XYZ with no reference block, and `placeBlock(..., "bottom", true)` errors out because there is no solid face to attach to. The bot then re-enters the failure loop every 5 seconds for the entire duration it stays topside. Forensics: 34 active-session failures + 93 historical in `stdout.log` — pre-existing gap, not a #6 regression.
+
+**Fix (two guards, complementary)**
+
+*Guard 1 — scope the mode to likely tunnel/underground via sky-light (`src/agent/modes.js` `torch_placing` update block):*
+- Read `bot.world.getSkyLight(bot.entity.position.floored())` before calling `placeBreadcrumbTorch`.
+- If `skyLight >= 8`, skip this tick (bot is effectively outside / well-lit by sky — breadcrumb torches are the wrong mode here).
+- Rationale: `skyLight` is day/night-independent (Minecraft computes it as sky-propagation at build time), so it cleanly discriminates "roof over head / deep enough for breadcrumbs" from "topside or well-lit area". Threshold `8` matches vanilla mob-spawn darkness boundary.
+
+*Guard 2 — geometry precondition in the fallback path (`src/agent/library/skills.js` `_impl_placeBreadcrumbTorch` ~5292):*
+- Before attempting the behind-bot fallback placement, probe the block directly below `(torchX, torchY-1, torchZ)` for solidity.
+- If non-solid, return `false` (abort cleanly — wrapSkill classifies as `abort`, not `error`; mode backs off per its cooldown).
+- Prevents the log-spam error path when fallback has no reference block.
+
+**Code Rules compliance**
+- Rule 1 (observability-first): both guards emit a `skill-stream` entry with reason (`skylight_gate` / `no_reference_block`) so the decision is auditable.
+- Rule 7 (complete the perimeter): grep all `torch_placing` / `placeBreadcrumbTorch` call sites to confirm no other code path bypasses these guards.
+
+**Forensics sources**
+- `data/placement-stream.jsonl` — expect far fewer `error` rows post-fix.
+- `stdout.log` — the loop signature ("Unable to place torch…") should vanish in topside sessions.
+- `data/skill-stream.jsonl` — expect new `abort`/`skip` rows with the new reason tags.
+
+**Ship plan (three-commit BT)**
+1. WB: move body `⏳` → `In-progress`
+2. Code ship: modes.js sky-light guard + skills.js geometry precondition + skill-stream reason tagging
+3. WB: move body `In-progress` → `Shipped — awaiting live verification`; bump `Current state` HEAD + ship note
+
+**Origin.** Surfaced 2026-04-21 during verification pass for #6. Fallback-loop behavior pre-dates #6 (visible in git show `ccf3f53^:src/agent/modes.js`); #6 preserved the pre-existing `torch_placing` mode unchanged.
 
 ---
 
@@ -1030,41 +1063,6 @@ Items grouped by status (🟡 Partial → ⏳ Not started → 🔁 Ongoing). Wit
 ---
 
 **⏳ Not started**
-
-### #34. `torch_placing` mode — geometry precondition + sky-light scope gate
-
-**Status:** ⏳ not started • **Priority:** high (active log spam; runs every 5s in open terrain)
-
-**Problem**
-`torch_placing` mode (`src/agent/modes.js` ~838) fires every 5s when `world.shouldPlaceTorch()` returns true, regardless of where the bot is. Topside in open terrain, the `placeBreadcrumbTorch` left-wall probe misses, the fallback picks a floating XYZ with no reference block, and `placeBlock(..., "bottom", true)` errors out because there is no solid face to attach to. The bot then re-enters the failure loop every 5 seconds for the entire duration it stays topside. Forensics: 34 active-session failures + 93 historical in `stdout.log` — pre-existing gap, not a #6 regression.
-
-**Fix (two guards, complementary)**
-
-*Guard 1 — scope the mode to likely tunnel/underground via sky-light (`src/agent/modes.js` `torch_placing` update block):*
-- Read `bot.world.getSkyLight(bot.entity.position.floored())` before calling `placeBreadcrumbTorch`.
-- If `skyLight >= 8`, skip this tick (bot is effectively outside / well-lit by sky — breadcrumb torches are the wrong mode here).
-- Rationale: `skyLight` is day/night-independent (Minecraft computes it as sky-propagation at build time), so it cleanly discriminates "roof over head / deep enough for breadcrumbs" from "topside or well-lit area". Threshold `8` matches vanilla mob-spawn darkness boundary.
-
-*Guard 2 — geometry precondition in the fallback path (`src/agent/library/skills.js` `_impl_placeBreadcrumbTorch` ~5292):*
-- Before attempting the behind-bot fallback placement, probe the block directly below `(torchX, torchY-1, torchZ)` for solidity.
-- If non-solid, return `false` (abort cleanly — wrapSkill classifies as `abort`, not `error`; mode backs off per its cooldown).
-- Prevents the log-spam error path when fallback has no reference block.
-
-**Code Rules compliance**
-- Rule 1 (observability-first): both guards emit a `skill-stream` entry with reason (`skylight_gate` / `no_reference_block`) so the decision is auditable.
-- Rule 7 (complete the perimeter): grep all `torch_placing` / `placeBreadcrumbTorch` call sites to confirm no other code path bypasses these guards.
-
-**Forensics sources**
-- `data/placement-stream.jsonl` — expect far fewer `error` rows post-fix.
-- `stdout.log` — the loop signature ("Unable to place torch…") should vanish in topside sessions.
-- `data/skill-stream.jsonl` — expect new `abort`/`skip` rows with the new reason tags.
-
-**Ship plan (three-commit BT)**
-1. WB: move body `⏳` → `In-progress`
-2. Code ship: modes.js sky-light guard + skills.js geometry precondition + skill-stream reason tagging
-3. WB: move body `In-progress` → `Shipped — awaiting live verification`; bump `Current state` HEAD + ship note
-
-**Origin.** Surfaced 2026-04-21 during verification pass for #6. Fallback-loop behavior pre-dates #6 (visible in git show `ccf3f53^:src/agent/modes.js`); #6 preserved the pre-existing `torch_placing` mode unchanged.
 
 ### 30. Bot modes: Auto / Assistant / Survivor
 
