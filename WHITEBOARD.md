@@ -1087,32 +1087,28 @@ Moved to In-progress section above. Original fix sketch preserved there; reuses 
 
 Moved to In-progress section above. Original fix sketch preserved there; see also `src/agent/commands/index.js:221` (`executeCommand` chokepoint — single wire-in point).
 
-### 7e. Seed-based chunk-diff detection (research-only)
+### 7e. Seed-based chunk-diff detection (research-only; original scope still parked)
 
-**Status:** ⏳ research-only • **Priority:** very low for original scope; narrower pivot feasible (see below)
+**Status:** ⏳ research-only (original scope); narrower pivot promoted to **#7f** • **Priority:** very low for original scope
 
 **Original scope.** Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. No 1.21-compatible JS terrain generator exists; porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) remains a major undertaking.
 
-**Research pass 2026-04-20 — ecosystem sweep.** Findings on whether the block-level regen premise has become feasible since this was first parked:
+**Research pass 2026-04-20 — ecosystem sweep.**
 
-- **`prismarine-pregenerator`** (extremeheat) — README self-labels WIP; only 2 commits; references 1.16 in API examples. Not actively developed; no 1.21 path.
-- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — provide basic/simple generation for custom servers. None are vanilla-accurate. `node-voxel-worldgen` adds caves but not biome-accurate terrain, not feature generation, not structures. Useful for running toy worlds, not for diffing vanilla chunks.
-- **`cubiomes` npm package** — last published 5 years ago at 1.1.1; README stated "intend to move functionality to JS via node addons" but stalled. Not a viable path.
-- **`cubiomes` C library** (Cubitect) — still actively maintained, supports 1.21. Covers **biome generation and structure-location logic**, NOT block-level terrain/caves. Could be compiled to WASM or shelled out via FFI/child-process, but the output domain is wrong for block-diff.
-- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — all cover up to 1.21 / 1.21.4 using cubiomes-derived logic. Same domain limit: biome + structure locations only, no terrain diff.
-- **Amidst** — discontinued post-1.17.1. Dead end.
+- **`prismarine-pregenerator`** (extremeheat) — WIP, 2 commits, 1.16 only. Not active.
+- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — not vanilla-accurate. Toy worlds only.
+- **`cubiomes` npm package** — 5 years stale at 1.1.1; Node-addon port announced but never materialised.
+- **`cubiomes` C library** (Cubitect) — active, supports 1.21. Biome + structure-location logic only, NOT block-level terrain/caves.
+- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — cover up to 1.21.4 via cubiomes-derived logic. Same domain limit.
+- **Amidst** — discontinued post-1.17.1.
 
 **Verdict on original scope.** Still infeasible. No project has ported or reimplemented Java's full block-level terrain generator in JS, and the cost hasn't changed (50K+ lines, grows each MC version). Revisit only if a library genuinely emerges — watch `prismarine` org and `extremeheat/prismarine-pregenerator` for movement.
 
-**Pivot opportunity (narrower scope).** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM (or shelling out to `cubiomes-viewer`-style CLI) given seed + version. That would cover: villages, strongholds, monuments, fortresses, ancient cities, trial chambers, outposts, slime chunks, biome boundaries — everything `chunkbase.com` surfaces. Does NOT cover: caves, ore veins, terrain heightmap, block-level human modifications.
+**Server-side Fabric paths (considered, declined 2026-04-20).** A server-side companion (vanilla `/locate` + chat parse, Scarpet listener script, or custom Fabric mod) could sidestep the JS-generator problem entirely since the server already has the real generator loaded. JP declined all server-side paths: (a) won't OP the bot (rules out `/locate`), (b) prefers the bot stay self-contained and server-agnostic rather than depend on a companion mod. Kept documented here in case the calculus ever changes — e.g., if a companion mod ships for another reason (cf. #32) and adding a structure endpoint becomes near-free.
 
-**Potential downstream ties.**
-- **#31 POI memory** — pre-populate `poi_memory.json` on hook with structures within N chunks of spawn. Bot "knows" there's a stronghold at (x,z) before ever seeing the chunk. Optional, opt-in — treat as future enhancement once #31 lives long enough to show friction.
-- **#30 Survivor mode** — goal queue could target known stronghold/fortress/monument coordinates instead of random exploration when tier-up requires them.
+**Narrower pivot promoted to its own ticket → #7f.** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM, fully client-side, no server changes. See #7f for scope, blockers, and sequencing.
 
-**Blockers for the pivot.** (a) Requires the server operator to share the world seed with the bot config (JP has this; others may not). (b) Cubiomes-WASM build needs verification — no ready-made npm package exists. (c) Most JP-impact test cases (villages, player bases) are already covered by live `#7` scanner + `#7c`/`#7d` structure detection + `#31` POI memory — the seed-based approach is purely additive.
-
-**Decision.** Keep #7e parked under original scope. The pivot (seed-aware structure finder) is worth a dedicated new ticket if the need arises — probably after #30 Survivor lands and the goal queue wants structure targets. Not worth carving time for speculatively.
+**Decision.** Keep #7e parked under original scope. Pivot work tracked under #7f.
 
 
 **🟡 Partial**
@@ -1218,6 +1214,36 @@ When a player asks the bot for help ("come help me", `!comeHelp`), the bot navig
 - Dimension handling — `bot.game.dimension`, existing portal-traversal logic if any.
 
 **First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
+
+### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
+
+**Status:** ⏳ not started • **Priority:** low-medium (enhances #31 POI memory, #30 Survivor goals) • **Sequencing:** after #30 lands so a goal-queue consumer exists
+
+Client-side structure finder. Bot reads world seed + MC version from its profile, queries a bundled cubiomes-WASM module for structure locations within a radius, and feeds results into #31 POI memory and/or #30 Survivor goal selection. No server-side component, no companion mod, no bot OP — the bot stays self-contained and server-agnostic.
+
+**Why client-side (vs. server-side Fabric options).** JP explicitly declined giving the bot OP (rules out vanilla `/locate`) and declined the companion-mod path (wants the bot to stay portable across servers). Client-side cubiomes-WASM regains appeal: zero server permissions, zero mod installs, works on day one of any new server as long as JP shares the seed with the bot config. See #7e research note for full comparison.
+
+**Scope.**
+- **One-time build work:** compile Cubitect/cubiomes (C, active, 1.21-compatible) to WASM via Emscripten. Wrap as a small node module. No published npm exists — this is packaging work, not porting.
+- **Runtime API:** `getStructuresNear(x, z, radius)` → array of `{ type, x, z, dimension }`. Covers strongholds, villages, desert/jungle/ocean/woodland temples, igloos, ocean monuments, nether fortresses, bastion remnants, end cities, ancient cities, trial chambers, pillager outposts, ruined portals, slime chunks, biome boundaries.
+- **Bot integration:** opt-in profile flag (`"worldSeed": "...", "enableStructureOracle": true`). On spawn hook, pre-populate `poi_memory.json` with known structures within N chunks of spawn (see #31 for POI schema).
+- **What it does NOT cover:** caves, ore veins, terrain heightmap, block-level human modifications — cubiomes is biome+structure only. Live scanners (#7, #7c, #7d) continue to handle everything else.
+
+**Design constraints (carried from #7e research).**
+- Treat WASM as a hard boundary — no sync calls from hot paths. Query on spawn, on explicit `!findStructure <type>` command, and on goal-queue pull from #30. Never per-tick.
+- Seed is sensitive-ish (leaking it trivialises server exploration). Keep it in profile config, not in logs, not in snapshots. Add to the redaction list.
+- Version mismatch between bot config seed-version and server version → WASM returns wrong structure positions. Validate `bot.version` against configured seed-version on hook; log a loud warning if they diverge and disable the oracle for the session.
+
+**Blockers / open questions.**
+- (a) Emscripten build of cubiomes not yet verified. May need small C patches for WASM compat.
+- (b) No runtime evidence yet of a JP-impact miss that the oracle would've caught — live scanners + #7c/#7d + #31 POI memory are already covering villages and player bases. Oracle is purely additive; risk is building it speculatively. Mitigation: wait for #30 Survivor to surface a concrete "goal queue needs stronghold coords" moment, then build.
+- (c) Future MC-version drift: each new vanilla version may need a new cubiomes release + rebuild. Accept as maintenance overhead; pin version in profile config.
+
+**Downstream ties.**
+- **#31 POI memory** — on hook, oracle populates POI store with nearby structures so the bot "knows" about a stronghold at (x,z) before ever seeing the chunk. Opt-in.
+- **#30 Survivor mode** — goal queue can target known stronghold/fortress/monument coords when tier-up requires them, instead of random exploration.
+
+**First commit on this ticket:** survey pass — read #31's POI schema and #30's goal-queue shape (once it exists), then design the oracle module interface to slot in cleanly. Second commit: WASM build + node wrapper. Third commit: bot-side integration (profile config + hook wiring + redaction).
 
 ### 9. Reduce LLM reliance through programmatic enhancements
 
