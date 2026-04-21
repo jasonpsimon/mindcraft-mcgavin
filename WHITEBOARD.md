@@ -135,27 +135,6 @@ Layers with: #33 auto-craft (keeps torch supply ≥16) and the existing #5/#6 br
 
 ---
 
-### #33. Auto-craft basic-need items — torches MVP (`22ed805`, 2026-04-20)
-
-**What shipped.** New `auto_craft` mode in `src/agent/modes.js` between `torch_placing` and `elbow_room` (lines ~731–770). Periodic state-maintenance tick that closes the silent-skip surfaced 2026-04-14: bot's #5/#6 underground torch pipeline never fired because the bot had never crafted torches — a classic Principle 1 gap (mechanical decision routed through the LLM, which never reliably made it). Now a 10s cooldown tick auto-crafts torches when `torch_count < 16` AND `coal+charcoal ≥ 1` AND `stick ≥ 1` AND bot is idle + healthy + no reflex latch active. Single primitive: `skills.craftRecipe(bot, 'torch', 1)` → 4 torches per call, which auto-finds/cleans up a crafting table as needed.
-
-**Design trade-offs.**
-- **Reuses mode-tick cadence.** Following the `torch_placing` template (cooldown + conditional + `execute()` wrapper) gives `!setMode auto_craft off` for free, no new observability module, no new pause/enable surface.
-- **Calls `skills.craftRecipe` directly, not `AutoRecovery.craftItem`.** `craftItem` is a wrapper over the same skill — calling through it would just add cross-cutting via the recovery subsystem for no behavior gain.
-- **Charcoal counts same as coal.** Vanilla recipe accepts either; the gate unions both counts.
-- **Idle-only + health ≥ 6 + no reflex latch** (`_lowHpRetreatActive` / `_drowningEscapeActive` / `_creeperEvadeActive`). Respects the 10s cooldown. Threshold 16 hardcoded per MVP scope.
-- **Deferred (per #9 theme):** auto-craft sticks, tools, food; config knobs for thresholds.
-
-**Verification path.** Code-ship was `22ed805`. Two transient debug commits followed: `cdd65e7` (commit 2.5, dbg-pre/dbg-post around craftRecipe) and `d07e57f` (commit 2.6, `[AutoCraft][gate]` probe before early-return gates). The probe ran one cooldown window on a fully-idle bot and returned `torch=64 fuel=0 stick=70 idle=true hp=17 empty=1` — gates are working as designed (bot already past threshold AND has no fuel; either condition alone would silently return). The earlier "silent-success" observation was a misread of `craftRecipe`'s own stale success-log template, not a real bug. Debug patches reverted in `2198a97` (commit 2.7). Final form is the minimal shipped code.
-
-**Verification.**
-- `node --check src/agent/modes.js` passed across all four code commits.
-- Bot rebooted clean on every deploy — StateTicker 1Hz, zero `[AutoCraft]` handler-failed lines, zero exception lines.
-- Gate logic proven correct live (see probe output above).
-
-**Status:** ✅ shipped — **awaiting live verification** (signal: bot's `torch_count` drops below 16 AND `coal`/`charcoal` ≥ 1 AND `stick` ≥ 1 simultaneously → `[AutoCraft] torches low (N/16) + have coal+stick → crafting 4` line appears in tmux capture; torch count in inventory increments to N+4; #5/#6 breadcrumb placement starts firing on subsequent `digDown` sweeps. Will trigger organically once the bot uses down its current 64-torch stockpile while underground mining, OR sooner via `!discard torch 48` + coal acquisition to force the conditions.)
-
----
 
 ### #7d. Block-update watcher for runtime-placed structures (`7d58837`, 2026-04-20)
 
@@ -1256,6 +1235,29 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### #33. Auto-craft basic-need items — torches MVP (`22ed805`, 2026-04-20)
+
+**What shipped.** New `auto_craft` mode in `src/agent/modes.js` between `torch_placing` and `elbow_room` (lines ~731–770). Periodic state-maintenance tick that closes the silent-skip surfaced 2026-04-14: bot's #5/#6 underground torch pipeline never fired because the bot had never crafted torches — a classic Principle 1 gap (mechanical decision routed through the LLM, which never reliably made it). Now a 10s cooldown tick auto-crafts torches when `torch_count < 16` AND `coal+charcoal ≥ 1` AND `stick ≥ 1` AND bot is idle + healthy + no reflex latch active. Single primitive: `skills.craftRecipe(bot, 'torch', 1)` → 4 torches per call, which auto-finds/cleans up a crafting table as needed.
+
+**Design trade-offs.**
+- **Reuses mode-tick cadence.** Following the `torch_placing` template (cooldown + conditional + `execute()` wrapper) gives `!setMode auto_craft off` for free, no new observability module, no new pause/enable surface.
+- **Calls `skills.craftRecipe` directly, not `AutoRecovery.craftItem`.** `craftItem` is a wrapper over the same skill — calling through it would just add cross-cutting via the recovery subsystem for no behavior gain.
+- **Charcoal counts same as coal.** Vanilla recipe accepts either; the gate unions both counts.
+- **Idle-only + health ≥ 6 + no reflex latch** (`_lowHpRetreatActive` / `_drowningEscapeActive` / `_creeperEvadeActive`). Respects the 10s cooldown. Threshold 16 hardcoded per MVP scope.
+- **Deferred (per #9 theme):** auto-craft sticks, tools, food; config knobs for thresholds.
+
+**Verification path.** Code-ship was `22ed805`. Two transient debug commits followed: `cdd65e7` (commit 2.5, dbg-pre/dbg-post around craftRecipe) and `d07e57f` (commit 2.6, `[AutoCraft][gate]` probe before early-return gates). The probe ran one cooldown window on a fully-idle bot and returned `torch=64 fuel=0 stick=70 idle=true hp=17 empty=1` — gates are working as designed (bot already past threshold AND has no fuel; either condition alone would silently return). The earlier "silent-success" observation was a misread of `craftRecipe`'s own stale success-log template, not a real bug. Debug patches reverted in `2198a97` (commit 2.7). Final form is the minimal shipped code.
+
+**Verification.**
+- `node --check src/agent/modes.js` passed across all four code commits.
+- Bot rebooted clean on every deploy — StateTicker 1Hz, zero `[AutoCraft]` handler-failed lines, zero exception lines.
+- Gate logic proven correct live (see probe output above).
+
+**Status:** ✅ verified 2026-04-21 — 10 successful `craftRecipe(["torch",1])` calls in `data/skill-stream.jsonl` between 2026-04-20 22:51:03–22:52:38 (cadence matches 10s cooldown tick). Threshold + gate probe from commit 2.6 (`d07e57f`) confirmed gates working as designed; debug patches reverted in `2198a97`.
+
+
+---
 
 ### #3. Swamp biome traversal — closed as redundant (no code, 2026-04-20)
 
