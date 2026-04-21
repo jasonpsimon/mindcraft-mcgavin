@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `d860661` (BT-34 code ship; WB shipped-move for #34 lands on top of this). Most recent code ship 2026-04-21: **#34 torch_placing guards** (`d860661`) — modes.js adds skyLight≥8 scope gate to the torch_placing mode update; skills.js `_impl_placeBreadcrumbTorch` fallback adds a solid-reference-block precondition returning `false` (wrapSkill abort) when no geometry exists, preventing the ~5s error loop that spammed placement-stream on every topside session. Prior ship 2026-04-20: **#6 strategic torch placement (left-wall convention)** (`ccf3f53`) — new `placeBreadcrumbTorch` helper in `src/agent/library/skills.js` (~100 lines) plus 1-Hz motion cache on `bot._lastMovement` in `modes.js self_preservation.update()`; strict left-wall torch placement with behind-bot floor fallback for open shafts; `digDown` + `torch_placing` both swapped to the new helper; `goToSurface` warn-logs non-left-wall torches on ascent as a wrong-direction signal. Prior ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `2ab1fdd` (BT-7f Structure Oracle code ship; WB shipped-move lands on top of this). Most recent code ship 2026-04-21: **#7f Seed-aware Structure Oracle** (cubiomes-WASM + level.dat seed auto-discovery + `!findStructure` command + seed redaction in boot-snapshot) (`d860661`) — modes.js adds skyLight≥8 scope gate to the torch_placing mode update; skills.js `_impl_placeBreadcrumbTorch` fallback adds a solid-reference-block precondition returning `false` (wrapSkill abort) when no geometry exists, preventing the ~5s error loop that spammed placement-stream on every topside session. Prior ship 2026-04-20: **#6 strategic torch placement (left-wall convention)** (`ccf3f53`) — new `placeBreadcrumbTorch` helper in `src/agent/library/skills.js` (~100 lines) plus 1-Hz motion cache on `bot._lastMovement` in `modes.js self_preservation.update()`; strict left-wall torch placement with behind-bot floor fallback for open shafts; `digDown` + `torch_placing` both swapped to the new helper; `goToSurface` warn-logs non-left-wall torches on ascent as a wrong-direction signal. Prior ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,40 +64,54 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
-
-**Status:** 🚧 in-progress 2026-04-21 — cubiomes→WASM feasibility confirmed via sandbox probe (village coord resolved for seed 12345 at MC_1_21). Seed auto-discovery from `level.dat` confirmed via `prismarine-nbt` (already a bot dep). Three-commit BT underway.
-
-Client-side structure finder. Bot reads world seed + MC version from its profile, queries a bundled cubiomes-WASM module for structure locations within a radius, and feeds results into #31 POI memory and/or #30 Survivor goal selection. No server-side component, no companion mod, no bot OP — the bot stays self-contained and server-agnostic.
-
-**Why client-side (vs. server-side Fabric options).** JP explicitly declined giving the bot OP (rules out vanilla `/locate`) and declined the companion-mod path (wants the bot to stay portable across servers). Client-side cubiomes-WASM regains appeal: zero server permissions, zero mod installs, works on day one of any new server as long as JP shares the seed with the bot config. See #7e research note for full comparison.
-
-**Scope.**
-- **One-time build work:** compile Cubitect/cubiomes (C, active, 1.21-compatible) to WASM via Emscripten. Wrap as a small node module. No published npm exists — this is packaging work, not porting.
-- **Runtime API:** `getStructuresNear(x, z, radius)` → array of `{ type, x, z, dimension }`. Covers strongholds, villages, desert/jungle/ocean/woodland temples, igloos, ocean monuments, nether fortresses, bastion remnants, end cities, ancient cities, trial chambers, pillager outposts, ruined portals, slime chunks, biome boundaries.
-- **Bot integration:** opt-in profile flag (`"worldSeed": "...", "enableStructureOracle": true`). On spawn hook, pre-populate `poi_memory.json` with known structures within N chunks of spawn (see #31 for POI schema).
-- **What it does NOT cover:** caves, ore veins, terrain heightmap, block-level human modifications — cubiomes is biome+structure only. Live scanners (#7, #7c, #7d) continue to handle everything else.
-
-**Design constraints (carried from #7e research).**
-- Treat WASM as a hard boundary — no sync calls from hot paths. Query on spawn, on explicit `!findStructure <type>` command, and on goal-queue pull from #30. Never per-tick.
-- Seed is sensitive-ish (leaking it trivialises server exploration). Keep it in profile config, not in logs, not in snapshots. Add to the redaction list.
-- Version mismatch between bot config seed-version and server version → WASM returns wrong structure positions. Validate `bot.version` against configured seed-version on hook; log a loud warning if they diverge and disable the oracle for the session.
-
-**Blockers / open questions.**
-- (a) Emscripten build of cubiomes not yet verified. May need small C patches for WASM compat.
-- (b) No runtime evidence yet of a JP-impact miss that the oracle would've caught — live scanners + #7c/#7d + #31 POI memory are already covering villages and player bases. Oracle is purely additive; risk is building it speculatively. Mitigation: wait for #30 Survivor to surface a concrete "goal queue needs stronghold coords" moment, then build.
-- (c) Future MC-version drift: each new vanilla version may need a new cubiomes release + rebuild. Accept as maintenance overhead; pin version in profile config.
-
-**Downstream ties.**
-- **#31 POI memory** — on hook, oracle populates POI store with nearby structures so the bot "knows" about a stronghold at (x,z) before ever seeing the chunk. Opt-in.
-- **#30 Survivor mode** — goal queue can target known stronghold/fortress/monument coords when tier-up requires them, instead of random exploration.
-
-**First commit on this ticket:** survey pass — read #31's POI schema and #30's goal-queue shape (once it exists), then design the oracle module interface to slot in cleanly. Second commit: WASM build + node wrapper. Third commit: bot-side integration (profile config + hook wiring + redaction).
-
-
----
 
 ## Shipped — awaiting live verification
+
+### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
+
+**Status:** 🚢 shipped 2026-04-21 awaiting live verification (`2ab1fdd`) — cubiomes (e61f905) compiled to WASM via emsdk 5.0.6; seed auto-discovered from `level.dat` via prismarine-nbt (already a transitive dep via mineflayer). Default-on with graceful-disable perimeter.
+
+**What shipped.**
+
+- **`src/oracle/cubiomes_wasm/`** — vendored WASM build (19 KB .wasm + 11 KB glue + `oracle_driver.c` source + `README.md` rebuild recipe pinning emsdk 5.0.6 and cubiomes `e61f905`). No new npm deps.
+- **`src/oracle/seed_discovery.js`** — reads `level.dat`. Seed path: `Data.WorldGenSettings.seed` (1.16+) with `Data.RandomSeed` legacy fallback. Candidate world dirs: `opts.worldPath`, `./world`, `../world`, `./minecraft/world`, `../minecraft/world`. Returns `{seed:BigInt, mc_version, level_name, world_path, source}` or null. Never logs the seed value.
+- **`src/oracle/structure_oracle.js`** — observability module (CLAUDE.md pattern): `configureOracle` / `hookOracle` / `getOracleStats` / `getOracleSnapshot` / `getStructuresNear`. JSONL sink at `data/oracle-stream.jsonl`. Idempotent via `agent._hookedOracle`. Async init fire-and-forget; closure flag `_oracleActive` gates every public export. Initial sweep at spawn populates POI store with village / outpost / ancient_city / mansion / monument / trail_ruins. MC version table covers `1.19`–`1.21.x`.
+- **`src/agent/agent.js`** — mount after `hookPoiMemory`, before `escapeProtectedZone`. Gated by `this.prompter.profile.enableStructureOracle !== false`; threads `profile.worldPath` into oracleSettings. Wrapped try/catch — oracle init never blocks spawn.
+- **`src/agent/poi_memory.js`** — `registerFromOracle(agent, record)` public wrapper; `source: 'oracle'` tags the POI records so downstream consumers can distinguish cubiomes-resolved POIs from scanner/watcher records.
+- **`src/agent/commands/actions.js`** — `!findStructure <structure_type>` returns nearest coord + distance, or graceful unavailable message.
+- **`src/observability/boot_snapshot.js`** — `_redactSensitive(obj)` recursively strips `/seed/i` keys before the settings blob lands in `data/boot-snapshot.json`.
+- **`profiles/defaults/_default.json`** — `"enableStructureOracle": true` as a default for all profiles (opt-out per-profile).
+
+**Code Rules compliance.**
+
+- **Rule 1 (observability):** `[Oracle] loaded source=… mc=…` or `[Oracle] disabled: …` stdout line on init. JSONL per resolution (`event: initial_sweep` / `event: query`). StateTicker-safe `getOracleSnapshot()` exposes `{active, mc_version, source, resolutions, last_resolutions}` — never the seed value.
+- **Rule 2 (idempotent hooks):** `agent._hookedOracle` reference gate; soft-reconnect safe.
+- **Rule 3 (graceful failure):** `_oracleActive` flag; every export short-circuits when inactive. Init catches handle level.dat miss, unsupported mc_version, WASM load failure, and initial-sweep throws independently. Single-shot warn on disable.
+- **Rule 4 (pinned deps):** cubiomes `e61f905`, emsdk `5.0.6`, flags documented in `cubiomes_wasm/README.md`.
+- **Rule 5 (no secrets to logs):** seed never flows to stdout/JSONL/StateTicker. Boot-snapshot settings dump passes through `_redactSensitive`.
+- **Rule 7 (complete the perimeter):** every public export in `structure_oracle.js` checks `_oracleActive`. `!findStructure` returns human-readable graceful message. `registerFromOracle` is only called by the oracle itself — inactive oracle never invokes it.
+
+**Live verification plan.**
+
+1. **Profile setup first (one-time, on gaming):** set `"worldPath": "/RAID/Crafty/servers/6d1982e5-e1d9-4737-b825-fc1e694b4ae7/The SFMCS"` in `ThatCoolGuyDude.json`. Without this the oracle graceful-disables on this setup (Crafty's non-standard world path falls outside the default candidate list).
+2. Reboot bot on HEAD `2ab1fdd`.
+3. Expect `[Oracle] loaded source=level.dat:WorldGenSettings.seed mc=1.21 world=The SFMCS` (no seed value).
+4. Expect `[Oracle] initial sweep complete; N/6 resolved` followed by N `[POI] register …source=oracle` entries.
+5. `data/oracle-stream.jsonl` shows `event: initial_sweep` rows with cubiomes-resolved coords.
+6. `data/poi-stream.jsonl` shows matching `source: "oracle"` register rows.
+7. `!findStructure village` via chat → `Nearest village is at x=…, z=… (N blocks away).`
+8. **Deliberate failure test:** flip `enableStructureOracle: false` on a throwaway profile; confirm `[Oracle]` is absent from stdout, bot boots normally, POI scanner still fires.
+9. **Seed redaction check:** `cat data/boot-snapshot.json | jq '..' | grep -i seed` → every seed key's value must be `"[REDACTED]"`, never a numeric or string seed.
+
+**Forensics sources:**
+- `data/oracle-stream.jsonl` (new)
+- `data/poi-stream.jsonl` (`source: "oracle"` rows)
+- `data/state-stream.jsonl` (`oracle` snapshot field when StateTicker wiring lands — not in this ship)
+- stdout `[Oracle]` lines via `tmux capture-pane -t mindcraft -p -S -5000`
+
+**Dependencies:** none added to `package.json`. Transitive: prismarine-nbt via mineflayer. WASM artifacts vendored.
+
+---
 
 ### #34. `torch_placing` mode — geometry precondition + sky-light scope gate
 
