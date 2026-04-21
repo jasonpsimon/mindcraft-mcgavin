@@ -1089,9 +1089,30 @@ Moved to In-progress section above. Original fix sketch preserved there; see als
 
 ### 7e. Seed-based chunk-diff detection (research-only)
 
-**Status:** ⏳ research-only • **Priority:** very low (likely infeasible in JS for 1.21)
+**Status:** ⏳ research-only • **Priority:** very low for original scope; narrower pivot feasible (see below)
 
-Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. **Practically**: no 1.21-compatible JS terrain generator exists. Porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) is a major project. Park indefinitely; revisit if a library emerges.
+**Original scope.** Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. No 1.21-compatible JS terrain generator exists; porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) remains a major undertaking.
+
+**Research pass 2026-04-20 — ecosystem sweep.** Findings on whether the block-level regen premise has become feasible since this was first parked:
+
+- **`prismarine-pregenerator`** (extremeheat) — README self-labels WIP; only 2 commits; references 1.16 in API examples. Not actively developed; no 1.21 path.
+- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — provide basic/simple generation for custom servers. None are vanilla-accurate. `node-voxel-worldgen` adds caves but not biome-accurate terrain, not feature generation, not structures. Useful for running toy worlds, not for diffing vanilla chunks.
+- **`cubiomes` npm package** — last published 5 years ago at 1.1.1; README stated "intend to move functionality to JS via node addons" but stalled. Not a viable path.
+- **`cubiomes` C library** (Cubitect) — still actively maintained, supports 1.21. Covers **biome generation and structure-location logic**, NOT block-level terrain/caves. Could be compiled to WASM or shelled out via FFI/child-process, but the output domain is wrong for block-diff.
+- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — all cover up to 1.21 / 1.21.4 using cubiomes-derived logic. Same domain limit: biome + structure locations only, no terrain diff.
+- **Amidst** — discontinued post-1.17.1. Dead end.
+
+**Verdict on original scope.** Still infeasible. No project has ported or reimplemented Java's full block-level terrain generator in JS, and the cost hasn't changed (50K+ lines, grows each MC version). Revisit only if a library genuinely emerges — watch `prismarine` org and `extremeheat/prismarine-pregenerator` for movement.
+
+**Pivot opportunity (narrower scope).** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM (or shelling out to `cubiomes-viewer`-style CLI) given seed + version. That would cover: villages, strongholds, monuments, fortresses, ancient cities, trial chambers, outposts, slime chunks, biome boundaries — everything `chunkbase.com` surfaces. Does NOT cover: caves, ore veins, terrain heightmap, block-level human modifications.
+
+**Potential downstream ties.**
+- **#31 POI memory** — pre-populate `poi_memory.json` on hook with structures within N chunks of spawn. Bot "knows" there's a stronghold at (x,z) before ever seeing the chunk. Optional, opt-in — treat as future enhancement once #31 lives long enough to show friction.
+- **#30 Survivor mode** — goal queue could target known stronghold/fortress/monument coordinates instead of random exploration when tier-up requires them.
+
+**Blockers for the pivot.** (a) Requires the server operator to share the world seed with the bot config (JP has this; others may not). (b) Cubiomes-WASM build needs verification — no ready-made npm package exists. (c) Most JP-impact test cases (villages, player bases) are already covered by live `#7` scanner + `#7c`/`#7d` structure detection + `#31` POI memory — the seed-based approach is purely additive.
+
+**Decision.** Keep #7e parked under original scope. The pivot (seed-aware structure finder) is worth a dedicated new ticket if the need arises — probably after #30 Survivor lands and the goal queue wants structure targets. Not worth carving time for speculatively.
 
 
 **🟡 Partial**
