@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `ab4bb07` (WB hygiene pass on top of #31 code ship). Most recent code ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features as the bot moves (portals, beacons/conduits/lodestones, generated structures via signature blocks, villages + player-base zones by polling `bot.protectedZones`). Two-tier detection mirrors #7c/#7d (60s scanner + blockUpdate watcher with double-sided filter); closure-state observability pattern (configure/hook/getStats/JSONL sink at `data/poi-stream.jsonl`); persists to `bots/<profile>/poi_memory.json`; ContextBuilder Priority 3.6 "Known POIs" injection (top-N nearest in current dimension). Bot rebooted clean, awaiting live capture verification. Prior ship 2026-04-20: #33 auto-craft torches MVP (`22ed805`, debug iterations `cdd65e7` / `d07e57f`, transient-revert `2198a97`) — new `auto_craft` mode closes the silent-skip surfaced 2026-04-14; gate logic live-verified via one-cooldown probe. See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `eefdb52` (WB shipped-move for #2-follow-up lands on top of this). Most recent code ship 2026-04-20: **#2-follow-up water-breathing potion auto-use** (`eefdb52`) — ~108-line reflex added to `src/agent/modes.js` `self_preservation.update()`, preemptive drown defense at oxygen ≤14 with splash-preferred / drinkable-fallback paths, offhand swap-and-restore, skip-when-shield-raised perimeter. Layers on top of BT-2 L3 turtle-helmet and BT-10g reactive surfacing. Awaiting natural-trigger verification (river/ocean crossing with water_breathing potion in inventory). Prior ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features (portals, beacons/conduits/lodestones, generated structures, villages + player-base zones); two-tier detection (60s scanner + blockUpdate watcher) with JSONL sink at `data/poi-stream.jsonl`; ContextBuilder Priority 3.6 "Known POIs" injection. See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -64,40 +64,34 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
-
-**Status:** 🛠️ in-progress 2026-04-20 • **Priority:** low-medium (preemptive reflex; complements turtle-helmet Layer 3)
-
-**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
-
-**Scope decisions (agreed 2026-04-20).**
-- **Preemptive, not reactive.** Fires *before* BT-10g drowning-escape would. Threshold: oxygen drops below a safe margin (exact value set during survey — likely around 14/20 so a 3-min potion covers the whole crossing). Rationale: potion lasts 3:00/8:00, one drink covers the full transit vs. BT-10g firing over and over.
-- **Both drinkable variants.** `water_breathing` (3:00) and `long_water_breathing` (8:00). Cheap to support both — same NBT introspection path, different duration tags.
-- **Drinkable + splash self-throw.** Splash variant (`splash_potion` with water_breathing effect, ~2:15/6:00) aimed straight down via `bot.lookAt(bot.entity.position.offset(0,-1,0))` then `bot.activateItem()`. One extra branch (~10 lines). Accepts glass-bottle consumption. **Lingering deferred** — rare, requires stand-in-cloud sub-behavior that fights the swim goal; spin up a follow-up ticket if a real case ever appears.
-- **Offhand drinking.** Equip potion in offhand so mainhand tool stays in place. Restore offhand contents (shield, usually) after the 1.6s activation completes.
-
-**Skip conditions (copy the Layer 3 pattern, inverted).**
-- Already has `water_breathing` effect active (`bot.entity.effects`).
-- Already wearing a turtle helmet that's providing the slow Water Breathing tick.
-- Not underwater and oxygen not dropping (no need to preemptively burn a potion on land).
-- Currently in combat / holding mainhand-critical item (let combat win the tiebreak — defer to next low-oxygen tick).
-
-**Open questions for survey pass (commit 2's first step, before any code).**
-1. Does a `useItem` / `drink` / `consumePotion` primitive already exist in `skills.js` or `self_preservation.js`? BT-2 Layer 3 is the closest structural sibling — reuse its shape if possible.
-2. How does mineflayer expose potion NBT? Confirm `item.nbt` → `Potion` / `CustomPotionEffects` tag structure on 1.21.4. (Minecraft 1.20.5+ moved to the `potion_contents` component; verify which shape mineflayer surfaces after ViaBackwards translation.)
-3. Does `bot.lookAt` + `bot.activateItem()` work reliably underwater for the splash path? Rule-2 check.
-4. Profile surface — put the oxygen threshold in `ThatCoolGuyDude.json` (reflex config), or hardcode alongside the Layer 3 skip list?
-
-**Ship plan.**
-- Commit 1 (this): WB-only, body moved into In-progress.
-- Commit 2: survey pass + code ship — new helper next to Layer 3 in `self_preservation.update()`, `[SelfPreservation] potion_drink` / `potion_splash` log lines, Rule 7 single-perimeter audit.
-- Commit 3: WB move to Shipped-awaiting-verification + HEAD bump.
-
-**Signals to watch post-ship.** Natural river/ocean crossing where bot holds a water_breathing potion: `[SelfPreservation] potion_drink` log line + `bot.entity.effects` shows `water_breathing` active for 3:00. BT-10g fire count drops on repeat-dive terrain.
+_None._
 
 ---
 
 ## Shipped — awaiting live verification
+
+### #2-follow-up. Water-breathing potion auto-use reflex (`eefdb52`, 2026-04-20)
+
+**What shipped.** New preemptive drown-defense reflex in `src/agent/modes.js` `self_preservation.update()`, inserted between BT-2 L3 turtle-helmet and BT-10e shield-raise blocks (~108 lines). Fires when `bot.entity.isInWater && bot.oxygenLevel <= 14` (threshold gives ~4-oxygen margin above BT-10g's reactive ≤10 surface-and-jump so the 1.6s drink animation completes first). Two paths:
+
+- **Splash path (preferred):** find `splash_potion` with water_breathing effect → `bot.lookAt(position.offset(0,-1,0))` → equip mainhand → `bot.activateItem()` (instant throw, aim down, cloud hits bot). No offhand contention window.
+- **Drink path (fallback):** find `potion` with water_breathing effect → save prior offhand → `bot.equip(potion, 'off-hand')` → `bot.activateItem(true)` → `setTimeout(1700ms)` → restore prior offhand. Mainhand tool stays untouched.
+
+**Potion detection** handles both modern `components['minecraft:potion_contents']` (1.20.5+) and legacy `item.nbt.value.Potion` shapes for ViaBackwards-translated inventories on 1.21.4. Matches `water_breathing`, `long_water_breathing`, `strong_water_breathing`.
+
+**Latches:** `_potionDrinking` (blocks re-entry + shield-raise stomping mid-animation), `_waterBreathingActive` (blocks re-dose for 170s so one base 180s potion covers the full transit; long/extended potions just keep the reflex quiet until they expire). Log lines: `[Survival] potion_splash water_breathing oxy=N` / `[Survival] potion_drink water_breathing oxy=N`.
+
+**Offhand contention with BT-10e shield-raise.** Skip-guard: `!bot._shieldRaiseActive` in potion trigger — shield wins when a hostile is within 16 blocks (drowning is slower than a creeper). `_potionDrinking` latch prevents shield-raise from re-grabbing slot 45 during the 1.7s drink.
+
+**Rule 7 perimeter audit.** `grep -rnE 'activateItem|off-hand|slot.*45' src/` surfaced: BT-10e shield-raise (`modes.js:277`, handled), one-off `bot.equip(item, 'off-hand')` at `skills.js:1125` (player-commanded, not reflex-driven), mainhand `activateItem()` at `skills.js:5350`/`5436` (not offhand). No additional reflex-loop conflicts.
+
+**Layered with:** BT-2 L3 turtle-helmet (equip on water entry — common case), BT-10g drowning-escape (last-resort surface-and-jump ≤10 oxygen). This layer fills the "no turtle helmet, have potions" and "long intentional dive" gaps.
+
+**Not shipped (deferred).** Lingering potions (rare, stand-in-cloud sub-behavior fights the swim goal). Threat-aware splash angling. Stacking other effects. Profile-configurable threshold — hardcoded 14 for now; promote if playtest reveals playstyle variation.
+
+**Success signal (awaiting natural trigger).** River/ocean crossing where bot holds water_breathing potion → `[Survival] potion_splash` or `potion_drink` log in tmux capture, `water_breathing` entry in `bot.entity.effects` for ≥3 minutes, and BT-10g fire count drops on repeat-dive terrain (cross-ref `data/state-stream.jsonl` oxygen traces). Graduates to Recently completed on first observation.
+
+---
 
 ### #31. POI location memory — auto-capture of notable world features (`2714f02`, 2026-04-20)
 
