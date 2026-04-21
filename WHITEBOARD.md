@@ -1205,6 +1205,18 @@ Client-side structure finder. Bot reads world seed + MC version from its profile
 
 **Signals to watch:** bot repeatedly swimming across a lily-padded pocket and appearing "unnatural" in play; biome-specific terrain deaths that the generic hazard list missed.
 
+### Context Window Audit
+
+**Status:** ⏳ not started • **Priority:** TBD (sized after the audit; escalate if a real budget-pressure problem is found) • **Source:** #17 research pass 2026-04-21 — confirmed skills.js line count is NOT the LLM context flooder (relevant_docs_count=5 top-N filter plus 3 always-show = max 8 skill docs per prompt), so if there is context pressure it lives elsewhere.
+
+Audit where the LLM's prompt budget actually goes before any refactor gets re-prioritised on context-cost grounds.
+
+- **ContextBuilder budget (6908 tokens)** — what's actually consuming it? Have you seen prompt-truncation symptoms?
+- **StateTicker snapshots** — how big are they and how often do they go in?
+- **Chat history / memory-recall buffers**
+
+Open question to kick off this ticket: *Want me to check where the ContextBuilder budget actually goes? That would tell us whether there's a real LLM-context problem to chase, and if so, in what file.*
+
 ---
 
 **🔁 Ongoing**
