@@ -4991,19 +4991,18 @@ async function _impl_digDown(bot, distance = 10) {
         // Support: previous step's floor block (solid). face='bottom' means
         // torch stands on top of that floor. goToSurface follows these torches
         // back up in reverse order.
-        // Whiteboard #6 asked for strict "left wall" placement; this behind-bot
-        // variant is simpler and visible from both directions. Can refine later
-        // if JP wants strict left-wall convention.
+        // #6: strict left-wall placement via placeBreadcrumbTorch. We pass
+        // the dig heading (dx, dz) as a fallback so the helper works even
+        // before the modes.js motion cache has primed (digDown can outrun
+        // the 1-Hz tick). Helper falls back to the legacy behind-bot floor
+        // torch when no left wall is available.
         // Threshold was 8 originally; lowered to 4 after observed typical
         // digDown(5) never triggered a placement.
         if (descended > 0 && descended % 4 === 0) {
-            const torchX = currentPos.x - dx;
-            const torchY = currentPos.y + 1;
-            const torchZ = currentPos.z - dz;
             try {
-                await placeTorchAt(bot, torchX, torchY, torchZ, 'bottom');
+                await placeBreadcrumbTorch(bot, dx, dz);
             } catch (torchErr) {
-                console.warn(`[digDown] Torch placement at (${torchX}, ${torchY}, ${torchZ}) failed: ${torchErr.message}`);
+                console.warn(`[digDown] Breadcrumb torch placement failed: ${torchErr.message}`);
             }
         }
     }
@@ -5267,6 +5266,105 @@ async function _impl_placeTorchAt(bot, x, y, z, face = 'bottom') {
 }
 export const placeTorchAt = wrapSkill('placeTorchAt', _impl_placeTorchAt);
 
+/**
+ * #6 Strategic torch placement — strict "left wall" convention.
+ *
+ * Reads bot._lastMovement (cached 1 Hz by modes.js self_preservation) for
+ * the current horizontal heading; falls back to the caller-provided heading
+ * (digDown passes its dig dx/dz so this works before the motion cache has
+ * primed), then to bot yaw as a last resort. Computes left = (dz, -dx) and
+ * probes the head-level block at bot+left. If that block is solid, places a
+ * wall torch attached to that face. If not (open shaft, no left wall),
+ * falls back to the legacy behind-bot floor torch so we never silently skip
+ * a breadcrumb.
+ *
+ * Annotates the placedTorches entry with { face, placedFacing, headingDx,
+ * headingDz } so goToSurface can audit direction on the ascent — a
+ * properly placed "left-wall" torch (during descent) will appear on the
+ * bot's RIGHT during ascent, giving us a visible right-side breadcrumb
+ * trail and a warn-log signal when the chain contradicts the convention.
+ *
+ * @param {MinecraftBot} bot
+ * @param {number} [fallbackDx=0]
+ * @param {number} [fallbackDz=0]
+ * @returns {Promise<boolean>}
+ */
+async function _impl_placeBreadcrumbTorch(bot, fallbackDx = 0, fallbackDz = 0) {
+    return await withBotLock('placeBreadcrumbTorch', async () => {
+        // 1) Heading: live motion cache > caller fallback > yaw
+        let dx = 0, dz = 0;
+        const m = bot._lastMovement;
+        if (m && (m.dx !== 0 || m.dz !== 0)) {
+            dx = m.dx; dz = m.dz;
+        } else if (fallbackDx !== 0 || fallbackDz !== 0) {
+            dx = fallbackDx; dz = fallbackDz;
+        } else {
+            try {
+                const yaw = bot.entity.yaw;
+                const sx = -Math.sin(yaw), sz = -Math.cos(yaw);
+                if (Math.abs(sx) >= Math.abs(sz)) dx = sx > 0 ? 1 : -1;
+                else dz = sz > 0 ? 1 : -1;
+            } catch (_) { dx = 1; dz = 0; /* last-resort east */ }
+        }
+
+        // 2) Left of heading in Minecraft 2D: (dz, -dx)
+        const lx = dz;
+        const lz = -dx;
+        const pos = bot.entity.position;
+        const bx = Math.floor(pos.x);
+        const by = Math.floor(pos.y);
+        const bz = Math.floor(pos.z);
+        const headY = by + 1;
+
+        // 3) Probe wall at bot+left, head level
+        let wallSolid = false;
+        try {
+            const wb = bot.blockAt(new Vec3(bx + lx, headY, bz + lz));
+            const passable = ['air', 'cave_air', 'void_air', 'water', 'lava'];
+            wallSolid = !!(wb && wb.boundingBox === 'block' && !passable.includes(wb.name));
+        } catch (_) { wallSolid = false; }
+
+        let torchX, torchY, torchZ, placedFace, placedFacing;
+        if (wallSolid) {
+            // Wall torch: target the air block at bot's head position adjacent
+            // to the wall. face= cardinal FROM wall TO torch = -left vector.
+            torchX = bx;
+            torchY = headY;
+            torchZ = bz;
+            if (lx === 1) placedFace = 'west';
+            else if (lx === -1) placedFace = 'east';
+            else if (lz === 1) placedFace = 'north';
+            else placedFace = 'south';
+            placedFacing = 'left-wall';
+        } else {
+            // Fallback: behind-bot floor torch (legacy breadcrumb shape).
+            torchX = bx - dx;
+            torchY = headY;
+            torchZ = bz - dz;
+            placedFace = 'bottom';
+            placedFacing = 'behind-bot-fallback';
+        }
+
+        const ok = await placeTorchAt(bot, torchX, torchY, torchZ, placedFace);
+        // Annotate the just-pushed placedTorches entry with direction metadata
+        // so goToSurface can audit (#6 right-side ascent preference).
+        if (ok && Array.isArray(bot.placedTorches) && bot.placedTorches.length > 0) {
+            const last = bot.placedTorches[bot.placedTorches.length - 1];
+            if (last &&
+                last.x === Math.floor(torchX) &&
+                last.y === Math.floor(torchY) &&
+                last.z === Math.floor(torchZ)) {
+                last.face = placedFace;
+                last.placedFacing = placedFacing;
+                last.headingDx = dx;
+                last.headingDz = dz;
+            }
+        }
+        return ok;
+    });
+}
+export const placeBreadcrumbTorch = wrapSkill('placeBreadcrumbTorch', _impl_placeBreadcrumbTorch);
+
 async function _impl_goToSurface(bot) {
     /**
      * Navigate to the surface. If the bot has placed torches during a
@@ -5296,6 +5394,16 @@ async function _impl_goToSurface(bot) {
             if (ascending.length > 0) {
                 log(bot, `Following ${ascending.length} placed torches back to the surface.`);
                 for (const t of ascending) {
+                    // #6 right-side ascent audit: torches placed by the #6
+                    // breadcrumb pattern store placedFacing='left-wall' (left
+                    // of descent heading = right of ascent heading). Any torch
+                    // with direction metadata that ISN'T 'left-wall' is either
+                    // a legacy drop, an open-shaft fallback, or a wrong-side
+                    // placement — warn so the log shows a wrong-direction
+                    // signal at that rung. Does not change pathing.
+                    if (t.placedFacing && t.placedFacing !== 'left-wall') {
+                        console.warn(`[goToSurface] non-left-wall torch at (${t.x}, ${t.y}, ${t.z}) facing=${t.placedFacing} — wrong direction signal`);
+                    }
                     try {
                         await goToPosition(bot, t.x, t.y, t.z, 1);
                     } catch (err) {

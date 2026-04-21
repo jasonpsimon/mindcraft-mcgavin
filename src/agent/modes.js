@@ -71,6 +71,31 @@ const modes_list = [
             if (!block) block = {name: 'air'};
             if (!blockAbove) blockAbove = {name: 'air'};
 
+            // #6 motion cache: sample horizontal heading for the breadcrumb-
+            // torch convention (left-wall placement). Re-samples whenever the
+            // bot has moved >=1 block since the last sample; stores the signed
+            // dominant-axis unit step on bot._lastMovement. placeBreadcrumbTorch
+            // reads this to derive the "left wall" direction. Wrapped in
+            // try/catch — motion cache must never break self-preservation.
+            try {
+                if (bot.entity && bot.entity.position) {
+                    const _p = bot.entity.position;
+                    if (!bot._lastTorchSamplePos) {
+                        bot._lastTorchSamplePos = { x: _p.x, z: _p.z };
+                    } else {
+                        const _ddx = _p.x - bot._lastTorchSamplePos.x;
+                        const _ddz = _p.z - bot._lastTorchSamplePos.z;
+                        if ((_ddx * _ddx + _ddz * _ddz) >= 1) {
+                            let _ux = 0, _uz = 0;
+                            if (Math.abs(_ddx) >= Math.abs(_ddz)) _ux = _ddx > 0 ? 1 : -1;
+                            else _uz = _ddz > 0 ? 1 : -1;
+                            bot._lastMovement = { dx: _ux, dz: _uz, t: Date.now() };
+                            bot._lastTorchSamplePos = { x: _p.x, z: _p.z };
+                        }
+                    }
+                }
+            } catch (_) { /* never let motion cache break self-preservation */ }
+
             // BT-10b (2026-04-19): low-HP-retreat latch clear. Runs at the top
             // of every tick so we exit retreat promptly once HP recovers or
             // hostiles disperse. Hysteresis: set at HP<6, clear at HP>=14 OR
@@ -821,10 +846,12 @@ const modes_list = [
             if (world.shouldPlaceTorch(agent.bot)) {
                 if (Date.now() - this.last_place < this.cooldown * 1000) return;
                 execute(this, agent, async () => {
-                    const pos = agent.bot.entity.position;
-                    // placeTorchAt records the torch in bot.placedTorches for
-                    // breadcrumb navigation via goToSurface.
-                    await skills.placeTorchAt(agent.bot, pos.x, pos.y, pos.z, 'bottom');
+                    // #6: prefer left-wall placement using cached motion heading.
+                    // placeBreadcrumbTorch records the torch (with face + heading
+                    // metadata) in bot.placedTorches for breadcrumb navigation via
+                    // goToSurface. Falls back to behind-bot floor torch when no
+                    // wall is available (open shaft).
+                    await skills.placeBreadcrumbTorch(agent.bot);
                 });
                 this.last_place = Date.now();
             }
