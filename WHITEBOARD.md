@@ -107,33 +107,6 @@ Layers with: #33 auto-craft (keeps torch supply ≥16) and the existing #5/#6 br
 
 ---
 
-### #31. POI location memory — auto-capture of notable world features (`2714f02`, 2026-04-20)
-
-**What shipped.** New observability-adjacent module `src/agent/poi_memory.js` (~420 lines) that passively records notable POIs as the bot moves through the world, so later natural-language references ("meet me at the portal") resolve to coordinates. Closure-state pattern from CLAUDE.md (`configurePoiMemory` / `hookPoiMemory` / `getPoiStats` / `getPoiSnapshot` / `getPoiContext`), idempotent hook via `bot._hookedPoiMemory = bot` reference-identity gate, persists to `bots/<profile>/poi_memory.json` (debounced 5s) with JSONL sink at `data/poi-stream.jsonl`. Mounted in `src/agent/agent.js` spawn handler right after `hookDoorTracker` and before `escapeProtectedZone`, gated by `settings.poi_memory.enabled`.
-
-**Two-tier detection** (mirrors #7c/#7d shape):
-- **60s scanner** — `bot.findBlocks` over signature catalog within 96 blocks (max 256 hits): portals (`nether_portal`, `end_portal`), landmarks (`beacon`, `conduit`, `lodestone`), structures (`end_portal_frame` → stronghold, `nether_bricks` cluster ≥8 → fortress, `reinforced_deepslate` → ancient city, `copper_bulb`/`copper_grate` → trial chamber). Plus `_stampFromZones` polls `bot.protectedZones[]` on every tick → stamps `village` and `player_base` POIs from zones already registered by #7 scanner / #7c / #7d. No duplication of existing detectors.
-- **`bot.on('blockUpdate')` watcher** — double-sided filter: `newBlock` in POI-signature allowlist AND `oldBlock` in `REPLACEABLE_OLD` (air/cave_air/water/lava/grass/snow/etc.). Drops 99%+ of events at zero cost (leaf decay, redstone tick, water flow). Sub-second latency for just-lit nether portals and just-placed beacons. Cluster-gated types (nether_bricks) run a 10-minute sliding-window cluster pass.
-
-**Record shape.** `{_key, type, subtype, pos:[x,y,z], dimension, first_seen, last_seen, source:'scanner'|'watcher'|'zone_village'|'zone_player_base', confidence, signals}`. Dedup key: `{type, dimension, x_bucket=floor(x/16), z_bucket=floor(z/16)}` — 16-block grid. `maxEntries=500` LRU trim by `last_seen`.
-
-**ContextBuilder wiring (new Priority 3.6).** Added `poiContext` section to `src/memory/context_builder.js` between `nearbyBlocks` (3.5) and `commands` (4). `src/models/prompter.js` computes it via dynamic import (`poiMod.getPoiContext(agent)`) alongside `nearbyBlocks`, passes as `build()` param, and appends `poi:${stats.sections.poiContext || 0}` to the ContextBuilder stats log. Injects top-8 nearest POIs by `dist(bot.position, poi.pos)` filtered to `bot.game.dimension`, formatted as `Known POIs:\n- type/subtype @ (x,y,z) [dist]`.
-
-**Design trade-offs.**
-- **Separate `poi_memory.json`, not `MemoryBank`.** MemoryBank is 24 lines of `name → [x,y,z]` — no dimension, type, timestamp, source, or confidence. Auto-POI has fundamentally different semantics from `!rememberHere` (user-named, explicit). Keeping them split avoids polluting the user table.
-- **Poll `bot.protectedZones[]`, don't subscribe.** Existing village scanner + `detectNearbyPlayerStructures` push zones directly to the array — no callback/event. A 60s poll sees new zones within one tick after registration; acceptable latency for a passive memory layer, and zero coupling to scanner internals.
-- **Cluster-gated nether_bricks (threshold 8).** Individual nether_bricks appear in inventory walls / random fortress fragments; 8+ within a 12-block radius is a reasonable fortress signal. All other structure signature blocks (end_portal_frame, reinforced_deepslate, copper_bulb/grate, beacon, conduit, lodestone) are singleton-promoting because they're rare/unique.
-- **Dynamic import in `prompter.js`.** Keeps startup decoupled — `poi_memory.js` only loads when a prompt is being built, not at prompter construction. Failure path logs a warning and passes empty string.
-- **All POI types in one ship** (per JP's 2026-04-20 decision). Deferred: chat-labeled landmarks, `!goToPOI <type>` command surface.
-
-**Verification.**
-- `node --check` passed on all 4 modified files: `src/agent/poi_memory.js` (new), `src/agent/agent.js`, `src/memory/context_builder.js`, `src/models/prompter.js`.
-- Bot rebooted clean on HEAD `2714f02` — StateTicker 1Hz for 45+ consecutive pulses, HP 17, dimension overworld, LLM init reply observed ("Hello world! I am ThatCoolGuyDude."), zero exception / throw / uncaught / syntax-error lines in tmux capture. StateTicker mounts AFTER the POI hook in the spawn handler, so its liveness confirms the POI hook completed without throwing.
-- Rule 7 "complete the perimeter" audited: closure state only, no bot mutation anywhere in `poi_memory.js`; idempotent hook gate prevents double-registration on soft reconnect.
-
-**Status:** ✅ shipped — **awaiting live verification** (signals: (a) `[POI] register village|player_base (x,z) source=zone_*` line in tmux pane within ~60s of bot walking into a village or detected player base; (b) `[POI] register portal/nether_portal (x,y,z) source=watcher` when JP lights a nether portal within 64 blocks of the bot; (c) `data/poi-stream.jsonl` accumulating JSONL events; (d) `bots/ThatCoolGuyDude/poi_memory.json` populating and persisting across restarts; (e) ContextBuilder log includes `poi:>0` once at least one POI is within `contextMaxDistance=256`).
-
----
 
 
 ### #7d. Block-update watcher for runtime-placed structures (`7d58837`, 2026-04-20)
@@ -1235,6 +1208,34 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### #31. POI location memory — auto-capture of notable world features (`2714f02`, 2026-04-20)
+
+**What shipped.** New observability-adjacent module `src/agent/poi_memory.js` (~420 lines) that passively records notable POIs as the bot moves through the world, so later natural-language references ("meet me at the portal") resolve to coordinates. Closure-state pattern from CLAUDE.md (`configurePoiMemory` / `hookPoiMemory` / `getPoiStats` / `getPoiSnapshot` / `getPoiContext`), idempotent hook via `bot._hookedPoiMemory = bot` reference-identity gate, persists to `bots/<profile>/poi_memory.json` (debounced 5s) with JSONL sink at `data/poi-stream.jsonl`. Mounted in `src/agent/agent.js` spawn handler right after `hookDoorTracker` and before `escapeProtectedZone`, gated by `settings.poi_memory.enabled`.
+
+**Two-tier detection** (mirrors #7c/#7d shape):
+- **60s scanner** — `bot.findBlocks` over signature catalog within 96 blocks (max 256 hits): portals (`nether_portal`, `end_portal`), landmarks (`beacon`, `conduit`, `lodestone`), structures (`end_portal_frame` → stronghold, `nether_bricks` cluster ≥8 → fortress, `reinforced_deepslate` → ancient city, `copper_bulb`/`copper_grate` → trial chamber). Plus `_stampFromZones` polls `bot.protectedZones[]` on every tick → stamps `village` and `player_base` POIs from zones already registered by #7 scanner / #7c / #7d. No duplication of existing detectors.
+- **`bot.on('blockUpdate')` watcher** — double-sided filter: `newBlock` in POI-signature allowlist AND `oldBlock` in `REPLACEABLE_OLD` (air/cave_air/water/lava/grass/snow/etc.). Drops 99%+ of events at zero cost (leaf decay, redstone tick, water flow). Sub-second latency for just-lit nether portals and just-placed beacons. Cluster-gated types (nether_bricks) run a 10-minute sliding-window cluster pass.
+
+**Record shape.** `{_key, type, subtype, pos:[x,y,z], dimension, first_seen, last_seen, source:'scanner'|'watcher'|'zone_village'|'zone_player_base', confidence, signals}`. Dedup key: `{type, dimension, x_bucket=floor(x/16), z_bucket=floor(z/16)}` — 16-block grid. `maxEntries=500` LRU trim by `last_seen`.
+
+**ContextBuilder wiring (new Priority 3.6).** Added `poiContext` section to `src/memory/context_builder.js` between `nearbyBlocks` (3.5) and `commands` (4). `src/models/prompter.js` computes it via dynamic import (`poiMod.getPoiContext(agent)`) alongside `nearbyBlocks`, passes as `build()` param, and appends `poi:${stats.sections.poiContext || 0}` to the ContextBuilder stats log. Injects top-8 nearest POIs by `dist(bot.position, poi.pos)` filtered to `bot.game.dimension`, formatted as `Known POIs:\n- type/subtype @ (x,y,z) [dist]`.
+
+**Design trade-offs.**
+- **Separate `poi_memory.json`, not `MemoryBank`.** MemoryBank is 24 lines of `name → [x,y,z]` — no dimension, type, timestamp, source, or confidence. Auto-POI has fundamentally different semantics from `!rememberHere` (user-named, explicit). Keeping them split avoids polluting the user table.
+- **Poll `bot.protectedZones[]`, don't subscribe.** Existing village scanner + `detectNearbyPlayerStructures` push zones directly to the array — no callback/event. A 60s poll sees new zones within one tick after registration; acceptable latency for a passive memory layer, and zero coupling to scanner internals.
+- **Cluster-gated nether_bricks (threshold 8).** Individual nether_bricks appear in inventory walls / random fortress fragments; 8+ within a 12-block radius is a reasonable fortress signal. All other structure signature blocks (end_portal_frame, reinforced_deepslate, copper_bulb/grate, beacon, conduit, lodestone) are singleton-promoting because they're rare/unique.
+- **Dynamic import in `prompter.js`.** Keeps startup decoupled — `poi_memory.js` only loads when a prompt is being built, not at prompter construction. Failure path logs a warning and passes empty string.
+- **All POI types in one ship** (per JP's 2026-04-20 decision). Deferred: chat-labeled landmarks, `!goToPOI <type>` command surface.
+
+**Verification.**
+- `node --check` passed on all 4 modified files: `src/agent/poi_memory.js` (new), `src/agent/agent.js`, `src/memory/context_builder.js`, `src/models/prompter.js`.
+- Bot rebooted clean on HEAD `2714f02` — StateTicker 1Hz for 45+ consecutive pulses, HP 17, dimension overworld, LLM init reply observed ("Hello world! I am ThatCoolGuyDude."), zero exception / throw / uncaught / syntax-error lines in tmux capture. StateTicker mounts AFTER the POI hook in the spawn handler, so its liveness confirms the POI hook completed without throwing.
+- Rule 7 "complete the perimeter" audited: closure state only, no bot mutation anywhere in `poi_memory.js`; idempotent hook gate prevents double-registration on soft reconnect.
+
+**Status:** ✅ verified 2026-04-21 — POI memory + jsonl populated (6 entries in `bots/ThatCoolGuyDude/poi_memory.json` across `scanner` / `village_scanner` / `zone` sources, matching `data/poi-stream.jsonl` register events). Watcher source untested (awaits a newly-lit portal event; non-blocking).
+
+---
 
 ### #33. Auto-craft basic-need items — torches MVP (`22ed805`, 2026-04-20)
 
