@@ -1079,63 +1079,6 @@ This section retained as the audit-trail entry; remove on next hygiene sweep.
 
 Shipped — see "Shipped — awaiting live verification" section above. Separate `poi_memory.json` storage, all POI types in one ship (portals, beacons/conduits/lodestones, villages, generated structures via signature blocks, player bases). Chat-labeled landmarks + `!goToPOI` deferred to follow-up.
 
-### 32. Real-player location relay — bot can find a user on request
-
-**Status:** ⏳ not started • **Priority:** medium (unblocks "come help me" UX; depends on external-side integration)
-
-When a player asks the bot for help ("come help me", `!comeHelp`), the bot navigates to the player's real-world coordinates — even when the player is outside render distance or in a different dimension. Mineflayer's `bot.players[name].entity` only resolves when the player is in a loaded chunk near the bot, so this ticket is primarily about the **out-of-render-distance case**.
-
-**Coordinate source — JP's preference: server-side mod or plugin.** Mineflayer alone cannot see a player's position when the player is outside the bot's render distance. Options considered:
-
-- **✅ Spigot / Paper / Fabric plugin (JP's preferred path).** Small companion plugin exposes player positions to the bot — simplest shapes: (a) a plugin command like `/whereis <player>` that the bot reads from chat, (b) a scoreboard objective updated per tick with player XYZ (mineflayer can read scoreboards directly), or (c) a websocket/HTTP sidecar the bot polls. Scoreboard route is the lowest-friction — no extra network surface, mineflayer already receives scoreboard packets.
-- **RCON `/data get entity <player> Pos`.** Works on vanilla + any RCON-enabled server without a plugin. Requires RCON credentials in the bot config. Good fallback if the plugin route stalls.
-- **Cooperative chat fallback.** If neither plugin nor RCON is available, bot asks the player to run `/tp ~ ~ ~` output or share coords. MVP-acceptable but clunky.
-- **❌ Mineflayer-only.** Rejected — can't see out-of-render players.
-
-**Command surface.**
-- `!comeHelp <player>` — explicit command, bot resolves target coords via the chosen source and pathfinds.
-- Natural-language trigger — "come help me", "I need help", "come to me" routed through existing chat handler → LLM action selection → `!comeHelp`.
-
-**Cross-dimensional travel.** If the player is in a different dimension, bot must traverse a portal. Deferred design — mark as sub-scope. For MVP, restrict to same-dimension and log a "player is in nether, can't reach from overworld yet" message if dimensions differ.
-
-**Scope guard / Rule 2.** Existing `!goToPlayer` command likely covers the in-render case. #32 should **extend** that command (or add a thin wrapper that falls through to it when the player is loaded) rather than duplicate pathfinding logic. Verify during survey.
-
-**Survey before coding.** Inventory before design:
-- `!goToPlayer` command — existing? What does it do when the player is out of range?
-- `bot.players` object shape — does it carry anything useful (uuid, ping) when the entity isn't loaded?
-- Scoreboard packet handlers in mineflayer (`bot.scoreboards`, `bot.on('scoreboardUpdated')`).
-- RCON client in node ecosystem — pick one (`rcon-client` is standard).
-- JP's server — is it vanilla, Paper, Fabric? (Determines plugin API surface.)
-- Dimension handling — `bot.game.dimension`, existing portal-traversal logic if any.
-
-**First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
-
-### 30. Bot modes: Auto / Assistant / Survivor
-
-**Status:** ⏳ not started • **Priority:** medium (user-facing control + structured autonomy)
-
-Three top-level behavior modes that gate when and how the bot acts. Switchable by operator command; Auto is the inactivity fallback.
-
-**Survivor.** Self-sustaining. Works through an ordered tier-up goal list — wood → stone → iron → diamond → netherite for tools, weapons, and armor — while mode reflexes keep the bot alive. The keep-alive layer is largely shipped already (self_preservation, BT-10g drowning-escape, BT-10e shield-raise, BT-2-L3 turtle-helmet, #10 survival hardening). New work for this ticket: the ordered goal queue itself + the "what's my current best tier and what's the next goal?" decision logic.
-
-**Assistant.** Self-prompter paused while the relevant user(s) are online. Three sub-variants — all sticky (the *configured* assistant profile persists even when the runtime mode has dropped to Auto/Survivor):
-- **Server-wide** — paused while ANY player is online.
-- **Single-user** — paused only while a named player is online.
-- **Both** — server-wide pause, named user can override in or out.
-
-**Auto.** Not a distinct behavior — a state-machine rule. After 5 minutes of inactivity in any non-Survivor mode, the bot drops back into Survivor automatically.
-
-**Sticky-return rule.** If the bot was configured as Assistant and fell into Auto/Survivor due to inactivity, a qualifying user interaction (server-wide: any player chats or joins; single-user: the named player chats or joins; both: either trigger) immediately restores the bot to its Assistant profile — no manual `!setMode` required.
-
-**Survey before coding.** Several primitives almost certainly already exist:
-- `!setMode` command registered (saw it in the #8 INSTANT allowlist).
-- `self_prompter` pause/resume machinery (saw #23/#24 held-state + chat-yield work).
-- Player-join/leave + chat events via mineflayer.
-- TIERED_ITEMS inventory classification already knows tool/armor tier ordering (#11) — reusable for "what's my current tier?" checks in the Survivor goal list.
-- `getCraftingPlan` exists; #9 calls out auto-trigger as an open theme.
-
-**First commit on this ticket should be a research pass** — read what's in `modes.js`, `self_prompter.js`, and `actions.js` around `!setMode` to inventory what's already wired. Then design the state machine on paper (WB update). Then code.
-
 ### 7d. Block-update watcher for runtime-placed structures — 🛠️ MOVED TO IN-PROGRESS 2026-04-20
 
 Moved to In-progress section above. Original fix sketch preserved there; reuses #7c's `PLAYER_CHARACTERISTIC_BLOCKS` + `_clusterPositions` + `_playerBaseAlreadyRegistered` + `_playerBaseZoneFromCenter` (no duplication).
@@ -1197,6 +1140,63 @@ Defer until #12 Stage 2 actually ships — jumping ahead would create a split-re
 ---
 
 **🔁 Ongoing**
+
+### 30. Bot modes: Auto / Assistant / Survivor
+
+**Status:** ⏳ not started • **Priority:** medium (user-facing control + structured autonomy)
+
+Three top-level behavior modes that gate when and how the bot acts. Switchable by operator command; Auto is the inactivity fallback.
+
+**Survivor.** Self-sustaining. Works through an ordered tier-up goal list — wood → stone → iron → diamond → netherite for tools, weapons, and armor — while mode reflexes keep the bot alive. The keep-alive layer is largely shipped already (self_preservation, BT-10g drowning-escape, BT-10e shield-raise, BT-2-L3 turtle-helmet, #10 survival hardening). New work for this ticket: the ordered goal queue itself + the "what's my current best tier and what's the next goal?" decision logic.
+
+**Assistant.** Self-prompter paused while the relevant user(s) are online. Three sub-variants — all sticky (the *configured* assistant profile persists even when the runtime mode has dropped to Auto/Survivor):
+- **Server-wide** — paused while ANY player is online.
+- **Single-user** — paused only while a named player is online.
+- **Both** — server-wide pause, named user can override in or out.
+
+**Auto.** Not a distinct behavior — a state-machine rule. After 5 minutes of inactivity in any non-Survivor mode, the bot drops back into Survivor automatically.
+
+**Sticky-return rule.** If the bot was configured as Assistant and fell into Auto/Survivor due to inactivity, a qualifying user interaction (server-wide: any player chats or joins; single-user: the named player chats or joins; both: either trigger) immediately restores the bot to its Assistant profile — no manual `!setMode` required.
+
+**Survey before coding.** Several primitives almost certainly already exist:
+- `!setMode` command registered (saw it in the #8 INSTANT allowlist).
+- `self_prompter` pause/resume machinery (saw #23/#24 held-state + chat-yield work).
+- Player-join/leave + chat events via mineflayer.
+- TIERED_ITEMS inventory classification already knows tool/armor tier ordering (#11) — reusable for "what's my current tier?" checks in the Survivor goal list.
+- `getCraftingPlan` exists; #9 calls out auto-trigger as an open theme.
+
+**First commit on this ticket should be a research pass** — read what's in `modes.js`, `self_prompter.js`, and `actions.js` around `!setMode` to inventory what's already wired. Then design the state machine on paper (WB update). Then code.
+
+### 32. Real-player location relay — bot can find a user on request
+
+**Status:** ⏳ not started • **Priority:** medium (unblocks "come help me" UX; depends on external-side integration)
+
+When a player asks the bot for help ("come help me", `!comeHelp`), the bot navigates to the player's real-world coordinates — even when the player is outside render distance or in a different dimension. Mineflayer's `bot.players[name].entity` only resolves when the player is in a loaded chunk near the bot, so this ticket is primarily about the **out-of-render-distance case**.
+
+**Coordinate source — JP's preference: server-side mod or plugin.** Mineflayer alone cannot see a player's position when the player is outside the bot's render distance. Options considered:
+
+- **✅ Spigot / Paper / Fabric plugin (JP's preferred path).** Small companion plugin exposes player positions to the bot — simplest shapes: (a) a plugin command like `/whereis <player>` that the bot reads from chat, (b) a scoreboard objective updated per tick with player XYZ (mineflayer can read scoreboards directly), or (c) a websocket/HTTP sidecar the bot polls. Scoreboard route is the lowest-friction — no extra network surface, mineflayer already receives scoreboard packets.
+- **RCON `/data get entity <player> Pos`.** Works on vanilla + any RCON-enabled server without a plugin. Requires RCON credentials in the bot config. Good fallback if the plugin route stalls.
+- **Cooperative chat fallback.** If neither plugin nor RCON is available, bot asks the player to run `/tp ~ ~ ~` output or share coords. MVP-acceptable but clunky.
+- **❌ Mineflayer-only.** Rejected — can't see out-of-render players.
+
+**Command surface.**
+- `!comeHelp <player>` — explicit command, bot resolves target coords via the chosen source and pathfinds.
+- Natural-language trigger — "come help me", "I need help", "come to me" routed through existing chat handler → LLM action selection → `!comeHelp`.
+
+**Cross-dimensional travel.** If the player is in a different dimension, bot must traverse a portal. Deferred design — mark as sub-scope. For MVP, restrict to same-dimension and log a "player is in nether, can't reach from overworld yet" message if dimensions differ.
+
+**Scope guard / Rule 2.** Existing `!goToPlayer` command likely covers the in-render case. #32 should **extend** that command (or add a thin wrapper that falls through to it when the player is loaded) rather than duplicate pathfinding logic. Verify during survey.
+
+**Survey before coding.** Inventory before design:
+- `!goToPlayer` command — existing? What does it do when the player is out of range?
+- `bot.players` object shape — does it carry anything useful (uuid, ping) when the entity isn't loaded?
+- Scoreboard packet handlers in mineflayer (`bot.scoreboards`, `bot.on('scoreboardUpdated')`).
+- RCON client in node ecosystem — pick one (`rcon-client` is standard).
+- JP's server — is it vanilla, Paper, Fabric? (Determines plugin API surface.)
+- Dimension handling — `bot.game.dimension`, existing portal-traversal logic if any.
+
+**First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
 
 ### 9. Reduce LLM reliance through programmatic enhancements
 
