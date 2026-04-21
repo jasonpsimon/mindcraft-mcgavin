@@ -64,7 +64,36 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_(empty)_
+### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
+
+**Status:** 🚧 in-progress 2026-04-21 — cubiomes→WASM feasibility confirmed via sandbox probe (village coord resolved for seed 12345 at MC_1_21). Seed auto-discovery from `level.dat` confirmed via `prismarine-nbt` (already a bot dep). Three-commit BT underway.
+
+Client-side structure finder. Bot reads world seed + MC version from its profile, queries a bundled cubiomes-WASM module for structure locations within a radius, and feeds results into #31 POI memory and/or #30 Survivor goal selection. No server-side component, no companion mod, no bot OP — the bot stays self-contained and server-agnostic.
+
+**Why client-side (vs. server-side Fabric options).** JP explicitly declined giving the bot OP (rules out vanilla `/locate`) and declined the companion-mod path (wants the bot to stay portable across servers). Client-side cubiomes-WASM regains appeal: zero server permissions, zero mod installs, works on day one of any new server as long as JP shares the seed with the bot config. See #7e research note for full comparison.
+
+**Scope.**
+- **One-time build work:** compile Cubitect/cubiomes (C, active, 1.21-compatible) to WASM via Emscripten. Wrap as a small node module. No published npm exists — this is packaging work, not porting.
+- **Runtime API:** `getStructuresNear(x, z, radius)` → array of `{ type, x, z, dimension }`. Covers strongholds, villages, desert/jungle/ocean/woodland temples, igloos, ocean monuments, nether fortresses, bastion remnants, end cities, ancient cities, trial chambers, pillager outposts, ruined portals, slime chunks, biome boundaries.
+- **Bot integration:** opt-in profile flag (`"worldSeed": "...", "enableStructureOracle": true`). On spawn hook, pre-populate `poi_memory.json` with known structures within N chunks of spawn (see #31 for POI schema).
+- **What it does NOT cover:** caves, ore veins, terrain heightmap, block-level human modifications — cubiomes is biome+structure only. Live scanners (#7, #7c, #7d) continue to handle everything else.
+
+**Design constraints (carried from #7e research).**
+- Treat WASM as a hard boundary — no sync calls from hot paths. Query on spawn, on explicit `!findStructure <type>` command, and on goal-queue pull from #30. Never per-tick.
+- Seed is sensitive-ish (leaking it trivialises server exploration). Keep it in profile config, not in logs, not in snapshots. Add to the redaction list.
+- Version mismatch between bot config seed-version and server version → WASM returns wrong structure positions. Validate `bot.version` against configured seed-version on hook; log a loud warning if they diverge and disable the oracle for the session.
+
+**Blockers / open questions.**
+- (a) Emscripten build of cubiomes not yet verified. May need small C patches for WASM compat.
+- (b) No runtime evidence yet of a JP-impact miss that the oracle would've caught — live scanners + #7c/#7d + #31 POI memory are already covering villages and player bases. Oracle is purely additive; risk is building it speculatively. Mitigation: wait for #30 Survivor to surface a concrete "goal queue needs stronghold coords" moment, then build.
+- (c) Future MC-version drift: each new vanilla version may need a new cubiomes release + rebuild. Accept as maintenance overhead; pin version in profile config.
+
+**Downstream ties.**
+- **#31 POI memory** — on hook, oracle populates POI store with nearby structures so the bot "knows" about a stronghold at (x,z) before ever seeing the chunk. Opt-in.
+- **#30 Survivor mode** — goal queue can target known stronghold/fortress/monument coords when tier-up requires them, instead of random exploration.
+
+**First commit on this ticket:** survey pass — read #31's POI schema and #30's goal-queue shape (once it exists), then design the oracle module interface to slot in cleanly. Second commit: WASM build + node wrapper. Third commit: bot-side integration (profile config + hook wiring + redaction).
+
 
 ---
 
@@ -130,7 +159,6 @@ _(empty)_
 **Success signal (awaiting natural trigger).** River/ocean crossing where bot holds water_breathing potion → `[Survival] potion_splash` or `potion_drink` log in tmux capture, `water_breathing` entry in `bot.entity.effects` for ≥3 minutes, and BT-10g fire count drops on repeat-dive terrain (cross-ref `data/state-stream.jsonl` oxygen traces). Graduates to Recently completed on first observation.
 
 ---
-
 
 
 ### #7d. Block-update watcher for runtime-placed structures (`7d58837`, 2026-04-20)
@@ -896,7 +924,6 @@ if (bot._suffocationEscapeActive) {
 **Companion gap (already-shipped-related).** None. BT-7b's cleanup *uses* `breakBlockAt`'s existing zone guard — no duplication.
 
 
-
 ### 7c. Heuristic auto-detection of player-built structures (`0ff5c29`, 2026-04-19)
 
 **Status:** ✅ shipped — **awaiting live verification** (needs JP to build a structure with ≥6 player-characteristic blocks within 12 blocks of each other AND for the bot to be within 64 blocks during a scan pass; can be smoke-tested by placing a quick test cluster near the bot)
@@ -1124,36 +1151,6 @@ When a player asks the bot for help ("come help me", `!comeHelp`), the bot navig
 - Dimension handling — `bot.game.dimension`, existing portal-traversal logic if any.
 
 **First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
-
-### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
-
-**Status:** ⏳ not started • **Priority:** low-medium • **Depends on:** #30 (for the goal-queue consumer) • **Enhances:** #31 POI memory, #30 Survivor goals
-
-Client-side structure finder. Bot reads world seed + MC version from its profile, queries a bundled cubiomes-WASM module for structure locations within a radius, and feeds results into #31 POI memory and/or #30 Survivor goal selection. No server-side component, no companion mod, no bot OP — the bot stays self-contained and server-agnostic.
-
-**Why client-side (vs. server-side Fabric options).** JP explicitly declined giving the bot OP (rules out vanilla `/locate`) and declined the companion-mod path (wants the bot to stay portable across servers). Client-side cubiomes-WASM regains appeal: zero server permissions, zero mod installs, works on day one of any new server as long as JP shares the seed with the bot config. See #7e research note for full comparison.
-
-**Scope.**
-- **One-time build work:** compile Cubitect/cubiomes (C, active, 1.21-compatible) to WASM via Emscripten. Wrap as a small node module. No published npm exists — this is packaging work, not porting.
-- **Runtime API:** `getStructuresNear(x, z, radius)` → array of `{ type, x, z, dimension }`. Covers strongholds, villages, desert/jungle/ocean/woodland temples, igloos, ocean monuments, nether fortresses, bastion remnants, end cities, ancient cities, trial chambers, pillager outposts, ruined portals, slime chunks, biome boundaries.
-- **Bot integration:** opt-in profile flag (`"worldSeed": "...", "enableStructureOracle": true`). On spawn hook, pre-populate `poi_memory.json` with known structures within N chunks of spawn (see #31 for POI schema).
-- **What it does NOT cover:** caves, ore veins, terrain heightmap, block-level human modifications — cubiomes is biome+structure only. Live scanners (#7, #7c, #7d) continue to handle everything else.
-
-**Design constraints (carried from #7e research).**
-- Treat WASM as a hard boundary — no sync calls from hot paths. Query on spawn, on explicit `!findStructure <type>` command, and on goal-queue pull from #30. Never per-tick.
-- Seed is sensitive-ish (leaking it trivialises server exploration). Keep it in profile config, not in logs, not in snapshots. Add to the redaction list.
-- Version mismatch between bot config seed-version and server version → WASM returns wrong structure positions. Validate `bot.version` against configured seed-version on hook; log a loud warning if they diverge and disable the oracle for the session.
-
-**Blockers / open questions.**
-- (a) Emscripten build of cubiomes not yet verified. May need small C patches for WASM compat.
-- (b) No runtime evidence yet of a JP-impact miss that the oracle would've caught — live scanners + #7c/#7d + #31 POI memory are already covering villages and player bases. Oracle is purely additive; risk is building it speculatively. Mitigation: wait for #30 Survivor to surface a concrete "goal queue needs stronghold coords" moment, then build.
-- (c) Future MC-version drift: each new vanilla version may need a new cubiomes release + rebuild. Accept as maintenance overhead; pin version in profile config.
-
-**Downstream ties.**
-- **#31 POI memory** — on hook, oracle populates POI store with nearby structures so the bot "knows" about a stronghold at (x,z) before ever seeing the chunk. Opt-in.
-- **#30 Survivor mode** — goal queue can target known stronghold/fortress/monument coords when tier-up requires them, instead of random exploration.
-
-**First commit on this ticket:** survey pass — read #31's POI schema and #30's goal-queue shape (once it exists), then design the oracle module interface to slot in cleanly. Second commit: WASM build + node wrapper. Third commit: bot-side integration (profile config + hook wiring + redaction).
 
 ### 3-follow-up. Swamp biome polish — lily-pad walk-on + biome-aware profiles
 
@@ -1740,7 +1737,6 @@ Feature-level entries that have landed on `develop` but haven't yet been observe
 **Rule 7 audit.** Single function, single perimeter. Pause at entry is now balanced by unpause in finally. No fan-out.
 
 **Companion finding (deferred, separate ship).** `_impl_goToPlayer` (skills.js 3836) has the same pattern: `pause('self_defense') + pause('cowardice')` at entry, no unpause. Same risk class — will fix when JP prioritizes (lower urgency because goToPlayer is typically short-lived).
-
 
 
 ### OPT-J. Added `lava`, `campfire`, `soul_campfire` to pathfinder `blocksToAvoid` (`e2b680b`, 2026-04-19)
