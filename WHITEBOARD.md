@@ -8,7 +8,7 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 **Deployment:**
 - Running on gaming server (`/RAID/mindcraft-mcgavin`) in tmux session `mindcraft-mcgavin`, profile `ThatCoolGuyDude.json`, LLM `gemma-4-e4b` via LM Studio. Bot is **running** — StateTicker (BT-1), BootSnapshot (BT-8), LLM call telemetry (BT-3), DamageStream (BT-2), startup-window ordering fix (BT-12), MemoryRecall (BT-4), AutoRecovery stats (BT-5), Skill lifecycle (BT-7 + BT-7b), Goal lifecycle, and Pathfinder telemetry (BT-6) all verified live 2026-04-17.
-- Branch: `develop` — HEAD `672fdbe` (WB hygiene pass on top of #31 code ship). Most recent code ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features as the bot moves (portals, beacons/conduits/lodestones, generated structures via signature blocks, villages + player-base zones by polling `bot.protectedZones`). Two-tier detection mirrors #7c/#7d (60s scanner + blockUpdate watcher with double-sided filter); closure-state observability pattern (configure/hook/getStats/JSONL sink at `data/poi-stream.jsonl`); persists to `bots/<profile>/poi_memory.json`; ContextBuilder Priority 3.6 "Known POIs" injection (top-N nearest in current dimension). Bot rebooted clean, awaiting live capture verification. Prior ship 2026-04-20: #33 auto-craft torches MVP (`22ed805`, debug iterations `cdd65e7` / `d07e57f`, transient-revert `2198a97`) — new `auto_craft` mode closes the silent-skip surfaced 2026-04-14; gate logic live-verified via one-cooldown probe. See Recently completed for the full 2026-04-17 observability bundle.
+- Branch: `develop` — HEAD `ab4bb07` (WB hygiene pass on top of #31 code ship). Most recent code ship 2026-04-20: **#31 POI location memory** (`2714f02`) — new `src/agent/poi_memory.js` observability-adjacent module that passively auto-captures notable world features as the bot moves (portals, beacons/conduits/lodestones, generated structures via signature blocks, villages + player-base zones by polling `bot.protectedZones`). Two-tier detection mirrors #7c/#7d (60s scanner + blockUpdate watcher with double-sided filter); closure-state observability pattern (configure/hook/getStats/JSONL sink at `data/poi-stream.jsonl`); persists to `bots/<profile>/poi_memory.json`; ContextBuilder Priority 3.6 "Known POIs" injection (top-N nearest in current dimension). Bot rebooted clean, awaiting live capture verification. Prior ship 2026-04-20: #33 auto-craft torches MVP (`22ed805`, debug iterations `cdd65e7` / `d07e57f`, transient-revert `2198a97`) — new `auto_craft` mode closes the silent-skip surfaced 2026-04-14; gate logic live-verified via one-cooldown probe. See Recently completed for the full 2026-04-17 observability bundle.
 - Bot settings: `minecraft_version: "1.21.4"` (translates through ViaBackwards 5.0.4 installed on server) and default host/port.
 - Project docs live at repo root: `DESIGN_PHILOSOPHY.md`, `CODE_RULES.md` (7 rules; Rule 7 "Complete the perimeter" added 2026-04-15), `WHITEBOARD.md` (this file).
 
@@ -1055,97 +1055,6 @@ Items grouped by status (⏳ Not started → 🟡 Partial → 🔁 Ongoing). Wit
 
 **⏳ Not started**
 
-
-
-### OPT-bundle. Unverified optimization findings from 2026-04-16 audit — ✅ CLOSED 6/6
-
-**Status:** ✅ closed 2026-04-20 • **Priority:** (done)
-
-All six items shipped after full Rule 2 codebase reads. Audit retrospective: the original surface-level findings were directionally correct (real optimizations existed in each of the named locations), but Rule 2 reads changed the nature of two fixes — OPT-C and OPT-I both turned out to be **dead-code deletion** rather than the dedup/reuse the audit anticipated (in both cases, `goToGoal`'s post-OPT-B factory override made a preceding `setMovements` call irrelevant). OPT-D/E/F landed as-anticipated. **Lesson carried forward:** a surface-level "could be reused" flag is worth a full Rule 2 pass — it might reveal the thing doesn't need to exist at all.
-
-**Ships:**
-- **B** (`9887d62`) — lazy-build `destructiveMovements` in `goToGoal`.
-- **C** (`9a7b7eb`) — delete dead Movements block in `pickupNearbyItems` loop.
-- **D** (`178ebe2`) — hoist `_isDangerous` block-name list to module-level Set.
-- **E** (`85c9241`) — hoist `scanForCaverns` `rockTypes` Set to module-level Set.
-- **F** (`d16658b`) — extract `_yawToCardinal` helper shared by `digDown`/`digUp`.
-- **I** (`9dd17a4`) — delete dead first `setMovements` in `_impl_moveAway`.
-
-This section retained as the audit-trail entry; remove on next hygiene sweep.
-
----
-
-### 7e. Seed-based chunk-diff detection (research-only; original scope still parked)
-
-**Status:** ⏳ research-only (original scope); narrower pivot promoted to **#7f** • **Priority:** very low for original scope
-
-**Original scope.** Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. No 1.21-compatible JS terrain generator exists; porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) remains a major undertaking.
-
-**Research pass 2026-04-20 — ecosystem sweep.**
-
-- **`prismarine-pregenerator`** (extremeheat) — WIP, 2 commits, 1.16 only. Not active.
-- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — not vanilla-accurate. Toy worlds only.
-- **`cubiomes` npm package** — 5 years stale at 1.1.1; Node-addon port announced but never materialised.
-- **`cubiomes` C library** (Cubitect) — active, supports 1.21. Biome + structure-location logic only, NOT block-level terrain/caves.
-- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — cover up to 1.21.4 via cubiomes-derived logic. Same domain limit.
-- **Amidst** — discontinued post-1.17.1.
-
-**Verdict on original scope.** Still infeasible. No project has ported or reimplemented Java's full block-level terrain generator in JS, and the cost hasn't changed (50K+ lines, grows each MC version). Revisit only if a library genuinely emerges — watch `prismarine` org and `extremeheat/prismarine-pregenerator` for movement.
-
-**Server-side Fabric paths (considered, declined 2026-04-20).** A server-side companion (vanilla `/locate` + chat parse, Scarpet listener script, or custom Fabric mod) could sidestep the JS-generator problem entirely since the server already has the real generator loaded. JP declined all server-side paths: (a) won't OP the bot (rules out `/locate`), (b) prefers the bot stay self-contained and server-agnostic rather than depend on a companion mod. Kept documented here in case the calculus ever changes — e.g., if a companion mod ships for another reason (cf. #32) and adding a structure endpoint becomes near-free.
-
-**Narrower pivot promoted to its own ticket → #7f.** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM, fully client-side, no server changes. See #7f for scope, blockers, and sequencing.
-
-**Decision.** Keep #7e parked under original scope. Pivot work tracked under #7f.
-
-
-**🟡 Partial**
-
-### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
-
-**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
-
-**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
-
-**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
-
-**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
-
-### 3-follow-up. Swamp biome polish — lily-pad walk-on + biome-aware profiles
-
-**Status:** ⏳ parked (no motivating incident) • **Priority:** very low
-
-**Context.** #3 closed 2026-04-20 as no-code redundancy. Baseline swamp traversal (water pockets, plant hazards, mangrove roots) is already covered by #2 Layers 1–3 + `_configureTerrainSafeMovements` + `autoBreakStuckPlant` + `PLANT_LIKE_PATTERN`/`MOVEMENT_BLOCKING_PLANTS`. Two polish items parked here in case telemetry ever shows a need:
-
-**A. Strict lily-pad walk-on surface.** mineflayer-pathfinder returns `boundingBox='empty'` for lily_pad, so the planner treats it as walk-through (not walk-on) and plans swim paths through the water underneath. With turtle-helmet auto-equip + canSwim + drowning-escape the swim is safe, so this is elegance-only ("hop lily-pads like a human") rather than a capability gap. Would require a custom Movements patch that recognises lily_pad as a walkable top-face — upstream-library territory.
-
-**B. Biome-aware movement profiles.** Current `createMovements` is biome-agnostic. Nothing anywhere in src/ switches pathfinder config based on `getBiomeName(bot)` — biome is purely read-only telemetry today. A biome-profile system could, e.g., lower `maxDropDown` in dripstone caves or tighten hazard lists in nether. No known incident motivating this — park as research-only.
-
-**Signals to watch:** bot repeatedly swimming across a lily-padded pocket and appearing "unnatural" in play; biome-specific terrain deaths that the generic hazard list missed.
-
-### 6. Strategic torch placement underground — strict left-wall convention
-
-**Status:** 🟡 breadcrumb placement shipped 2026-04-14 (`placeTorchAt` + `digDown` every-4-blocks marker + `goToSurface` follows torches). Strict left-wall geometry deferred — current placement is "behind bot on floor". • **Priority:** low (current behind-bot placement works for breadcrumbs)
-
-**Remaining work:**
-- Compute "left of facing direction" wall position for each placement
-- Place wall_torch attached to left wall vs floor torch
-- Update `goToSurface` ordering hint (right-side torches = ascent direction)
-
-### 17. `skills.js` decomposition (long-term)
-
-**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
-
-`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
-
-**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
-
-Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
-
----
-
-**🔁 Ongoing**
-
 ### 30. Bot modes: Auto / Assistant / Survivor
 
 **Status:** ⏳ not started • **Priority:** medium (user-facing control + structured autonomy)
@@ -1203,6 +1112,29 @@ When a player asks the bot for help ("come help me", `!comeHelp`), the bot navig
 
 **First commit:** research pass to identify JP's server type and inventory existing `!goToPlayer` behavior. Second commit: decide plugin-vs-RCON and write the companion-side shim. Third commit: bot-side command wiring.
 
+### 7e. Seed-based chunk-diff detection (research-only; original scope still parked)
+
+**Status:** ⏳ research-only (original scope); narrower pivot promoted to **#7f** • **Priority:** very low for original scope
+
+**Original scope.** Given world seed + MC version, regenerate each chunk deterministically and diff against current state. Any differences are human modifications or pre-generated structures. 100% accurate in principle. No 1.21-compatible JS terrain generator exists; porting Java's generator (~50K lines + caves-and-cliffs + trial chambers) remains a major undertaking.
+
+**Research pass 2026-04-20 — ecosystem sweep.**
+
+- **`prismarine-pregenerator`** (extremeheat) — WIP, 2 commits, 1.16 only. Not active.
+- **`flying-squid` worldgens** (`node-voxel-worldgen`, `diamond-square`, `superflat`) — not vanilla-accurate. Toy worlds only.
+- **`cubiomes` npm package** — 5 years stale at 1.1.1; Node-addon port announced but never materialised.
+- **`cubiomes` C library** (Cubitect) — active, supports 1.21. Biome + structure-location logic only, NOT block-level terrain/caves.
+- **Browser tools** (ChunkBase, MCSeedMap, cubiomes-viewer) — cover up to 1.21.4 via cubiomes-derived logic. Same domain limit.
+- **Amidst** — discontinued post-1.17.1.
+
+**Verdict on original scope.** Still infeasible. No project has ported or reimplemented Java's full block-level terrain generator in JS, and the cost hasn't changed (50K+ lines, grows each MC version). Revisit only if a library genuinely emerges — watch `prismarine` org and `extremeheat/prismarine-pregenerator` for movement.
+
+**Server-side Fabric paths (considered, declined 2026-04-20).** A server-side companion (vanilla `/locate` + chat parse, Scarpet listener script, or custom Fabric mod) could sidestep the JS-generator problem entirely since the server already has the real generator loaded. JP declined all server-side paths: (a) won't OP the bot (rules out `/locate`), (b) prefers the bot stay self-contained and server-agnostic rather than depend on a companion mod. Kept documented here in case the calculus ever changes — e.g., if a companion mod ships for another reason (cf. #32) and adding a structure endpoint becomes near-free.
+
+**Narrower pivot promoted to its own ticket → #7f.** The "what pre-generated structures are near the bot?" question is answerable today via cubiomes-WASM, fully client-side, no server changes. See #7f for scope, blockers, and sequencing.
+
+**Decision.** Keep #7e parked under original scope. Pivot work tracked under #7f.
+
 ### 7f. Seed-aware structure oracle — client-side cubiomes-WASM
 
 **Status:** ⏳ not started • **Priority:** low-medium • **Depends on:** #30 (for the goal-queue consumer) • **Enhances:** #31 POI memory, #30 Survivor goals
@@ -1232,6 +1164,54 @@ Client-side structure finder. Bot reads world seed + MC version from its profile
 - **#30 Survivor mode** — goal queue can target known stronghold/fortress/monument coords when tier-up requires them, instead of random exploration.
 
 **First commit on this ticket:** survey pass — read #31's POI schema and #30's goal-queue shape (once it exists), then design the oracle module interface to slot in cleanly. Second commit: WASM build + node wrapper. Third commit: bot-side integration (profile config + hook wiring + redaction).
+
+### 3-follow-up. Swamp biome polish — lily-pad walk-on + biome-aware profiles
+
+**Status:** ⏳ parked (no motivating incident) • **Priority:** very low
+
+**Context.** #3 closed 2026-04-20 as no-code redundancy. Baseline swamp traversal (water pockets, plant hazards, mangrove roots) is already covered by #2 Layers 1–3 + `_configureTerrainSafeMovements` + `autoBreakStuckPlant` + `PLANT_LIKE_PATTERN`/`MOVEMENT_BLOCKING_PLANTS`. Two polish items parked here in case telemetry ever shows a need:
+
+**A. Strict lily-pad walk-on surface.** mineflayer-pathfinder returns `boundingBox='empty'` for lily_pad, so the planner treats it as walk-through (not walk-on) and plans swim paths through the water underneath. With turtle-helmet auto-equip + canSwim + drowning-escape the swim is safe, so this is elegance-only ("hop lily-pads like a human") rather than a capability gap. Would require a custom Movements patch that recognises lily_pad as a walkable top-face — upstream-library territory.
+
+**B. Biome-aware movement profiles.** Current `createMovements` is biome-agnostic. Nothing anywhere in src/ switches pathfinder config based on `getBiomeName(bot)` — biome is purely read-only telemetry today. A biome-profile system could, e.g., lower `maxDropDown` in dripstone caves or tighten hazard lists in nether. No known incident motivating this — park as research-only.
+
+**Signals to watch:** bot repeatedly swimming across a lily-padded pocket and appearing "unnatural" in play; biome-specific terrain deaths that the generic hazard list missed.
+
+
+**🟡 Partial**
+
+### 2-follow-up. Bot swim capabilities — water-breathing-potion auto-use
+
+**Status:** 🟡 polish • **Priority:** low (no observed incident; turtle helmet already provides slow Water Breathing)
+
+**Context.** #2 close-out 2026-04-20: Layer 1 (`canSwim=true` + drowning-escape reflex) shipped `b4f0190`-era; Layer 2 (`swim()` skill) closed as redundant — `goToPosition` + pathfinder's default `canSwim=true` + Layer 1's `escapeWater` already cover underwater traversal, so a dedicated wrapper would ship no new capability (Principle 5). Layer 3 (turtle-helmet auto-equip) shipped `71df242` — state-maintenance reflex in `self_preservation.update()`, latched, skip-if-diamond/netherite.
+
+**Remaining polish (not yet shipped).** Water-breathing-potion auto-use: if inventory has a `potion` with `Potion of Water Breathing` effect AND oxygen drops below a threshold AND not already buffed, drink it. Not shipped because (a) turtle-helmet covers the common case with zero LLM reasoning, (b) potion-effect introspection is more API-hungry than armor-slot inspection, (c) no observed incident. Parked as a 2-follow-up in case telemetry ever shows BT-10g firing repeatedly on terrain the helmet-less bot can't handle.
+
+**Signals to watch:** bot crosses rivers without drowning (✅ since Layer 1); turtle-helmet swap on water entry (Layer 3 awaits natural trigger); food/health stable in water; no "stuck" mode firing while swimming.
+
+### 6. Strategic torch placement underground — strict left-wall convention
+
+**Status:** 🟡 breadcrumb placement shipped 2026-04-14 (`placeTorchAt` + `digDown` every-4-blocks marker + `goToSurface` follows torches). Strict left-wall geometry deferred — current placement is "behind bot on floor". • **Priority:** low (current behind-bot placement works for breadcrumbs)
+
+**Remaining work:**
+- Compute "left of facing direction" wall position for each placement
+- Place wall_torch attached to left wall vs floor torch
+- Update `goToSurface` ordering hint (right-side torches = ascent direction)
+
+### 17. `skills.js` decomposition (long-term)
+
+**Status:** 🟡 partial • **Priority:** low (architectural) • **Source:** audit finding L6.1 • **Depends on:** #12 Stage 2 (for `createMovements` extraction point)
+
+`src/agent/library/skills.js` is 4,138 lines — 4× the next-largest file in the tree. Every perimeter-audit finding in L2 lives here, every pathfinder catch violation in L3 lives here, and the file is the natural focus of every audit because everything is in it. Rule 2 (elegance) flags this implicitly: the per-function elegance is fine, but the aggregate cognitive cost is high.
+
+**Natural first extraction target:** `createSafeMovements` helper from #12. Once the helper exists, move all movements-related code (plus its callers' safe-config glue) into a new `src/agent/library/movements.js`. After that: consider splitting combat / building / inventory / spawn-protection into separate modules.
+
+Jumping ahead of the #12 Stage 2 extraction point would create a split-refactor hazard — let the `createMovements` helper exist first, then build on top. Keep flagged so it isn't forgotten.
+
+---
+
+**🔁 Ongoing**
 
 ### 9. Reduce LLM reliance through programmatic enhancements
 
@@ -1632,22 +1612,6 @@ With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y
 
 ### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19) — fix `b57a097`
 
-**Follow-up fix (`b57a097`, 2026-04-19):** combat preemption guard.
-
-- **Observed bug (UTC 2026-04-20T01:17:03 = CDT 20:17).** Bot self-prompting for diamond armor near spawn. Burning zombie closed to 2.5 blocks, hit bot once (1.68 HP, zombie source). defendSelf swung `bot.pvp.attack` once — then combat stopped. 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked the bot to x=224 (35 blocks past the zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
-- **Evidence.** state-stream mutex.holder flipped from `None` (01:17:03) to `escapeProtectedZone` by 01:17:30, pathfinder target (224, 22, -53). 26-second `bot.entity=null` state-stream blackout during the combat-escape transition window (damage-stream kept firing with `pos:null`). After escape completed (01:18:04) bot returned to origin with HP=2.17.
-- **Root cause.** `skills.js` `forcedMove` handler (#28 original ship) re-fires `_impl_escapeProtectedZone` after 500ms debounce when the bot lands in the protected zone. Zombie knockback fires `forcedMove`. Existing guards bail on NaN pos, death, outside-zone, already-escape-holder, 30s cooldown — but had no combat guard. So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf preempted via `interrupts:['all']`.
-- **Fix.** Two new bail conditions in the deferred callback, next to the escape-holder check:
-  - `holder === 'defendSelf'` — active combat, don't preempt.
-  - `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the `setTimeout` await).
-- **Rationale.** Spawn protection exists to stop *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight, and any post-combat NaN / low-HP state will route through self_preservation.
-- **Blast radius.** The 500ms deferred callback only. No changes to `_impl_defendSelf`, no changes to escape paths, no new state. Rule 7: single perimeter — all re-fire bail conditions live in this one callback.
-- **Skip.** Pausing escapeProtectedZone from within defendSelf (like defendSelf does for self_defense + cowardice): considered but more invasive and couples two unrelated modules. The re-fire handler is the right place — it owns the "should I preempt?" decision.
-
----
-
-### 28. Mid-session in-zone re-fire on `forcedMove` (`f3bee88`, 2026-04-19)
-
 **Status:** ✅ completed — **Live verified 2026-04-20 — 9 invocations today, 2 successes (00:55, 01:00 UTC) on natural mid-session triggers.**
 
 **Change.** Hook the existing `forcedMove` listener in `_installSpawnEscapeInstrumentation`. After a 500ms debounce, if bot is inside the spawn zone (`_isInSpawnZone`), alive, has a finite position, and `botMutex.currentHolder` is not `escapeProtectedZone` or `escapeSpawnZone`, call `_impl_escapeProtectedZone(bot)` with a 30s cooldown. Imported `botMutex` from `../bot_mutex.js`.
@@ -1663,6 +1627,18 @@ With the extended scan, the same scenario goes: bot finds `oak_leaves` at `(x, y
 **Rule 7 audit.** Single event site (`bot.on('forcedMove', ...)`), no fan-out. Install-confirmation log updated to include `#28 in-zone re-fire enabled` for discoverability.
 
 **Verification signal to watch.** Next mid-session `forcedMove` into zone: `[SpawnEscape] forcedMove landed in protected zone at (...) — re-firing escape` line + `[BotMutex] #N acquired: escapeProtectedZone` immediately after.
+
+**Follow-up fix (`b57a097`, 2026-04-19):** combat preemption guard.
+
+- **Observed bug (UTC 2026-04-20T01:17:03 = CDT 20:17).** Bot self-prompting for diamond armor near spawn. Burning zombie closed to 2.5 blocks, hit bot once (1.68 HP, zombie source). defendSelf swung `bot.pvp.attack` once — then combat stopped. 12 seconds of fire-tick damage (HP 20 → 2.17) while pathfinder walked the bot to x=224 (35 blocks past the zone). Zombie burned to death before catching up. JP's report: "hit it once and then did not hit it again."
+- **Evidence.** state-stream mutex.holder flipped from `None` (01:17:03) to `escapeProtectedZone` by 01:17:30, pathfinder target (224, 22, -53). 26-second `bot.entity=null` state-stream blackout during the combat-escape transition window (damage-stream kept firing with `pos:null`). After escape completed (01:18:04) bot returned to origin with HP=2.17.
+- **Root cause.** `skills.js` `forcedMove` handler (#28 original ship) re-fires `_impl_escapeProtectedZone` after 500ms debounce when the bot lands in the protected zone. Zombie knockback fires `forcedMove`. Existing guards bail on NaN pos, death, outside-zone, already-escape-holder, 30s cooldown — but had no combat guard. So: knockback → forcedMove → in-zone → re-fire → `withBotLock('escapeProtectedZone')` takes mutex → defendSelf preempted via `interrupts:['all']`.
+- **Fix.** Two new bail conditions in the deferred callback, next to the escape-holder check:
+  - `holder === 'defendSelf'` — active combat, don't preempt.
+  - `bot.pvp?.target` truthy — pvp engagement live between attack cycles (mutex may briefly release during the `setTimeout` await).
+- **Rationale.** Spawn protection exists to stop *destructive* actions and stranding; defensive combat against a hostile that's actively attacking is neither. Combat wins the tiebreak; the zone is still there after the fight, and any post-combat NaN / low-HP state will route through self_preservation.
+- **Blast radius.** The 500ms deferred callback only. No changes to `_impl_defendSelf`, no changes to escape paths, no new state. Rule 7: single perimeter — all re-fire bail conditions live in this one callback.
+- **Skip.** Pausing escapeProtectedZone from within defendSelf (like defendSelf does for self_defense + cowardice): considered but more invasive and couples two unrelated modules. The re-fire handler is the right place — it owns the "should I preempt?" decision.
 
 
 ### 22. `escapeProtectedZone` suffocation trap — pre-move passability guard (`8c2b6fe`, 2026-04-19)
