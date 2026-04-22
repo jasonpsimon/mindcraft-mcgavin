@@ -64,6 +64,57 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
+### 35. 1.21.4 SlotComponent decode bug — upstream issue + local patch
+
+**Status:** 🚧 in-progress 2026-04-21 — BT commit 1 of 3 (WB-only). Diagnostic pass next (commit 2: capture failing buffer, identify broken SlotComponent variant, file upstream issue, ship `patch-package` + `minecraft-data+3.109.0.patch`). Live-verify + graduate on commit 3.
+
+**Problem.** On every login, `minecraft-protocol@1.66.0` throws `PartialReadError: Read error for undefined : Missing characters in string, found size is 325419 expected size was 211300821` while decoding a `SlotComponent` string field in 1.21.4 server-sent item packets. 15 occurrences in current `data/stdout.log`; every one correlates with `[ChunkWait] ENTER held state — reason: watchdog: bot.entity.position NaN or missing`, which the watchdog clears in 1–2s. Root cause: `minecraft-data@3.109.0` `data/pc/1.21.4/protocol.json` SlotComponent schema is wrong for one or more item component types the Paper 1.21.4 server sends.
+
+Stack (abridged):
+```
+PartialReadError: Read error for undefined : Missing characters in string, found size is 325419 expected size was 211300821
+  at Object.string       (compiler.js: <anonymous>:107:15)
+  at Object.SlotComponent (compiler.js: <anonymous>:720:9)
+```
+
+**Versions in play.** `minecraft-protocol` 1.66.0 (latest, published 2026-04-01), `minecraft-data` 3.109.0 (latest, published 2026-03-30), `mineflayer` 4.37.0, server MC 1.21.4 via ViaBackwards 5.0.4 on Paper. Both upstream packages are already current — no npm-side upgrade path available; the bug exists in the current upstream release.
+
+**Impact.** 15+ stderr lines per login (boot noise), spurious `ChunkWait ENTER` on every spawn (pollutes the NaN-detection signal and could mask a real position-NaN incident), one inventory packet silently dropped per login (bot re-syncs via next periodic window-items refresh — functional loss minimal but present).
+
+**Diagnostic plan (commit 2, part A — research).**
+1. Monkey-patch `FullPacketParser.parsePacketBuffer` (or wrap the `deserializer` error event) to hex-dump the packet buffer + a partial-decode cursor offset on throw. One-shot capture at bot startup.
+2. From the captured buffer, identify the failing `SlotComponent` variant id against the switch mappings in `data/pc/1.21.4/protocol.json`.
+3. Cross-reference the Minecraft wiki 1.21.4 item-component registry to confirm the corrected schema shape.
+
+**Fix plan (commit 2, part B — code ship).**
+1. File upstream issue at `github.com/PrismarineJS/minecraft-data` describing the failing variant, the buffer signature, and the proposed correction.
+2. Add `patch-package` as a dev dependency and wire a `postinstall` script into `package.json`.
+3. Create `patches/minecraft-data+3.109.0.patch` with the corrected `SlotComponent` entry; reference the upstream issue URL in a patch header comment.
+4. Optional `[ProtocolPatch] applied minecraft-data+3.109.0 (upstream: <url>)` stdout line on client init — satisfies Rule 1 so live verification can confirm the patch is active.
+
+**Verify plan (commit 3 gates on all of these).**
+1. Reboot bot on patched HEAD.
+2. `grep -c PartialReadError data/stdout.log` → zero occurrences in the fresh boot's log span.
+3. `tmux capture-pane -t mindcraft -p -S -5000` during login → no `[ChunkWait] ENTER held state — reason: watchdog: bot.entity.position NaN or missing` lines.
+4. `data/state-stream.jsonl` across the spawn window → finite `pos.x/y/z` values continuously (no NaN frames).
+5. Bot spawns and plays normally through a full 5-minute test session.
+6. When upstream lands a fix and we upgrade past it, drop the patch file and the `patch-package` dep.
+
+**Code Rules compliance.**
+- **Rule 1 (observability-first):** optional `[ProtocolPatch]` init log so verification can see the patch is active; verification plan uses existing `data/stdout.log` + `data/state-stream.jsonl` sinks, no new streams needed.
+- **Rule 3 (graceful failure):** `patch-package` errors loudly on `npm install` / `npm ci` if the patch fails to apply, so there's no silent drift when upstream releases a new version that no longer matches the patch context.
+- **Rule 4 (root cause not symptom):** directly addresses the upstream schema bug. Rejected `hideErrors: true` on the mineflayer client (would mute the stderr noise but the packet still silently drops — symptom-masking). Rejected server-side downgrade to MC 1.21.1 (doesn't fix the 1.21.4-specific bug, and touches infrastructure instead of the repo).
+- **Rule 7 (complete the perimeter):** single entry point — `npm install` / `npm ci` triggers the `postinstall` script that runs `patch-package`. No call-sites in repo code to guard; the patch is transparent to the application layer.
+
+**Forensics sources.**
+- `data/stdout.log` (PartialReadError occurrences, `[ChunkWait] ENTER` correlation)
+- `data/state-stream.jsonl` (spawn-window `pos.x/y/z` NaN frames)
+- One-shot hex-dump capture during diagnostic pass (not committed — scratch file in `data/`)
+- `tmux capture-pane -t mindcraft -p -S -5000` for the fresh boot during verify
+
+**Dependencies:** none on other tickets. Commit 2 is internally sequenced — diagnostic pass must complete before the patch can be written.
+
+---
 
 ## Shipped — awaiting live verification
 
