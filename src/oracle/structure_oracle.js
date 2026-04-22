@@ -148,7 +148,7 @@ function _note(msg) {
 
 async function _loadWasm() {
     const wasmDir = _opts.wasmDir || path.resolve(__dirname, 'cubiomes_wasm');
-    const glueJs = path.join(wasmDir, 'cubiomes_oracle.js');
+    const glueJs = path.join(wasmDir, 'cubiomes_oracle.cjs');
     const wasmFile = path.join(wasmDir, 'cubiomes_oracle.wasm');
     if (!fs.existsSync(glueJs) || !fs.existsSync(wasmFile)) {
         throw new Error('cubiomes_wasm artifacts missing at ' + wasmDir);

@@ -8,7 +8,7 @@ for the BT-7f Structure Oracle.
 | file                   | purpose                                                        |
 |------------------------|----------------------------------------------------------------|
 | `cubiomes_oracle.wasm` | compiled cubiomes + oracle_driver.c (~19 KB)                   |
-| `cubiomes_oracle.js`   | emscripten module glue, imported by structure_oracle.js        |
+| `cubiomes_oracle.cjs`   | emscripten module glue, imported by structure_oracle.js        |
 | `oracle_driver.c`      | minimal C driver exposing `findNearestStructure` et al.        |
 
 ## Rebuild recipe
@@ -54,17 +54,17 @@ emcc -O2 \
   -s 'EXPORTED_FUNCTIONS=["_findNearestStructure","_oracleResultX","_oracleResultZ","_selfTest"]' \
   -s 'EXPORTED_RUNTIME_METHODS=["ccall","cwrap"]' \
   biomes.c biomenoise.c finders.c generator.c layers.c noise.c quadbase.c oracle_driver.c \
-  -o cubiomes_oracle.js
+  -o cubiomes_oracle.cjs
 ```
 
-This produces `cubiomes_oracle.js` (glue, ~11 KB) and `cubiomes_oracle.wasm`
+This produces `cubiomes_oracle.cjs` (glue, ~11 KB) and `cubiomes_oracle.wasm`
 (~19 KB). Copy both into this directory alongside `oracle_driver.c`.
 
 ### 5. Smoke test (optional)
 
 ```js
 // smoke_test.cjs
-const CubiomesModule = require('./cubiomes_oracle.js');
+const CubiomesModule = require('./cubiomes_oracle.cjs');
 CubiomesModule().then((m) => {
     const selfTest = m.cwrap('selfTest', 'number', []);
     console.log('selfTest:', selfTest()); // expect 4242
