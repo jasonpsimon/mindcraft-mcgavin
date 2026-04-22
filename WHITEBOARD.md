@@ -1135,6 +1135,53 @@ Three top-level behavior modes that gate when and how the bot acts. Switchable b
 
 **First commit on this ticket should be a research pass** — read what's in `modes.js`, `self_prompter.js`, and `actions.js` around `!setMode` to inventory what's already wired. Then design the state machine on paper (WB update). Then code.
 
+#### Research findings (2026-04-22)
+
+Read `src/agent/modes.js` (1321 lines), `src/agent/self_prompter.js` (388 lines), `src/agent/commands/actions.js` (735 lines), plus `agent.js` event handlers, `human_delays.js` INSTANT, and `chunk_wait.js` COMMAND_WHITELIST. Findings by survey bullet:
+
+**1. `!setMode` — confirmed, per-flag only.** Registered at `actions.js:386` (INSTANT + COMMAND_WHITELIST already). Wraps `modes.exists / modes.setOn`. Does not address mode groups. **Implication:** new command (working name `!setProfile`) is a sibling, not a replacement.
+
+**2. `self_prompter` pause/resume — confirmed, richer than expected.** Three states: `STOPPED(0) / ACTIVE(1) / PAUSED(2)`. Primitives: `start / pause / stop(stop_action) / stopLoop / startLoop / handleLoad / setPromptPaused / advanceGoal / addGoal / viewGoals / addRule / removeRule`. `stoppedReason` distinguishes `'user'` (never auto-resume) from `'circuitBreaker'` (3-min watchdog auto-resume at `self_prompter.js:324`). **Implication:** Assistant's "pause while user online" maps onto `pause()`; sticky-return reuses the watchdog pattern but keyed on player-online events. Need a new `stoppedReason = 'assistant_player_online'` so the 5-min Auto-fallback doesn't step on Assistant's deliberate pause.
+
+**3. Player join/leave + chat events — chat YES, join/leave NO.** `bot.on('chat')` at `agent.js:739` pushes `{username, message}` to `_playerMsgQueue`; `bot.on('whisper')` at `:737`. **`bot.on('playerJoined')` / `bot.on('playerLeft')` have zero listeners in `src/`.** `bot.players` is a live dict keyed by username (`entity` nullable when out of render, but presence alone tells us they're online). **Implication:** Assistant sticky-return needs two new mineflayer listeners added in agent.js next to the existing chat/whisper block.
+
+**4. TIERED_ITEMS for Survivor — confirmed reusable.** `snapshotInventory()` in `src/utils/inventory_utils.js` already classifies tier per role (pickaxe/axe/shovel/hoe/sword + 4 armor pieces, netherite→leather). Survivor's "what tier am I?" is a single snapshot read, no new code.
+
+**5. `getCraftingPlan` auto-trigger — confirmed under #9 (ongoing).** Survivor MVP can emit hardcoded craft-intent prompts and defer auto-trigger to #9's close.
+
+#### Surprise findings
+
+**Existing `ModeController` is per-behavior-flag, not per-group.** 13 flag modes in `modes.js:modes_list`: `self_preservation, unstuck, cowardice, self_defense, hunting, item_collecting, torch_placing, auto_craft, elbow_room, idle_staring, close_doors, cleanup_blocks, cheat`. API: `exists / setOn / isOn / pause / unpause / unPauseAll / getMiniDocs / getDocs / update / flushBehaviorLog / getJson / loadJson`. Loaded from profile JSON's `modes: {…}` block via `agent.prompter.getInitModes()`. **Auto/Assistant/Survivor are a new tier ABOVE this system** — call it `ModeProfile`; it composes multiple `bot.modes.setOn(...)` calls plus a self_prompter policy, and it persists via the same `getJson/loadJson` pattern.
+
+**Two idle timers already exist, neither fits the 5-min Auto-fallback.** `self_prompter.update(delta)` accumulates `idle_time` from `agent.isIdle()`; circuit-breaker watchdog re-fires at `WATCHDOG_MS = 180000` (3 min) scoped to `stoppedReason === 'circuitBreaker'`. `modes.js:update()` uses idle to gate which modes tick. **Implication:** 5-min drop-back needs its own timer at the mode-group layer. Do not retune the 3-min window (different purpose). Tick it from agent's main loop next to the existing `self_prompter.update(delta)` at `agent.js:1307`.
+
+**`!goal` / `!endGoal` / `!stay` interaction with profiles.** `!goal` (`actions.js:402`) sets `self_prompter.prompt` and starts the loop; `!endGoal` (`:422`) pops-and-advances or stops; `!stay` (`:378`) pauses all modes. **Implication:** Survivor owns the goal queue. Manual `!goal` during Survivor — decide: (a) override and flip profile to Auto, or (b) append to Survivor's queue. Default recommendation: (a) — "operator intent wins."
+
+#### Design implications for the next pass
+
+- New class `ModeProfile` with fields `configured` (user's desired — Assistant+variant, Survivor, or null) and `runtime` (current actual — Auto/Assistant/Survivor). Sticky-return modifies `runtime` only; never touches `configured`.
+- New `!setProfile` command added to `actions.js`, `human_delays.INSTANT`, and `chunk_wait.COMMAND_WHITELIST` (Rule 7 perimeter).
+- Two new mineflayer listeners in `agent.js`: `bot.on('playerJoined', ...)` and `bot.on('playerLeft', ...)` → evaluate variant match → call `ModeProfile.onPlayerOnlineChange(...)`.
+- `ModeProfile.tickInactivity(delta)` called from agent main loop; 5-min `INACTIVITY_AUTO_MS = 300000` drops `runtime` to Survivor only (configured preserved).
+- Persistence: `ModeProfile.getJson/loadJson` mirrors `ModeController`; serialized next to `self_prompt` state in `history.save()`.
+- `[ModeProfile]` log line on every state transition for observability (fits the BT-1..BT-12 pattern).
+
+#### Open design questions for JP
+
+1. **Command naming** — `!setProfile` vs `!mode` vs `!profile`?
+2. **Persistence** — configured-profile survives bot restart, yes?
+3. **`!setProfile auto`** — rejected as invalid, or allowed as `configured = null` (let inactivity pick)?
+4. **Survivor tier-up queue schema** — predicate-driven completion (e.g., `sword_tier >= 'stone'` read from `snapshotInventory`), or plain text + LLM judgment? Principle #1 favors predicate-driven.
+5. **Manual `!goal` during Survivor** — overrides to Auto (default), or appends to queue?
+
+#### Draft BT sequence (subject to JP review)
+
+- **BT-30a.** Skeleton `ModeProfile` + `!setProfile` + `playerJoined/playerLeft` listeners + persistence. Pure wiring; no Survivor queue; no sticky-return. `[ModeProfile]` log line ships with this.
+- **BT-30b.** Assistant variants (server-wide / single-user / both) + sticky-return rule.
+- **BT-30c.** 5-min inactivity timer → runtime drops to Survivor (configured unchanged).
+- **BT-30d.** Survivor tier-up goal queue (predicate-driven via `snapshotInventory`).
+- **BT-30e.** Docs close-out: `!setProfile` help text, profile-JSON schema note, WB ship entries.
+
 ### 32. Real-player location relay — bot can find a user on request
 
 **Status:** ⏳ not started • **Priority:** medium (unblocks "come help me" UX; depends on external-side integration)
