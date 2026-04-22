@@ -64,57 +64,6 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-### 35. 1.21.4 SlotComponent decode bug — upstream issue + local patch
-
-**Status:** 🚧 in-progress 2026-04-21 — BT commit 1 of 3 (WB-only). Diagnostic pass next (commit 2: capture failing buffer, identify broken SlotComponent variant, file upstream issue, ship `patch-package` + `minecraft-data+3.109.0.patch`). Live-verify + graduate on commit 3.
-
-**Problem.** On every login, `minecraft-protocol@1.66.0` throws `PartialReadError: Read error for undefined : Missing characters in string, found size is 325419 expected size was 211300821` while decoding a `SlotComponent` string field in 1.21.4 server-sent item packets. 15 occurrences in current `data/stdout.log`; every one correlates with `[ChunkWait] ENTER held state — reason: watchdog: bot.entity.position NaN or missing`, which the watchdog clears in 1–2s. Root cause: `minecraft-data@3.109.0` `data/pc/1.21.4/protocol.json` SlotComponent schema is wrong for one or more item component types the Paper 1.21.4 server sends.
-
-Stack (abridged):
-```
-PartialReadError: Read error for undefined : Missing characters in string, found size is 325419 expected size was 211300821
-  at Object.string       (compiler.js: <anonymous>:107:15)
-  at Object.SlotComponent (compiler.js: <anonymous>:720:9)
-```
-
-**Versions in play.** `minecraft-protocol` 1.66.0 (latest, published 2026-04-01), `minecraft-data` 3.109.0 (latest, published 2026-03-30), `mineflayer` 4.37.0, server MC 1.21.4 via ViaBackwards 5.0.4 on Paper. Both upstream packages are already current — no npm-side upgrade path available; the bug exists in the current upstream release.
-
-**Impact.** 15+ stderr lines per login (boot noise), spurious `ChunkWait ENTER` on every spawn (pollutes the NaN-detection signal and could mask a real position-NaN incident), one inventory packet silently dropped per login (bot re-syncs via next periodic window-items refresh — functional loss minimal but present).
-
-**Diagnostic plan (commit 2, part A — research).**
-1. Monkey-patch `FullPacketParser.parsePacketBuffer` (or wrap the `deserializer` error event) to hex-dump the packet buffer + a partial-decode cursor offset on throw. One-shot capture at bot startup.
-2. From the captured buffer, identify the failing `SlotComponent` variant id against the switch mappings in `data/pc/1.21.4/protocol.json`.
-3. Cross-reference the Minecraft wiki 1.21.4 item-component registry to confirm the corrected schema shape.
-
-**Fix plan (commit 2, part B — code ship).**
-1. File upstream issue at `github.com/PrismarineJS/minecraft-data` describing the failing variant, the buffer signature, and the proposed correction.
-2. Add `patch-package` as a dev dependency and wire a `postinstall` script into `package.json`.
-3. Create `patches/minecraft-data+3.109.0.patch` with the corrected `SlotComponent` entry; reference the upstream issue URL in a patch header comment.
-4. Optional `[ProtocolPatch] applied minecraft-data+3.109.0 (upstream: <url>)` stdout line on client init — satisfies Rule 1 so live verification can confirm the patch is active.
-
-**Verify plan (commit 3 gates on all of these).**
-1. Reboot bot on patched HEAD.
-2. `grep -c PartialReadError data/stdout.log` → zero occurrences in the fresh boot's log span.
-3. `tmux capture-pane -t mindcraft -p -S -5000` during login → no `[ChunkWait] ENTER held state — reason: watchdog: bot.entity.position NaN or missing` lines.
-4. `data/state-stream.jsonl` across the spawn window → finite `pos.x/y/z` values continuously (no NaN frames).
-5. Bot spawns and plays normally through a full 5-minute test session.
-6. When upstream lands a fix and we upgrade past it, drop the patch file and the `patch-package` dep.
-
-**Code Rules compliance.**
-- **Rule 1 (observability-first):** optional `[ProtocolPatch]` init log so verification can see the patch is active; verification plan uses existing `data/stdout.log` + `data/state-stream.jsonl` sinks, no new streams needed.
-- **Rule 3 (graceful failure):** `patch-package` errors loudly on `npm install` / `npm ci` if the patch fails to apply, so there's no silent drift when upstream releases a new version that no longer matches the patch context.
-- **Rule 4 (root cause not symptom):** directly addresses the upstream schema bug. Rejected `hideErrors: true` on the mineflayer client (would mute the stderr noise but the packet still silently drops — symptom-masking). Rejected server-side downgrade to MC 1.21.1 (doesn't fix the 1.21.4-specific bug, and touches infrastructure instead of the repo).
-- **Rule 7 (complete the perimeter):** single entry point — `npm install` / `npm ci` triggers the `postinstall` script that runs `patch-package`. No call-sites in repo code to guard; the patch is transparent to the application layer.
-
-**Forensics sources.**
-- `data/stdout.log` (PartialReadError occurrences, `[ChunkWait] ENTER` correlation)
-- `data/state-stream.jsonl` (spawn-window `pos.x/y/z` NaN frames)
-- One-shot hex-dump capture during diagnostic pass (not committed — scratch file in `data/`)
-- `tmux capture-pane -t mindcraft -p -S -5000` for the fresh boot during verify
-
-**Dependencies:** none on other tickets. Commit 2 is internally sequenced — diagnostic pass must complete before the patch can be written.
-
----
 
 ## Shipped — awaiting live verification
 
@@ -1281,6 +1230,35 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 - #12 Stage 2's `createMovements` extraction point demands follow-through.
 
 **Down-payment option if the pain acute-flares before a full revisit:** extract only pure-helper leaves (`_isDangerous`, `autoBreakStuckPlant`) in one tiny BT, no `_core.js`, no goTo* touched.
+
+---
+
+### #35. PartialReadError on SlotComponent decode (Catenary mod on SFMCS) — deferred (2026-04-21)
+
+**Status:** known issue, not actively planned • **Origin:** diagnostic pass 2026-04-21 (captured 325419-byte buffer via out-of-tree `scratch_slot_dump.cjs`, attributed to `catenary-1.3.jar` on SFMCS).
+
+**Problem.** On every login, `minecraft-protocol@1.66.0` throws `PartialReadError: Missing characters in string, found size 325419 expected 211300821` while decoding a `SlotComponent` string field. 15 occurrences in `data/stdout.log`; every one correlates with `[ChunkWait] ENTER held state — reason: watchdog: bot.entity.position NaN or missing`, which the watchdog clears in 1–2 seconds. Functional impact: one item-sync packet silently dropped per login (re-syncs via next periodic window-items refresh) plus 15+ stderr lines of boot noise.
+
+**Root cause.** SFMCS is **Fabric 1.21** with ~40 mods, including `catenary-1.3.jar` (rope/chain physics). Catenary registers its own data-driven item components (namespace `catenary:*`). The dump confirms a live `"Mixed Candles"` item with `catenary:candles/yellow_cyan` component data including `scaling_axis`, `segment_length`, `providers` fields — i.e. players have placed rope-chains in the world, so the component is not vestigial. `minecraft-data@3.109.0`'s `SlotComponent` switch only knows vanilla 1.21.4 component types; modded component payloads are unreadable. Because 1.20.5+ data-driven components have no length prefix on their payloads, protodef cannot skip an unknown-type component — the decoder must know every schema or it desyncs.
+
+**Why deferred.**
+- Both `minecraft-protocol` (1.66.0) and `minecraft-data` (3.109.0) are already on latest — no upgrade path.
+- `minecraft-data` is vanilla-spec by design; modded components are out of scope upstream.
+- A real fix requires mining Catenary's component schema out of `catenary-1.3.jar`, patching it into a local `minecraft-data` fork via `patch-package`. Multi-day investigation with fragile outcomes (every Catenary release could shift the schema).
+- Removing Catenary from SFMCS would break existing in-world items players have placed (rope-chains, "Mixed Candles" etc.) — disruptive to other server users.
+- Rule 4 symptom-level mutes (`hideErrors: true`) hide the stderr noise but the packet still drops. Not worth the observability cost.
+- Net functional impact is minimal: ChunkWait's `ENTER held state → EXIT after 1-2s` recovery path already handles the position-NaN bounce safely.
+
+**Revisit trigger.**
+- Catenary is ever removed from SFMCS for unrelated reasons → re-verify and close if zero PartialReadError on fresh boot.
+- A new mod lands on SFMCS that also throws SlotComponent decode errors → re-evaluate: if there's a common mod-schema pattern, a patch-package bridge becomes more tractable.
+- Upstream `minecraft-protocol` ever adds an "unknown component skip via registry-data-driven length prefix" path → reconsider.
+- Bot stops spawning reliably on SFMCS (i.e. the NaN bounce stops being survivable) → promote back to active.
+
+**Forensics preserved.**
+- One-shot capture script: out-of-tree `scratch_slot_dump.cjs` (removed from gaming after capture — retained in Cowork workspace `outputs/` for reference).
+- Capture artifacts: `data/slot_dump.bin` (325419-byte buffer) and `data/slot_dump.txt` (hex dump + stack) — also removed from gaming, retained in `outputs/`.
+- Reproducer: restart bot with `NODE_OPTIONS="--require ./scratch_slot_dump.cjs"` on gaming if the scratch file is re-deployed.
 
 ---
 
