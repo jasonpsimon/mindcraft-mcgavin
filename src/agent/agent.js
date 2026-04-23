@@ -9,7 +9,7 @@ import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
-import { ModeProfile, resolveConfiguredFromProfileJson } from './mode_profile.js';
+import { ModeProfile, resolveConfiguredFromProfileJson, resolveAssistantUserFromProfileJson } from './mode_profile.js';
 import { ConfidenceEngine, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from '../memory/index.js';
 import { LongTermMemory } from '../memory/long_term_memory.js';
 import { seedMemory } from '../memory/seed_memory.js';
@@ -89,7 +89,15 @@ export class Agent {
         } else if (_resolved.invalid) {
             console.warn(`[ModeProfile] invalid mode_profile=${_resolved.raw} in profile JSON, defaulting to ${_resolved.value}`);
         }
-        this.mode_profile = new ModeProfile(this, _resolved.value);
+        // BT-30b: pull assistant_user from the profile JSON too. Only meaningful
+        // when configured === 'assistant-user'; null/empty otherwise. ModeProfile
+        // tolerates null and only errors at !botMode time if the operator tries
+        // to set assistant-user without supplying a username.
+        const _assistant_user = resolveAssistantUserFromProfileJson(this.prompter.profile);
+        if (_resolved.value === 'assistant-user' && !_assistant_user) {
+            console.warn(`[ModeProfile] configured=assistant-user but profile JSON has no assistant_user field — bot will not pause/resume until !botMode assistant-user <username> is issued`);
+        }
+        this.mode_profile = new ModeProfile(this, _resolved.value, _assistant_user);
 
         this.event_pipeline = new EventPipeline(this);
         convoManager.initAgent(this);
@@ -443,6 +451,19 @@ export class Agent {
 
                 await new Promise((resolve) => setTimeout(resolve, 10000));
                 this.checkAllPlayersPresent();
+
+                // BT-30b: reconcile mode profile against current player presence.
+                // mineflayer's playerJoined event does NOT fire for players who
+                // were online when the bot connected, so an assistant variant
+                // booted into a populated server would never pause until someone
+                // new joined. The 10s wait above is plenty for bot.players to
+                // settle. _setupEventHandlers ran at line 438, so save_data goal
+                // resume (handleLoad) has already touched self_prompter state.
+                try {
+                    this.mode_profile?.reconcileOnSpawn();
+                } catch (e) {
+                    console.warn('[ModeProfile] reconcileOnSpawn threw:', e.message);
+                }
 
             } catch (error) {
                 console.error('Error in spawn event:', error);

@@ -406,15 +406,19 @@ export const actionsList = [
         // next cold boot sees it. Invalid values: error chat to operator,
         // no log line, no state change.
         name: '!botMode',
-        description: 'Set the bot mode profile (survivor, assistant-server, assistant-user, auto). Persists across restarts.',
+        description: 'Set the bot mode profile. assistant-user requires a username (the player whose presence pauses self-prompting). Persists across restarts.',
         params: {
-            'profile': { type: 'string', description: 'One of: survivor, assistant-server, assistant-user, auto.' }
+            'profile': { type: 'string', description: 'One of: survivor, assistant-server, assistant-user, auto.' },
+            'username': { type: 'string', description: 'Required when profile is assistant-user. Ignored otherwise.' }
         },
-        perform: async function (agent, profile) {
+        perform: async function (agent, profile, username) {
             if (!agent.mode_profile) {
                 return 'mode profile system not initialized';
             }
-            const result = agent.mode_profile.setConfigured(profile);
+            // BT-30b: forward optional username arg through to setConfigured.
+            // setConfigured handles the missing-username error path for the
+            // assistant-user profile, and ignores the arg for the other three.
+            const result = agent.mode_profile.setConfigured(profile, username);
             return result.msg;
         }
     },
