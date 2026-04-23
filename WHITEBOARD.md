@@ -64,13 +64,11 @@ Digital workspace for mindcraft-mcgavin bot development. Holds current state, ac
 
 ## In-progress
 
-_(none — BT-30 sub-tickets queued for next pass.)_
-
-## Shipped — awaiting live verification
-
 ### 30. Bot mode profiles: survivor / assistant-server / assistant-user / auto
 
-**Status:** 🚢 shipped 2026-04-22 awaiting live verification (`a903746`, BT-30a) — skeleton wiring: new `ModeProfile` class (`src/agent/mode_profile.js`), `!botMode` command (Rule-7 perimeter: actions.js + human_delays.INSTANT + chunk_wait.COMMAND_WHITELIST), `bot.on('playerJoined')` / `bot.on('playerLeft')` listeners with stub `onPlayerOnlineChange` handler in `agent.js`, profile-JSON read with `auto` default + init warning (`[ModeProfile] no mode_profile in profile JSON, defaulting to auto`), invalid-profile chat-error path, writeback persistence on `!botMode` via `settings.profile_fp` stash in `main.js`. `[ModeProfile]` init + `setConfigured` transition log lines wired. Survivor queue, sticky-return, and 5-min inactivity timer remain queued under BT-30b/c/d. • **Priority:** medium (user-facing control + structured autonomy)
+**Status:** 🚧 in-progress — BT-30a shipped (`a903746`, awaiting live verification); BT-30b underway (Assistant variants + sticky-return) • **Priority:** medium (user-facing control + structured autonomy)
+
+## Shipped — awaiting live verification
 
 Four configured profiles that gate when and how the bot acts. The bot boots into one configured profile from the bot profile JSON and stays there unless an operator command changes it. Configured profile persists across restarts.
 
@@ -80,7 +78,7 @@ Four configured profiles that gate when and how the bot acts. The bot boots into
 - `assistant-user` — self-prompter paused while a named player is online. Resumes when that user logs off.
 - `auto` — dynamic mode. Defaults to survivor behavior. When a player logs in, the bot drops what it's doing and switches to assistant runtime. After 5 minutes of no interaction from that user, runtime drops back to survivor. As soon as the user interacts again, the bot immediately stops what it's doing and re-enters assistant. The configured profile remains `auto` throughout — only the runtime alternates.
 
-**Configuration source.** The active profile is set in the bot profile JSON (e.g., `ThatCoolGuyDude.json`) under a top-level `mode_profile` field — `"mode_profile": "auto"` etc. Operator can override at runtime via `!botMode`; the override persists (see Persistence in Design implications below). Profile JSON is the source of truth on cold boot; runtime overrides win until the next cold boot or until rewritten back to the profile.
+**Configuration source.** The active profile is set in the bot profile JSON (e.g., `ThatCoolGuyDude.json`) under a top-level `mode_profile` field — `"mode_profile": "auto"` etc. The `assistant-user` variant additionally requires a sibling `assistant_user` field naming the target player (e.g., `"assistant_user": "JP"`). Operator can override at runtime via `!botMode <profile> [username]`; both fields are written back to the profile JSON atomically. Profile JSON is the source of truth on cold boot; runtime overrides win until the next cold boot or until rewritten back to the profile.
 
 **Runtime vs configured.** `survivor`, `assistant-server`, and `assistant-user` have runtime == configured (no internal state machine — they just are what they are). `auto` is the only profile whose runtime alternates between `survivor` and `assistant`, driven by player presence + the 5-min idle timer. Sticky-return (immediate flip back to assistant on user interaction) lives only inside `auto`.
 
@@ -116,6 +114,7 @@ Read `src/agent/modes.js` (1321 lines), `src/agent/self_prompter.js` (388 lines)
 - `[ModeProfile]` log line on every state transition for observability (fits the BT-1..BT-12 pattern).
 - **Default `mode_profile` if absent from profile JSON:** `auto`, with a `[ModeProfile] no mode_profile in profile JSON, defaulting to auto` warning emitted at init.
 - **Invalid `!botMode <value>`:** respond with error chat to operator (`unknown profile X — valid: survivor, assistant-server, assistant-user, auto`); no log line, no state change.
+- **`!botMode assistant-user` requires a username argument** (`!botMode assistant-user JP`). Missing-username path returns error chat (`assistant-user requires a username — usage: !botMode assistant-user <username>`); no state change. On valid invocation, both `mode_profile` and `assistant_user` fields are writeback-persisted to profile JSON in a single atomic write. The other three profiles ignore the second arg if supplied. Source of truth on cold boot is the profile JSON's `assistant_user` field.
 
 #### Open design questions for JP
 
@@ -124,7 +123,7 @@ Read `src/agent/modes.js` (1321 lines), `src/agent/self_prompter.js` (388 lines)
 #### BT sequence
 
 - **BT-30a.** Skeleton `ModeProfile` + `!botMode` + `playerJoined/playerLeft` listeners (stub handler) + profile-JSON read with `auto` default + writeback persistence on `!botMode`. Pure wiring; no Survivor queue; no sticky-return; no 5-min timer. `[ModeProfile]` init + transition log lines ship with this.
-- **BT-30b.** Assistant variants (server-wide / single-user / both) + sticky-return rule.
+- **BT-30b.** Assistant variants: real `onPlayerOnlineChange` handler replaces stub. `assistant-server` pauses self_prompter on any player join, resumes on last player leave. `assistant-user` keys off the configured `assistant_user` username (read from profile JSON; settable via `!botMode assistant-user <username>` with both-field writeback). `auto` sticky-return: any player join immediately flips runtime survivor→assistant. New `stoppedReason = 'assistant_player_online'` on self_prompter so BT-30c's 5-min idle timer doesn't preempt deliberate assistant pauses. `[ModeProfile]` runtime-flip log lines on every transition.
 - **BT-30c.** 5-min inactivity timer → runtime drops to Survivor (configured unchanged).
 - **BT-30d.** Survivor tier-up goal queue (predicate-driven via `snapshotInventory`). Manual `!goal` issued during Survivor inserts the new goal at the **top** of the queue (operator intent jumps the line, doesn't override profile).
 - **BT-30e.** Docs close-out: `!botMode` help text, profile-JSON schema note, WB ship entries.
