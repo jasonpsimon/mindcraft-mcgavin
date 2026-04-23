@@ -429,6 +429,15 @@ export const actionsList = [
             'selfPrompt': { type: 'string', description: 'The goal prompt.' },
         },
         perform: async function (agent, prompt) {
+            // BT-30d: in survivor runtime, !goal feeds the ModeProfile queue
+            // (manual-insert at head). The queue's tick-loop is the goal
+            // pusher there — self_prompter.start() shouldn't be called
+            // directly because the queue would race with it on the next
+            // tick. Assistant-runtime path is unchanged.
+            if (agent.mode_profile?.runtime === 'survivor') {
+                const result = agent.mode_profile.manualSurvivorInsert(prompt);
+                return result?.msg || `Goal queued: "${prompt}"`;
+            }
             // If already self-prompting with the same goal, don't reset the loop
             if (!agent.self_prompter.isStopped() && agent.self_prompter.prompt === prompt) {
                 return `Already working on goal: "${prompt}"`;

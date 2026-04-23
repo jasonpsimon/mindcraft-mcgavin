@@ -3,6 +3,9 @@
 // BT-30a: Mode profile state machine (skeleton).
 // BT-30b: Real onPlayerOnlineChange + assistant_user field + dual-writeback.
 // BT-30c: auto idle-timeout drop-back (30-minute sliding window).
+// BT-30d: Survivor tier-up goal queue (parallel queue, predicate-based
+//         advance, manual !goal insert at head, persisted to bots/<name>/
+//         survivor_queue.json).
 //
 // Sits ABOVE the per-flag ModeController in modes.js. Tracks three fields:
 //   configured     — one of: survivor / assistant-server / assistant-user / auto.
@@ -66,7 +69,7 @@
 // `[ModeProfile]` log line (init, setConfigured, runtime change, pause/
 // resume of self_prompter, reconcile). Mirrors the BT-1..BT-12 convention.
 
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 
 export const VALID_PROFILES = Object.freeze([
     'survivor',
@@ -83,6 +86,53 @@ export const DEFAULT_PROFILE = 'auto';
 // configured === 'auto' && runtime === 'assistant'.
 export const IDLE_MS = 30 * 60 * 1000;
 export const IDLE_CHECK_MS = 60 * 1000;
+
+// BT-30d: Survivor tier-up goal queue tick cadence. The tick checks the
+// current head goal's predicate against bot inventory, advances when
+// satisfied, detects natural completion (LLM !endGoal), and (re-)pushes
+// the head goal to self_prompter when needed.
+export const SURVIVOR_TICK_MS = 30 * 1000;
+
+// BT-30d: Seed ladder. Per-tier ordering — the bot finishes the full set
+// of one tier before moving to the next. Predicates are plain item-name
+// match against bot.inventory.slots (which includes armor + offhand,
+// unlike bot.inventory.items()). Manual !goal entries inserted later
+// have predicate=null and only advance on natural completion.
+export const SEED_LADDER = Object.freeze([
+    // Wood tier
+    { goal: 'Craft a wooden pickaxe', predicate: { has: 'wooden_pickaxe', min: 1 } },
+    { goal: 'Craft a wooden sword',   predicate: { has: 'wooden_sword',   min: 1 } },
+    { goal: 'Craft a wooden axe',     predicate: { has: 'wooden_axe',     min: 1 } },
+    // Stone tier
+    { goal: 'Craft a stone pickaxe',  predicate: { has: 'stone_pickaxe',  min: 1 } },
+    { goal: 'Craft a stone sword',    predicate: { has: 'stone_sword',    min: 1 } },
+    { goal: 'Craft a stone axe',      predicate: { has: 'stone_axe',      min: 1 } },
+    // Iron tier (tools + full armor + shield)
+    { goal: 'Craft an iron pickaxe',    predicate: { has: 'iron_pickaxe',    min: 1 } },
+    { goal: 'Craft an iron sword',      predicate: { has: 'iron_sword',      min: 1 } },
+    { goal: 'Craft an iron axe',        predicate: { has: 'iron_axe',        min: 1 } },
+    { goal: 'Craft an iron helmet',     predicate: { has: 'iron_helmet',     min: 1 } },
+    { goal: 'Craft an iron chestplate', predicate: { has: 'iron_chestplate', min: 1 } },
+    { goal: 'Craft iron leggings',      predicate: { has: 'iron_leggings',   min: 1 } },
+    { goal: 'Craft iron boots',         predicate: { has: 'iron_boots',      min: 1 } },
+    { goal: 'Craft a shield',           predicate: { has: 'shield',          min: 1 } },
+    // Diamond tier (tools + full armor)
+    { goal: 'Craft a diamond pickaxe',    predicate: { has: 'diamond_pickaxe',    min: 1 } },
+    { goal: 'Craft a diamond sword',      predicate: { has: 'diamond_sword',      min: 1 } },
+    { goal: 'Craft a diamond axe',        predicate: { has: 'diamond_axe',        min: 1 } },
+    { goal: 'Craft a diamond helmet',     predicate: { has: 'diamond_helmet',     min: 1 } },
+    { goal: 'Craft a diamond chestplate', predicate: { has: 'diamond_chestplate', min: 1 } },
+    { goal: 'Craft diamond leggings',     predicate: { has: 'diamond_leggings',   min: 1 } },
+    { goal: 'Craft diamond boots',        predicate: { has: 'diamond_boots',      min: 1 } },
+    // Netherite tier (tools + full armor)
+    { goal: 'Craft a netherite pickaxe',    predicate: { has: 'netherite_pickaxe',    min: 1 } },
+    { goal: 'Craft a netherite sword',      predicate: { has: 'netherite_sword',      min: 1 } },
+    { goal: 'Craft a netherite axe',        predicate: { has: 'netherite_axe',        min: 1 } },
+    { goal: 'Craft a netherite helmet',     predicate: { has: 'netherite_helmet',     min: 1 } },
+    { goal: 'Craft a netherite chestplate', predicate: { has: 'netherite_chestplate', min: 1 } },
+    { goal: 'Craft netherite leggings',     predicate: { has: 'netherite_leggings',   min: 1 } },
+    { goal: 'Craft netherite boots',        predicate: { has: 'netherite_boots',      min: 1 } },
+]);
 
 /**
  * Collapse a configured profile name to the runtime behavior it implies on
@@ -126,6 +176,22 @@ export class ModeProfile {
         // when configured === 'auto' && runtime === 'assistant'.
         this.lastActivityAt = Date.now();
         this.idleTimer = null;
+
+        // BT-30d: survivor tier-up goal queue. survivorQueue is the parallel
+        // queue of {goal, predicate, source} entries; headIndex points to the
+        // currently-active goal (entries before it are completed history,
+        // entries after are pending). survivorTimer holds the setInterval
+        // handle while armed (only when runtime === 'survivor'). _lastPushedGoal
+        // tracks the most recent goal text we pushed to self_prompter so the
+        // tick can avoid duplicate push noise + can detect natural completion
+        // (LLM !endGoal) by matching against the head when self_prompter goes
+        // STOPPED with stoppedReason='user'. _survivorLoaded is the lazy-load
+        // gate so we read+seed the state file at most once.
+        this.survivorQueue = [];
+        this.headIndex = 0;
+        this.survivorTimer = null;
+        this._lastPushedGoal = null;
+        this._survivorLoaded = false;
 
         console.log(`[ModeProfile] init configured=${this.configured} runtime=${this.runtime} assistant_user=${this.assistant_user || '(none)'} profile_fp=${this.profile_fp || '(none)'}`);
     }
@@ -182,6 +248,16 @@ export class ModeProfile {
         // we don't arm here — sticky-return on the next player join (or
         // reconcileOnSpawn) will arm it.
         this._stopIdleTimer();
+
+        // BT-30d: re-arm the survivor goal-queue timer to match the new
+        // runtime. Stop unconditionally, then arm if we just landed in
+        // survivor. Survivor (always), auto (initial state), and switching
+        // back to survivor from any assistant variant all want the timer
+        // running; assistant variants and auto-in-assistant do not.
+        this._stopSurvivorTimer();
+        if (this.runtime === 'survivor') {
+            this._startSurvivorTimer();
+        }
 
         let writeback = 'skipped';
         if (this.profile_fp) {
@@ -260,6 +336,8 @@ export class ModeProfile {
                     const prev = this.runtime;
                     this.runtime = 'assistant';
                     console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_sticky_return user=${username}`);
+                    // BT-30d: leaving survivor — disarm the goal-queue timer.
+                    this._stopSurvivorTimer();
                     this._pauseForAssistant(`auto sticky-return (${username} joined)`);
                     // BT-30c: arm idle timer. Reset window so the user has a
                     // full 30 minutes from the moment they joined before drop.
@@ -288,6 +366,10 @@ export class ModeProfile {
 
         switch (this.configured) {
             case 'survivor':
+                // BT-30d: survivor profile — always arm the goal-queue timer
+                // on spawn. Idempotent: re-arming is harmless and gives the
+                // queue a fresh push if the bot was reconnected mid-goal.
+                this._startSurvivorTimer();
                 return;
 
             case 'assistant-server':
@@ -307,12 +389,18 @@ export class ModeProfile {
                     const prev = this.runtime;
                     this.runtime = 'assistant';
                     console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_boot_reconcile players_online=${otherCount}`);
+                    // BT-30d: leaving survivor — disarm the goal-queue timer.
+                    this._stopSurvivorTimer();
                     this._pauseForAssistant(`auto boot-reconcile (${otherCount} player(s) already online)`);
                     // BT-30c: arm idle timer; reset window. If the players who
                     // were already on don't address the bot in 30 minutes, we
                     // drop back to survivor.
                     this.lastActivityAt = Date.now();
                     this._startIdleTimer();
+                } else if (this.runtime === 'survivor') {
+                    // No players online — auto stays in survivor. Arm the
+                    // goal-queue timer just like the survivor profile branch.
+                    this._startSurvivorTimer();
                 }
                 return;
 
@@ -419,6 +507,8 @@ export class ModeProfile {
             this.runtime = 'assistant';
             const sinceMs = now - prevActivity;
             console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_chat_return source=${source} since_last_activity_ms=${sinceMs}`);
+            // BT-30d: leaving survivor — disarm the goal-queue timer.
+            this._stopSurvivorTimer();
             this._pauseForAssistant(`auto chat-return (${source})`);
             this._startIdleTimer();
         }
@@ -493,6 +583,11 @@ export class ModeProfile {
         this.runtime = 'survivor';
         console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=${reason}`);
         this._stopIdleTimer();
+        // BT-30d: entering survivor — arm the goal-queue timer so the bot
+        // resumes ladder progression. _startSurvivorTimer immediately calls
+        // _survivorTick once, so the head goal gets pushed without waiting
+        // a full SURVIVOR_TICK_MS.
+        this._startSurvivorTimer();
         // Mirror of _resumeFromAssistant body: resume self_prompter so the
         // bot picks survivor work back up. Idempotent — skips if not paused
         // or no prompt exists.
@@ -515,6 +610,252 @@ export class ModeProfile {
         } catch (e) {
             console.warn(`[ModeProfile] drop: resume threw: ${e.message}`);
         }
+    }
+
+    // --- BT-30d: Survivor tier-up goal queue -----------------------------
+
+    /**
+     * Build the path to this bot's survivor queue state file. Lives next to
+     * memory.json / poi_memory.json under bots/<agent.name>/. Returns null
+     * if agent.name isn't available (very early init), in which case the
+     * caller should skip persistence with a warn.
+     */
+    _survivorStateFp() {
+        const name = this.agent?.name;
+        if (!name) return null;
+        return `./bots/${name}/survivor_queue.json`;
+    }
+
+    /**
+     * Lazy-load (and seed if absent) the survivor queue state file. Idempotent
+     * via _survivorLoaded gate. On any read/parse failure, falls through to
+     * seed-from-SEED_LADDER rather than throwing — losing prior queue progress
+     * is preferable to refusing to make progress at all.
+     */
+    _loadSurvivorQueue() {
+        if (this._survivorLoaded) return;
+        const fp = this._survivorStateFp();
+        if (!fp) {
+            console.warn(`[ModeProfile] survivorQueue load skipped — no agent name`);
+            this._survivorLoaded = true;
+            return;
+        }
+        let loaded = false;
+        try {
+            if (existsSync(fp)) {
+                const raw = readFileSync(fp, 'utf8');
+                const obj = JSON.parse(raw);
+                if (Array.isArray(obj?.queue)) {
+                    this.survivorQueue = obj.queue;
+                    this.headIndex = Number.isInteger(obj.head_index) ? obj.head_index : 0;
+                    if (this.headIndex < 0) this.headIndex = 0;
+                    if (this.headIndex > this.survivorQueue.length) this.headIndex = this.survivorQueue.length;
+                    loaded = true;
+                    console.log(`[ModeProfile] survivorQueue load fp=${fp} queue_len=${this.survivorQueue.length} head=${this.headIndex}`);
+                }
+            }
+        } catch (e) {
+            console.warn(`[ModeProfile] survivorQueue load threw: ${e.message} — re-seeding`);
+        }
+        if (!loaded) {
+            this.survivorQueue = SEED_LADDER.map(e => ({
+                goal: e.goal,
+                predicate: e.predicate,
+                source: 'seed',
+            }));
+            this.headIndex = 0;
+            console.log(`[ModeProfile] survivorQueue seed queue_len=${this.survivorQueue.length} head=${this.headIndex}`);
+            this._persistSurvivorQueue();
+        }
+        this._survivorLoaded = true;
+    }
+
+    /**
+     * Atomic-ish write of the queue state. Best-effort — any failure logs a
+     * warn but does not throw (the in-memory state is still authoritative
+     * for the rest of the session).
+     */
+    _persistSurvivorQueue() {
+        const fp = this._survivorStateFp();
+        if (!fp) return;
+        try {
+            const dir = fp.substring(0, fp.lastIndexOf('/'));
+            if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+            const obj = {
+                version: 1,
+                head_index: this.headIndex,
+                queue: this.survivorQueue,
+            };
+            writeFileSync(fp, JSON.stringify(obj, null, 4));
+        } catch (e) {
+            console.warn(`[ModeProfile] survivorQueue persist threw: ${e.message}`);
+        }
+    }
+
+    /**
+     * Predicate evaluator for queue entries. Currently supports only the
+     * {has: '<item_name>', min: N} shape. Manual entries (predicate=null)
+     * always return false here — they advance only on natural completion.
+     * Scans bot.inventory.slots so armor (5-8) and offhand (45) count.
+     */
+    _evaluatePredicate(predicate) {
+        if (!predicate || typeof predicate !== 'object') return false;
+        if (typeof predicate.has !== 'string' || predicate.has.length === 0) return false;
+        const inv = this.agent?.bot?.inventory;
+        if (!inv) return false;
+        const target = predicate.has;
+        const min = Number.isInteger(predicate.min) && predicate.min > 0 ? predicate.min : 1;
+        let count = 0;
+        const slots = inv.slots || [];
+        for (const slot of slots) {
+            if (slot && slot.name === target) count += slot.count;
+        }
+        return count >= min;
+    }
+
+    /**
+     * Arm the survivor goal-queue check interval. Idempotent. Loads the queue
+     * state file lazily on first arm. Refuses to arm if runtime !== 'survivor'
+     * (the only configuration where the queue tick makes sense). Fires one
+     * immediate tick after arming so the head goal pushes without waiting a
+     * full SURVIVOR_TICK_MS.
+     */
+    _startSurvivorTimer() {
+        if (this.runtime !== 'survivor') return;
+        if (!this._survivorLoaded) this._loadSurvivorQueue();
+        if (this.survivorTimer) {
+            clearInterval(this.survivorTimer);
+            this.survivorTimer = null;
+        }
+        console.log(`[ModeProfile] survivor-timer armed tick_ms=${SURVIVOR_TICK_MS} head=${this.headIndex} queue_len=${this.survivorQueue.length}`);
+        this.survivorTimer = setInterval(() => {
+            try { this._survivorTick(); }
+            catch (e) { console.warn(`[ModeProfile] survivor-tick threw: ${e.message}`); }
+        }, SURVIVOR_TICK_MS);
+        if (this.survivorTimer && typeof this.survivorTimer.unref === 'function') {
+            this.survivorTimer.unref();
+        }
+        // Immediate first tick so the head goal pushes ASAP.
+        try { this._survivorTick(); }
+        catch (e) { console.warn(`[ModeProfile] survivor-tick (initial) threw: ${e.message}`); }
+    }
+
+    /**
+     * Disarm the survivor goal-queue check interval. Idempotent. Called
+     * whenever runtime leaves 'survivor'.
+     */
+    _stopSurvivorTimer() {
+        if (!this.survivorTimer) return;
+        clearInterval(this.survivorTimer);
+        this.survivorTimer = null;
+        console.log(`[ModeProfile] survivor-timer disarmed`);
+    }
+
+    /**
+     * One tick of the queue check. Three jobs in order:
+     *   1. Defensive: if state has drifted out of survivor, disarm.
+     *   2. Detect natural completion of the head: if self_prompter is STOPPED
+     *      with stoppedReason='user' AND the last goal we pushed matches the
+     *      head, the LLM called !endGoal — advance.
+     *   3. Detect predicate satisfaction of the head: if predicate is
+     *      non-null and evaluates true, advance.
+     *   4. Otherwise, ensure the head goal is currently pushed to
+     *      self_prompter (push if STOPPED + we haven't already pushed this
+     *      exact goal text).
+     */
+    _survivorTick() {
+        if (this.runtime !== 'survivor') {
+            this._stopSurvivorTimer();
+            return;
+        }
+        if (this.headIndex >= this.survivorQueue.length) {
+            // Queue drained — nothing to push and nothing to advance.
+            return;
+        }
+        const head = this.survivorQueue[this.headIndex];
+        if (!head) return;
+        const sp = this.agent?.self_prompter;
+
+        // (2) Natural-completion detection.
+        if (sp && sp.isStopped() && sp.stoppedReason === 'user' && this._lastPushedGoal === head.goal) {
+            console.log(`[ModeProfile] survivorQueue advance reason=natural_completion head=${this.headIndex} goal=${JSON.stringify(head.goal)}`);
+            this.headIndex++;
+            this._lastPushedGoal = null;
+            this._persistSurvivorQueue();
+            if (this.headIndex < this.survivorQueue.length) {
+                this._pushHeadGoal('advance-natural');
+            }
+            return;
+        }
+
+        // (3) Predicate-satisfied advance (seed entries only — manual entries
+        // have predicate=null and skip this branch).
+        if (head.predicate && this._evaluatePredicate(head.predicate)) {
+            console.log(`[ModeProfile] survivorQueue advance reason=predicate_satisfied head=${this.headIndex} goal=${JSON.stringify(head.goal)} predicate=${JSON.stringify(head.predicate)}`);
+            this.headIndex++;
+            this._lastPushedGoal = null;
+            this._persistSurvivorQueue();
+            if (this.headIndex < this.survivorQueue.length) {
+                this._pushHeadGoal('advance-predicate');
+            }
+            return;
+        }
+
+        // (4) Ensure the head is being worked on. Push if self_prompter is
+        // stopped (and we haven't already pushed this exact goal — the
+        // latter avoids re-pushing an active goal whose state we're tracking).
+        if (sp && sp.isStopped() && this._lastPushedGoal !== head.goal) {
+            this._pushHeadGoal('initial-push');
+        }
+    }
+
+    /**
+     * Push the current head goal to self_prompter via .start(). Records
+     * _lastPushedGoal so the next tick can detect natural completion via
+     * the stoppedReason='user' signal.
+     */
+    _pushHeadGoal(reason) {
+        if (this.headIndex >= this.survivorQueue.length) return;
+        const head = this.survivorQueue[this.headIndex];
+        const sp = this.agent?.self_prompter;
+        if (!sp) {
+            console.warn(`[ModeProfile] survivorQueue push requested but no self_prompter reason=${reason}`);
+            return;
+        }
+        console.log(`[ModeProfile] survivorQueue push reason=${reason} head=${this.headIndex} goal=${JSON.stringify(head.goal)}`);
+        this._lastPushedGoal = head.goal;
+        try {
+            sp.start(head.goal);
+        } catch (e) {
+            console.warn(`[ModeProfile] survivorQueue push threw: ${e.message}`);
+        }
+    }
+
+    /**
+     * Operator-driven manual goal insertion. Splices the new entry at
+     * headIndex so it becomes the new head — the previous head shifts down
+     * by one and resumes after the manual goal completes. Predicate is null
+     * (manual goals only advance via natural completion / LLM !endGoal).
+     * Called from actions.js !goal handler when runtime === 'survivor'.
+     */
+    manualSurvivorInsert(goalText) {
+        if (typeof goalText !== 'string' || goalText.trim().length === 0) {
+            return { ok: false, msg: 'manual goal requires non-empty text' };
+        }
+        if (!this._survivorLoaded) this._loadSurvivorQueue();
+        const entry = { goal: goalText.trim(), predicate: null, source: 'manual' };
+        // Splice at headIndex — the new entry becomes the head.
+        this.survivorQueue.splice(this.headIndex, 0, entry);
+        console.log(`[ModeProfile] survivorQueue manual-insert head=${this.headIndex} goal=${JSON.stringify(entry.goal)} queue_len=${this.survivorQueue.length}`);
+        // Reset _lastPushedGoal so the immediate push below isn't suppressed
+        // by the dedupe gate, AND so stale natural-completion of the previous
+        // goal can't trigger a spurious advance on the next tick.
+        this._lastPushedGoal = null;
+        this._persistSurvivorQueue();
+        // Force-push the new head immediately. self_prompter.start() will
+        // overwrite any in-flight prompt.
+        this._pushHeadGoal('manual-insert');
+        return { ok: true, msg: `Goal queued at head: "${entry.goal}"` };
     }
 
     // --- Persistence (mirrors ModeController) ----------------------------
