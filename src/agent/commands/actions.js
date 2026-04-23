@@ -406,7 +406,7 @@ export const actionsList = [
         // next cold boot sees it. Invalid values: error chat to operator,
         // no log line, no state change.
         name: '!botMode',
-        description: 'Set the bot mode profile. assistant-user requires a username (the player whose presence pauses self-prompting). Persists across restarts.',
+        description: 'Set the bot mode profile (one of: survivor, assistant-server, assistant-user, auto). survivor works through a tier-up goal queue (wood→stone→iron→diamond→netherite tools+armor) — manual !goal calls splice in at the queue head and jump the line. assistant-server pauses self-prompting whenever any player is online; assistant-user pauses only for a named player (username arg required). auto starts in survivor, flips to assistant on player join or chat-to-bot, and drops back to survivor after 30 minutes of no chat addressed to the bot. Persists across restarts via writeback to the bot profile JSON (mode_profile + assistant_user fields).',
         params: {
             'profile': { type: 'string', description: 'One of: survivor, assistant-server, assistant-user, auto.' },
             'username': { type: 'string', description: 'Required when profile is assistant-user. Ignored otherwise.' }
