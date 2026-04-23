@@ -647,7 +647,12 @@ export class ModeProfile {
                 const obj = JSON.parse(raw);
                 if (Array.isArray(obj?.queue)) {
                     this.survivorQueue = obj.queue;
-                    this.headIndex = Number.isInteger(obj.head_index) ? obj.head_index : 0;
+                    // Accept either headIndex (current schema) or head_index
+                    // (legacy pre-camelCase-normalization). Persist always
+                    // writes the camelCase key going forward.
+                    this.headIndex = Number.isInteger(obj.headIndex)
+                        ? obj.headIndex
+                        : (Number.isInteger(obj.head_index) ? obj.head_index : 0);
                     if (this.headIndex < 0) this.headIndex = 0;
                     if (this.headIndex > this.survivorQueue.length) this.headIndex = this.survivorQueue.length;
                     loaded = true;
@@ -683,7 +688,7 @@ export class ModeProfile {
             if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
             const obj = {
                 version: 1,
-                head_index: this.headIndex,
+                headIndex: this.headIndex,
                 queue: this.survivorQueue,
             };
             writeFileSync(fp, JSON.stringify(obj, null, 4));
