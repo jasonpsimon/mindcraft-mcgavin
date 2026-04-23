@@ -2,6 +2,7 @@
 //
 // BT-30a: Mode profile state machine (skeleton).
 // BT-30b: Real onPlayerOnlineChange + assistant_user field + dual-writeback.
+// BT-30c: auto idle-timeout drop-back (30-minute sliding window).
 //
 // Sits ABOVE the per-flag ModeController in modes.js. Tracks three fields:
 //   configured     — one of: survivor / assistant-server / assistant-user / auto.
@@ -21,7 +22,23 @@
 //                    (sticky-return on join) + the BT-30c 5-min idle timer
 //                    (drop-back on inactivity — not yet shipped).
 //
-// THIS COMMIT (BT-30b): real Assistant variant handlers + sticky-return for auto.
+// THIS COMMIT (BT-30c): auto idle-timeout drop-back.
+//   - 30-minute sliding window of "activity" (chat addressed to bot only —
+//     mention or DM. Ambient in-range chatter does NOT count).
+//   - Idle timer is armed only when configured === 'auto' && runtime ===
+//     'assistant'. Disarmed in every other configuration.
+//   - Check loop runs at 60s cadence (IDLE_CHECK_MS). When it sees
+//     now - lastActivityAt >= IDLE_MS, it fires _dropToSurvivor: flips
+//     runtime → 'survivor' and resumes self_prompter (mirror of
+//     _resumeFromAssistant). Drop fires regardless of player presence —
+//     that's the whole point of auto.
+//   - Sticky-return from BT-30b is the inverse path: any qualifying chat
+//     activity from any player flips runtime back to 'assistant' and
+//     re-pauses self_prompter (handled here in noteActivity, not the
+//     onPlayerOnlineChange path which only fires on join/leave).
+//   - reconcileOnSpawn arms the timer when boot lands in auto+assistant.
+//
+// EARLIER (BT-30b): real Assistant variant handlers + sticky-return for auto.
 //   - assistant-server pauses self_prompter on FIRST player join
 //     (other-count goes 0→1) and resumes on LAST player leave (1→0).
 //   - assistant-user pauses on the named player's join, resumes on their leave.
@@ -60,6 +77,13 @@ export const VALID_PROFILES = Object.freeze([
 
 export const DEFAULT_PROFILE = 'auto';
 
+// BT-30c: auto idle-timeout window (30 minutes) and check cadence (60s).
+// IDLE_MS is the sliding window — runtime drops to survivor when no
+// qualifying activity has been recorded for at least this long while
+// configured === 'auto' && runtime === 'assistant'.
+export const IDLE_MS = 30 * 60 * 1000;
+export const IDLE_CHECK_MS = 60 * 1000;
+
 /**
  * Collapse a configured profile name to the runtime behavior it implies on
  * cold boot. assistant-server and assistant-user both resolve to 'assistant'
@@ -95,6 +119,13 @@ export class ModeProfile {
         // in which case writeback is skipped (with a warn) but the in-memory
         // configured value still updates.
         this.profile_fp = agent?._profile_fp || null;
+
+        // BT-30c: auto idle-timeout state. lastActivityAt is the sliding
+        // window anchor — any qualifying chat-to-bot resets it. idleTimer
+        // holds the setInterval handle while armed. Both meaningful only
+        // when configured === 'auto' && runtime === 'assistant'.
+        this.lastActivityAt = Date.now();
+        this.idleTimer = null;
 
         console.log(`[ModeProfile] init configured=${this.configured} runtime=${this.runtime} assistant_user=${this.assistant_user || '(none)'} profile_fp=${this.profile_fp || '(none)'}`);
     }
@@ -145,6 +176,12 @@ export class ModeProfile {
         this.configured = next;
         this.assistant_user = next_assistant_user;
         this.runtime = initialRuntimeFor(next);
+
+        // BT-30c: any operator-driven profile change disarms the idle timer.
+        // initialRuntimeFor('auto') is 'survivor', so even when entering auto
+        // we don't arm here — sticky-return on the next player join (or
+        // reconcileOnSpawn) will arm it.
+        this._stopIdleTimer();
 
         let writeback = 'skipped';
         if (this.profile_fp) {
@@ -216,14 +253,18 @@ export class ModeProfile {
 
             case 'auto':
                 // Sticky-return: any player join flips runtime → assistant.
-                // Leave is intentionally NO-OP — BT-30c's 5-min idle timer
+                // Leave is intentionally NO-OP — BT-30c's 30-min idle timer
                 // owns the assistant → survivor drop-back when the player
-                // stays connected but stops interacting.
+                // stays connected but stops addressing the bot.
                 if (event === 'joined' && this.runtime === 'survivor') {
                     const prev = this.runtime;
                     this.runtime = 'assistant';
                     console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_sticky_return user=${username}`);
                     this._pauseForAssistant(`auto sticky-return (${username} joined)`);
+                    // BT-30c: arm idle timer. Reset window so the user has a
+                    // full 30 minutes from the moment they joined before drop.
+                    this.lastActivityAt = Date.now();
+                    this._startIdleTimer();
                 }
                 return;
 
@@ -267,6 +308,11 @@ export class ModeProfile {
                     this.runtime = 'assistant';
                     console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_boot_reconcile players_online=${otherCount}`);
                     this._pauseForAssistant(`auto boot-reconcile (${otherCount} player(s) already online)`);
+                    // BT-30c: arm idle timer; reset window. If the players who
+                    // were already on don't address the bot in 30 minutes, we
+                    // drop back to survivor.
+                    this.lastActivityAt = Date.now();
+                    this._startIdleTimer();
                 }
                 return;
 
@@ -338,6 +384,136 @@ export class ModeProfile {
             sp.start();
         } catch (e) {
             console.warn(`[ModeProfile] resume threw: ${e.message}`);
+        }
+    }
+
+    // --- BT-30c: auto idle-timeout drop-back -----------------------------
+
+    /**
+     * Record a qualifying activity event from the agent. Called from
+     * agent.js's whisper handler (always) and chat handler (when the
+     * message contains the bot's name — i.e., a mention). In-range chatter
+     * between other players does NOT call this.
+     *
+     * Two effects:
+     *   1. Resets the sliding window (lastActivityAt = now).
+     *   2. If configured === 'auto' && runtime === 'survivor', flips runtime
+     *      back to assistant and pauses self_prompter — the inverse of the
+     *      idle-timeout drop, so a user who comes back after the bot has
+     *      already returned to survivor is immediately re-grabbed.
+     *
+     * For configured = assistant-server / assistant-user, noteActivity is a
+     * no-op beyond resetting lastActivityAt (which is unused for those
+     * profiles since the timer never arms). Survivor: pure no-op.
+     */
+    noteActivity(source) {
+        const now = Date.now();
+        const prevActivity = this.lastActivityAt;
+        this.lastActivityAt = now;
+
+        if (this.configured !== 'auto') return;
+
+        if (this.runtime === 'survivor') {
+            // Sticky-return via chat: user spoke after a previous idle drop.
+            const prev = this.runtime;
+            this.runtime = 'assistant';
+            const sinceMs = now - prevActivity;
+            console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=auto_chat_return source=${source} since_last_activity_ms=${sinceMs}`);
+            this._pauseForAssistant(`auto chat-return (${source})`);
+            this._startIdleTimer();
+        }
+        // runtime === 'assistant': just resetting the window; timer is
+        // already armed and will see the new lastActivityAt on its next tick.
+    }
+
+    /**
+     * Arm the idle-check interval. Idempotent: clears any existing timer
+     * before scheduling a new one. Only meaningful when configured === 'auto'
+     * && runtime === 'assistant'; callers are responsible for that gate.
+     */
+    _startIdleTimer() {
+        if (this.idleTimer) {
+            clearInterval(this.idleTimer);
+            this.idleTimer = null;
+        }
+        console.log(`[ModeProfile] idle-timer armed window_ms=${IDLE_MS} check_ms=${IDLE_CHECK_MS}`);
+        this.idleTimer = setInterval(() => {
+            try {
+                this._checkIdle();
+            } catch (e) {
+                console.warn(`[ModeProfile] idle-check threw: ${e.message}`);
+            }
+        }, IDLE_CHECK_MS);
+        // Don't keep the Node event loop alive purely for this timer.
+        if (this.idleTimer && typeof this.idleTimer.unref === 'function') {
+            this.idleTimer.unref();
+        }
+    }
+
+    /**
+     * Disarm the idle-check interval. Idempotent. Called from setConfigured
+     * (any profile change), from _dropToSurvivor (after the drop, no longer
+     * needed), and would also be called from any future shutdown path.
+     */
+    _stopIdleTimer() {
+        if (!this.idleTimer) return;
+        clearInterval(this.idleTimer);
+        this.idleTimer = null;
+        console.log(`[ModeProfile] idle-timer disarmed`);
+    }
+
+    /**
+     * One tick of the idle check. If we've been quiet for >= IDLE_MS while
+     * configured=auto && runtime=assistant, fire _dropToSurvivor. Otherwise
+     * no-op (next tick will re-check). Defensive guard: if state has drifted
+     * away from auto+assistant somehow, disarm rather than firing.
+     */
+    _checkIdle() {
+        if (this.configured !== 'auto' || this.runtime !== 'assistant') {
+            // State drifted out of the only configuration where this timer
+            // makes sense. Disarm — whoever moved us out should already have
+            // called _stopIdleTimer, but this is the belt-and-suspenders.
+            this._stopIdleTimer();
+            return;
+        }
+        const idleMs = Date.now() - this.lastActivityAt;
+        if (idleMs >= IDLE_MS) {
+            this._dropToSurvivor(`auto_idle_timeout idle_ms=${idleMs}`);
+        }
+    }
+
+    /**
+     * Auto idle drop-back: flip runtime assistant → survivor and resume
+     * self_prompter. Mirrors _resumeFromAssistant's pause-skip semantics.
+     * Disarms the idle timer (we're no longer in assistant). Drop fires
+     * regardless of player presence — that's the whole point of auto.
+     */
+    _dropToSurvivor(reason) {
+        const prev = this.runtime;
+        this.runtime = 'survivor';
+        console.log(`[ModeProfile] runtime ${prev}->${this.runtime} reason=${reason}`);
+        this._stopIdleTimer();
+        // Mirror of _resumeFromAssistant body: resume self_prompter so the
+        // bot picks survivor work back up. Idempotent — skips if not paused
+        // or no prompt exists.
+        const sp = this.agent?.self_prompter;
+        if (!sp) {
+            console.warn(`[ModeProfile] drop requested but no self_prompter reason=${reason}`);
+            return;
+        }
+        if (!sp.isPaused()) {
+            console.log(`[ModeProfile] drop: resume skipped — self_prompter not paused (state=${sp.state}) reason=${reason}`);
+            return;
+        }
+        if (!sp.prompt) {
+            console.log(`[ModeProfile] drop: resume skipped — no prompt to resume reason=${reason}`);
+            return;
+        }
+        console.log(`[ModeProfile] drop: resuming self_prompter reason=${reason}`);
+        try {
+            sp.start();
+        } catch (e) {
+            console.warn(`[ModeProfile] drop: resume threw: ${e.message}`);
         }
     }
 

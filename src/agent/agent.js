@@ -770,11 +770,44 @@ export class Agent {
 
 		this.respondFunc = respondFunc;
 
-        this.bot.on('whisper', respondFunc);
+        // BT-30c: helper — does this open-chat message address the bot?
+        // Used to decide whether the message counts as "activity" for the
+        // auto idle-timeout sliding window. Whispers always count; chat
+        // counts only when the bot's name appears (case-insensitive
+        // substring match — mineflayer doesn't expose @-mention semantics
+        // and the underlying server may not either, so substring is the
+        // pragmatic check).
+        const _isBotMention = (message) => {
+            if (!this.name || !message) return false;
+            return message.toLowerCase().includes(this.name.toLowerCase());
+        };
+
+        this.bot.on('whisper', (username, message) => {
+            if (username !== this.name) {
+                // BT-30c: every non-self whisper is by definition addressed
+                // to the bot — count as activity for the auto idle timer.
+                try {
+                    this.mode_profile?.noteActivity(`whisper from ${username}`);
+                } catch (e) {
+                    console.warn('[ModeProfile] noteActivity (whisper) threw:', e.message);
+                }
+            }
+            respondFunc(username, message);
+        });
 
         this.bot.on('chat', (username, message) => {
             if (serverProxy.getNumOtherAgents() > 0) return;
             // only respond to open chat messages when there are no other agents
+            // BT-30c: count chat as activity ONLY when it mentions the bot's
+            // name. Ambient chatter between other players does not reset the
+            // idle window — JP's spec, "chat addressed to bot only".
+            if (username !== this.name && _isBotMention(message)) {
+                try {
+                    this.mode_profile?.noteActivity(`mention from ${username}`);
+                } catch (e) {
+                    console.warn('[ModeProfile] noteActivity (chat) threw:', e.message);
+                }
+            }
             respondFunc(username, message);
         });
 
