@@ -400,6 +400,25 @@ export const actionsList = [
         }
     },
     {
+        // BT-30a: switch the bot's mode profile at runtime. Validates against
+        // the four configured profile strings; persists by writing the new
+        // value back to the bot profile JSON's `mode_profile` field so the
+        // next cold boot sees it. Invalid values: error chat to operator,
+        // no log line, no state change.
+        name: '!botMode',
+        description: 'Set the bot mode profile (survivor, assistant-server, assistant-user, auto). Persists across restarts.',
+        params: {
+            'profile': { type: 'string', description: 'One of: survivor, assistant-server, assistant-user, auto.' }
+        },
+        perform: async function (agent, profile) {
+            if (!agent.mode_profile) {
+                return 'mode profile system not initialized';
+            }
+            const result = agent.mode_profile.setConfigured(profile);
+            return result.msg;
+        }
+    },
+    {
         name: '!goal',
         description: 'Set a goal prompt to endlessly work towards with continuous self-prompting.',
         params: {

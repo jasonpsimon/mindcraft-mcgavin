@@ -76,5 +76,9 @@ Mindcraft.init(false, settings.mindserver_port, settings.auto_open_ui);
 for (let profile of settings.profiles) {
     const profile_json = JSON.parse(readFileSync(profile, 'utf8'));
     settings.profile = profile_json;
+    // BT-30a: stash the absolute path string so ModeProfile can write the
+    // updated mode_profile field back on !botMode (settings.profile is the
+    // parsed JSON, not the path). Read in agent.js during init.
+    settings.profile_fp = profile;
     Mindcraft.createAgent(settings);
 }

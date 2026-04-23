@@ -116,6 +116,7 @@ export class ChunkWait {
             '!clearGoal',
             '!endGoal',
             '!setMode',
+            '!botMode',
             '!stats',
             '!help',
         ]);

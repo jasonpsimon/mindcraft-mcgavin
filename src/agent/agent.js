@@ -9,6 +9,7 @@ import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
+import { ModeProfile, resolveConfiguredFromProfileJson } from './mode_profile.js';
 import { ConfidenceEngine, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from '../memory/index.js';
 import { LongTermMemory } from '../memory/long_term_memory.js';
 import { seedMemory } from '../memory/seed_memory.js';
@@ -76,6 +77,20 @@ export class Agent {
         this.long_term_memory = new LongTermMemory(this.name, null, settings.long_term_memory || {});
         this.confidence_engine = new ConfidenceEngine(this.name, settings.confidence_engine || {});
         this.self_prompter = new SelfPrompter(this);
+
+        // BT-30a: ModeProfile state machine. Reads `mode_profile` from the
+        // bot profile JSON; defaults to 'auto' with a warning if absent;
+        // ignores invalid values (also defaulting to 'auto' with a warning).
+        // The profile_fp stash from main.js powers !botMode writeback.
+        this._profile_fp = settings.profile_fp || null;
+        const _resolved = resolveConfiguredFromProfileJson(this.prompter.profile);
+        if (_resolved.defaulted) {
+            console.warn(`[ModeProfile] no mode_profile in profile JSON, defaulting to ${_resolved.value}`);
+        } else if (_resolved.invalid) {
+            console.warn(`[ModeProfile] invalid mode_profile=${_resolved.raw} in profile JSON, defaulting to ${_resolved.value}`);
+        }
+        this.mode_profile = new ModeProfile(this, _resolved.value);
+
         this.event_pipeline = new EventPipeline(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
@@ -735,11 +750,33 @@ export class Agent {
 		this.respondFunc = respondFunc;
 
         this.bot.on('whisper', respondFunc);
-        
+
         this.bot.on('chat', (username, message) => {
             if (serverProxy.getNumOtherAgents() > 0) return;
             // only respond to open chat messages when there are no other agents
             respondFunc(username, message);
+        });
+
+        // BT-30a: mineflayer player presence listeners. Today these only
+        // route through ModeProfile.onPlayerOnlineChange (logs only). BT-30b
+        // adds the assistant-server / assistant-user / auto branching that
+        // pauses or resumes self_prompter based on configured profile.
+        // Filter self-events: bot's own login/logout fires these too.
+        this.bot.on('playerJoined', (player) => {
+            try {
+                if (!player || player.username === this.name) return;
+                this.mode_profile?.onPlayerOnlineChange('joined', player.username);
+            } catch (e) {
+                console.warn('[ModeProfile] playerJoined handler threw:', e.message);
+            }
+        });
+        this.bot.on('playerLeft', (player) => {
+            try {
+                if (!player || player.username === this.name) return;
+                this.mode_profile?.onPlayerOnlineChange('left', player.username);
+            } catch (e) {
+                console.warn('[ModeProfile] playerLeft handler threw:', e.message);
+            }
         });
 
         // Set up auto-eat. startAt bumped from 14 -> 19 (2026-04-15) so the

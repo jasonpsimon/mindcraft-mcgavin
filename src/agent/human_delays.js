@@ -45,6 +45,7 @@ const INSTANT = new Set([
     '!endGoal',
     '!endConversation',
     '!setMode',
+    '!botMode',
     '!addRule',
     '!removeRule',
     '!viewRules',
