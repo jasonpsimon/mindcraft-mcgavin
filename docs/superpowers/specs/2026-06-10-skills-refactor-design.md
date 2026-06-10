@@ -25,7 +25,7 @@ src/agent/library/
     _shared.js           ← createMovements, installSafePathfinderDefaults,
                             _isInAnyProtectedZone, expandBlockFamily,
                             _equipBestToolFor, _isUnderground, _isDangerous,
-                            _sealHole, _findSealBlock, log, wait
+                            log, wait
     crafting.js          ← craftRecipe, smeltItem, clearNearestFurnace
     combat.js            ← attackNearest, attackEntity, defendSelf
     blocks.js            ← collectBlock, breakBlockAt, placeBlock, pickupNearbyItems, autoBreakStuckPlant
@@ -121,7 +121,7 @@ Each step ends with `vitest run` passing, then a commit.
 | Step | Action | Commit message |
 |---|---|---|
 | 0 | Add Vitest, `contract.test.js`, `createMockBot()` | `test: add contract tests and mock-bot factory` |
-| 1 | Extract `_shared.js` (createMovements, zone checks, expandBlockFamily, log, wait, _equipBestToolFor, _isUnderground, _isDangerous, _sealHole, _findSealBlock). **Note:** `world.js` already imports `createMovements` from `skills.js` — leave that import pointing at the barrel, do not update `world.js`. The cycle is safe because the import is only dereferenced at call time (documented in world.js). | `refactor: extract shared skill infrastructure` |
+| 1 | Extract `_shared.js` (createMovements, zone checks, expandBlockFamily, log, wait, _equipBestToolFor, _isUnderground, _isDangerous). Note: `_sealHole` and `_findSealBlock` stay in `inventory.js` by encapsulation — they only serve toss operations. **Note:** `world.js` already imports `createMovements` from `skills.js` — leave that import pointing at the barrel, do not update `world.js`. The cycle is safe because the import is only dereferenced at call time (documented in world.js). | `refactor: extract shared skill infrastructure` |
 | 2 | Extract `crafting.js` + tests | `refactor: extract crafting skills` |
 | 3 | Extract `combat.js` + tests | `refactor: extract combat skills` |
 | 4 | Extract `social.js` + tests | `refactor: extract social skills` |
