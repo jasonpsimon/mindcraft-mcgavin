@@ -1,7 +1,7 @@
 # Skills.js Refactor — Design Spec
 
 **Date:** 2026-06-10  
-**Scope:** Split `src/agent/library/skills.js` (5574 lines, ~50 exports) into focused modules, with a Vitest test suite written first to verify correctness at every step without launching a Minecraft server.
+**Scope:** Split `src/agent/library/skills.js` (5574 lines, 56 public exports) into focused modules, with a Vitest test suite written first to verify correctness at every step without launching a Minecraft server.
 
 ---
 
@@ -23,7 +23,9 @@ src/agent/library/
   skills.js              ← barrel: export * from './skills/...' (~10 lines, no logic)
   skills/
     _shared.js           ← createMovements, installSafePathfinderDefaults,
-                            _isInAnyProtectedZone, expandBlockFamily, private helpers
+                            _isInAnyProtectedZone, expandBlockFamily,
+                            _equipBestToolFor, _isUnderground, _isDangerous,
+                            _sealHole, _findSealBlock, log, wait
     crafting.js          ← craftRecipe, smeltItem, clearNearestFurnace
     combat.js            ← attackNearest, attackEntity, defendSelf
     blocks.js            ← collectBlock, breakBlockAt, placeBlock, pickupNearbyItems, autoBreakStuckPlant
@@ -50,7 +52,7 @@ tests/
   helpers/
     mock-bot.js          ← createMockBot() factory
   skills/
-    contract.test.js     ← all ~42 public exports present + correct type
+    contract.test.js     ← all 56 public exports present + correct type
     crafting.test.js
     combat.test.js
     blocks.test.js
@@ -71,7 +73,7 @@ Written before any source change. Imports `skills.js` and asserts every public e
 
 ### Unit tests per module
 
-Cover functions testable without a Minecraft server (~60% of exports):
+Cover functions testable without a Minecraft server (~60% of exports). The total public export count is 56 — includes non-wrapSkill exports such as `log`, `wait`, `createMovements`, `installSafePathfinderDefaults`, `loadPlayerStructures`, `detectNearbyVillages`, `startVillageScanner`, `detectNearbyPlayerStructures`, `startPlayerStructureScanner`, `startPlayerStructureWatcher`, `goToGoal`, `scanForCaverns`, `autoBreakStuckPlant`.
 
 | File | What is tested |
 |---|---|
@@ -119,16 +121,16 @@ Each step ends with `vitest run` passing, then a commit.
 | Step | Action | Commit message |
 |---|---|---|
 | 0 | Add Vitest, `contract.test.js`, `createMockBot()` | `test: add contract tests and mock-bot factory` |
-| 1 | Extract `_shared.js` (createMovements, zone checks, expandBlockFamily) | `refactor: extract shared skill infrastructure` |
+| 1 | Extract `_shared.js` (createMovements, zone checks, expandBlockFamily, log, wait, _equipBestToolFor, _isUnderground, _isDangerous, _sealHole, _findSealBlock). **Note:** `world.js` already imports `createMovements` from `skills.js` — leave that import pointing at the barrel, do not update `world.js`. The cycle is safe because the import is only dereferenced at call time (documented in world.js). | `refactor: extract shared skill infrastructure` |
 | 2 | Extract `crafting.js` + tests | `refactor: extract crafting skills` |
 | 3 | Extract `combat.js` + tests | `refactor: extract combat skills` |
 | 4 | Extract `social.js` + tests | `refactor: extract social skills` |
-| 5 | Extract `inventory.js` + tests | `refactor: extract inventory skills` |
+| 5 | Extract `blocks.js` + tests (heavy consumer of `_shared.js` — acts as integration check) | `refactor: extract block skills` |
 | 6 | Extract `movement.js` + tests | `refactor: extract movement skills` |
-| 7 | Extract `blocks.js` + tests | `refactor: extract block skills` |
+| 7 | Extract `inventory.js` + tests | `refactor: extract inventory skills` |
 | 8 | Extract `exploration.js` + tests | `refactor: extract exploration skills` |
 | 9 | Extract `zones.js` + tests | `refactor: extract zone/escape skills` |
-| 10 | Convert `skills.js` to barrel | `refactor: skills.js is now a pure re-export barrel` |
+| 10 | Convert `skills.js` to barrel. Use **named re-exports** for `_shared.js` to avoid leaking private helpers: `export { log, wait, createMovements, installSafePathfinderDefaults } from './skills/_shared.js'`. Use `export *` for all domain modules (they export only public symbols). Do NOT use `export * from './skills/_shared.js'` — that would expose `_equipBestToolFor`, `_isUnderground`, etc. as new public exports, breaking the zero-change contract. | `refactor: skills.js is now a pure re-export barrel` |
 
 ---
 
