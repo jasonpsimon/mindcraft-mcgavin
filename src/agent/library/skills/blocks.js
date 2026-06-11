@@ -4,3 +4,4 @@ export async function collectBlock() {}
 export async function pickupNearbyItems() {}
 export async function breakBlockAt() {}
 export async function autoBreakStuckPlant() {}
+export async function useToolOnBlock() {}
