@@ -11,7 +11,6 @@ import { wrapSkill } from '../../observability/skill_lifecycle.js';
 export { log, wait, createMovements, installSafePathfinderDefaults } from './skills/_shared.js';
 // Import domain-internal helpers (not re-exported).
 import {
-  log, wait, createMovements, installSafePathfinderDefaults,
   expandBlockFamily, BLOCK_FAMILIES,
   _isInSpawnZone, _isNearProtectedZone, _isInAnyProtectedZone,
   _equipBestToolFor, _isUnderground, _isDangerous,

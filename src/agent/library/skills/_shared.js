@@ -11,11 +11,7 @@
  *   SPAWN_PROTECTION_RADIUS, SPAWN_ESCAPE_DISTANCE
  */
 
-import * as mc from "../../../utils/mcdata.js";
-import * as world from "../world.js";
 import pf from 'mineflayer-pathfinder';
-import Vec3 from 'vec3';
-import settings from "../../../../settings.js";
 
 // Block-family equivalence: when the LLM requests a specific variant but any
 // member of the family would satisfy the goal, expand the search to all members.
