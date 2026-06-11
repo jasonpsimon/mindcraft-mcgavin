@@ -69,6 +69,7 @@ export function createMockBot(options = {}) {
     activateBlock: vi.fn().mockResolvedValue(undefined),
     openVillager: vi.fn().mockResolvedValue({ trades: [], close: vi.fn() }),
     lookAt: vi.fn().mockResolvedValue(undefined),
+    modes: { pause: vi.fn(), unpause: vi.fn() },
     waitForChunksToLoad: vi.fn().mockResolvedValue(undefined),
     world: { getBlock: vi.fn().mockReturnValue(null) },
   };
