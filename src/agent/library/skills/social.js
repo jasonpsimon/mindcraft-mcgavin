@@ -1,9 +1,7 @@
-import * as mc from "../../../utils/mcdata.js";
 import * as world from "../world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import { wrapSkill } from '../../../observability/skill_lifecycle.js';
-import { withBotLock } from '../../bot_mutex.js';
 import { log, createMovements } from './_shared.js';
 // cross-domain
 import { useToolOnBlock } from './blocks.js';
