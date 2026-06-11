@@ -5,14 +5,9 @@ import settings from "../../../../settings.js";
 import { withBotLock } from '../../bot_mutex.js';
 import { wrapSkill } from '../../../observability/skill_lifecycle.js';
 import { log } from './_shared.js';
-import { getDiscardSuggestions } from '../../../utils/inventory_utils.js';
-
-// cross-domain: crafting calls these during complex recipes.
-// Loaded lazily so this module resolves before blocks.js/movement.js are created
-// (Tasks 8 and 9). At runtime these modules will exist; the dynamic import
-// overhead is negligible compared to the async I/O these functions perform.
-async function _getBlocks() { return import('./blocks.js'); }
-async function _getMovement() { return import('./movement.js'); }
+// cross-domain: crafting calls these during complex recipes
+import { placeBlock, collectBlock } from './blocks.js';
+import { goToNearestBlock } from './movement.js';
 
 
 async function _impl_craftRecipe(bot, itemName, num=1) {
@@ -26,7 +21,8 @@ async function _impl_craftRecipe(bot, itemName, num=1) {
      **/
     let placedTable = false;
 
-    if (mc.getItemCraftingRecipes(itemName).length == 0) {
+    const craftingRecipes = mc.getItemCraftingRecipes(itemName);
+    if (!craftingRecipes || craftingRecipes.length == 0) {
         log(bot, `${itemName} is either not an item, or it does not have a crafting recipe!`);
         return false;
     }
@@ -46,7 +42,6 @@ async function _impl_craftRecipe(bot, itemName, num=1) {
             // Try to place crafting table
             let hasTable = world.getInventoryCounts(bot)['crafting_table'] > 0;
             if (hasTable) {
-                const { placeBlock } = await _getBlocks();
                 let pos = world.getNearestFreeSpace(bot, 1, 6);
                 await placeBlock(bot, 'crafting_table', pos.x, pos.y, pos.z);
                 craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
@@ -66,25 +61,15 @@ async function _impl_craftRecipe(bot, itemName, num=1) {
     }
     if (!recipes || recipes.length === 0) {
         const missingItems = Object.entries(mc.getItemCraftingRecipes(itemName)[0][0]).map(([key, value]) => `${key}: ${value}`).join(', ');
-        const emptySlots = bot.inventory.emptySlotCount();
-        let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}.`;
-        if (emptySlots === 0) {
-            const currentGoal = bot._goalHint || null;
-            const { message: discardAdvice } = getDiscardSuggestions(bot, 5, currentGoal);
-            hint += ` Your inventory is FULL (0 empty slots). ${discardAdvice} Then use !collectBlocks to gather what you need.`;
-        } else {
-            hint += ` Use !collectBlocks to gather the missing items.`;
-        }
+        let hint = `You do not have the resources to craft a ${itemName}. It requires: ${missingItems}. Use !collectBlocks to gather the missing items.`;
         log(bot, hint);
         if (placedTable) {
-            const { collectBlock } = await _getBlocks();
             await collectBlock(bot, 'crafting_table', 1);
         }
         return false;
     }
 
     if (craftingTable && bot.entity.position.distanceTo(craftingTable.position) > 4) {
-        const { goToNearestBlock } = await _getMovement();
         await goToNearestBlock(bot, 'crafting_table', 4, craftingTableRange);
     }
 
@@ -99,7 +84,6 @@ async function _impl_craftRecipe(bot, itemName, num=1) {
     if(craftLimit.num<num) log(bot, `Not enough ${craftLimit.limitingResource} to craft ${num}, crafted ${craftLimit.num}. You now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     else log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     if (placedTable) {
-        const { collectBlock } = await _getBlocks();
         await collectBlock(bot, 'crafting_table', 1);
     }
 
@@ -138,7 +122,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
         // Try to place furnace
         let hasFurnace = world.getInventoryCounts(bot)['furnace'] > 0;
         if (hasFurnace) {
-            const { placeBlock } = await _getBlocks();
             let pos = world.getNearestFreeSpace(bot, 1, furnaceRange);
             await placeBlock(bot, 'furnace', pos.x, pos.y, pos.z);
             furnaceBlock = world.getNearestBlock(bot, 'furnace', furnaceRange);
@@ -150,7 +133,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
         return false;
     }
     if (bot.entity.position.distanceTo(furnaceBlock.position) > 4) {
-        const { goToNearestBlock } = await _getMovement();
         await goToNearestBlock(bot, 'furnace', 4, furnaceRange);
     }
     bot.modes.pause('unstuck');
@@ -165,7 +147,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
         // This only checks if the furnace has an input item, but it may not be smelting it and should be cleared.
         log(bot, `The furnace is currently smelting ${mc.getItemName(input_item.type)}.`);
         if (placedFurnace) {
-            const { collectBlock } = await _getBlocks();
             await collectBlock(bot, 'furnace', 1);
         }
         return false;
@@ -175,7 +156,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
     if (!inv_counts[itemName] || inv_counts[itemName] < num) {
         log(bot, `You do not have enough ${itemName} to smelt.`);
         if (placedFurnace) {
-            const { collectBlock } = await _getBlocks();
             await collectBlock(bot, 'furnace', 1);
         }
         return false;
@@ -187,7 +167,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
         if (!fuel) {
             log(bot, `You have no fuel to smelt ${itemName}, you need coal, charcoal, or wood.`);
             if (placedFurnace) {
-                const { collectBlock } = await _getBlocks();
                 await collectBlock(bot, 'furnace', 1);
             }
             return false;
@@ -199,7 +178,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
         if (fuel.count < put_fuel) {
             log(bot, `You don't have enough ${fuel.name} to smelt ${num} ${itemName}; you need ${put_fuel}.`);
             if (placedFurnace) {
-                const { collectBlock } = await _getBlocks();
                 await collectBlock(bot, 'furnace', 1);
             }
             return false;
@@ -242,7 +220,6 @@ async function _impl_smeltItem(bot, itemName, num=1) {
     await bot.closeWindow(furnace);
 
     if (placedFurnace) {
-        const { collectBlock } = await _getBlocks();
         await collectBlock(bot, 'furnace', 1);
     }
     if (total === 0) {
@@ -273,7 +250,6 @@ async function _impl_clearNearestFurnace(bot) {
         return false;
     }
     if (bot.entity.position.distanceTo(furnaceBlock.position) > 4) {
-        const { goToNearestBlock } = await _getMovement();
         await goToNearestBlock(bot, 'furnace', 4, 32);
     }
 
