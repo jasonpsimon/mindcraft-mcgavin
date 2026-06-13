@@ -155,6 +155,7 @@ export function mustCollectManually(blockName) {
 }
 
 export function getItemId(itemName) {
+    if (!mcdata) return null;
     let item = mcdata.itemsByName[itemName];
     if (item) {
         return item.id;
@@ -245,6 +246,7 @@ export function getAllBiomes() {
 }
 
 export function getItemCraftingRecipes(itemName) {
+    if (!mcdata) return null;
     let itemId = getItemId(itemName);
     if (!mcdata.recipes[itemId]) {
         return null;
