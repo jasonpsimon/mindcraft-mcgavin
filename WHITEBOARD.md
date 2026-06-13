@@ -1250,21 +1250,9 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 
 ## Known issues (deferred — out of scope for current to-do)
 
-### #17. `skills.js` decomposition — deferred (2026-04-21)
+### #17. `skills.js` decomposition — ✅ shipped (2026-06-13)
 
-**Status:** known issue, not actively planned • **Origin:** audit finding L6.1
-
-`src/agent/library/skills.js` is ~5,500 lines and remains 4× the next-largest file. Every perimeter-audit (Rule 7) still walks the full file, and every new skill lands here by default. The pain is real but slow-burn.
-
-**Why deferred.** Considered a staged movement extraction 2026-04-21 (movements.js scaffold → goTo* family → escape*). Judged unsafe given: (a) movement is the hottest path in the bot, (b) the nested hold-point stack (wrapSkill → withBotLock → spawn-protection → escape zones) spans this file and would need to be split across a new file boundary while still evolving, (c) multi-BT surgery on tangled code without a visual call-graph tool puts the verification burden on Claude alone, which JP flagged as exceeding current tooling safety margin.
-
-**Revisit when any of these hit:**
-- A visual call-graph / flowchart tool is available for diff review.
-- skills.js grows past ~8,000 lines.
-- A specific audit gets concretely blocked by file scope (not just "the grep is long").
-- #12 Stage 2's `createMovements` extraction point demands follow-through.
-
-**Down-payment option if the pain acute-flares before a full revisit:** extract only pure-helper leaves (`_isDangerous`, `autoBreakStuckPlant`) in one tiny BT, no `_core.js`, no goTo* touched.
+**Status:** ✅ shipped — see Recently completed • **Origin:** audit finding L6.1
 
 ---
 
@@ -1307,6 +1295,36 @@ Let the LLM do what it's good at — open-ended goal-setting, natural-language c
 ---
 
 ## Recently completed
+
+### #17. `skills.js` decomposition — domain modules + Vitest suite (`9b98e2b`, 2026-06-13)
+
+**What shipped.** `src/agent/library/skills.js` split from 5 574 lines into 8 domain modules + 1 shared infrastructure file, guarded by a 128-test Vitest suite written before touching any source.
+
+New files under `src/agent/library/skills/`:
+- `_shared.js` — `log`, `wait`, `createMovements`, `installSafePathfinderDefaults`, and shared private helpers (`expandBlockFamily`, `_isInSpawnZone`, `_isInAnyProtectedZone`, `_equipBestToolFor`, `_isUnderground`, `_isDangerous`, …)
+- `crafting.js` — `craftRecipe`, `smeltItem`, `clearNearestFurnace`
+- `combat.js` — `attackNearest`, `attackEntity`, `defendSelf`
+- `social.js` — `consume`, `tillAndSow`, `activateNearestBlock`, `showVillagerTrades`, `tradeWithVillager`, `useToolOn`
+- `blocks.js` — `collectBlock`, `pickupNearbyItems`, `breakBlockAt`, `placeBlock`, `autoBreakStuckPlant`
+- `movement.js` — `goToGoal`, `goToPosition`, `goToNearestBlock`, `goToNearestEntity`, `goToPlayer`, `followPlayer`, `moveAway`, `moveAwayFromEntity`, `avoidEnemies`, `stay`, `useDoor`, `goToBed`
+- `inventory.js` — `equip`, `replaceBrokenArmor`, `safeToss`, `safeTossBatch`, `discard`, `putInChest`, `takeFromChest`, `viewChest`, `giveToPlayer`
+- `exploration.js` — `digDown`, `digUp`, `goToSurface`, `scanForCaverns`, `placeTorchAt`, `placeBreadcrumbTorch`
+- `zones.js` — `loadPlayerStructures`, `detectNearbyVillages`, `startVillageScanner`, `detectNearbyPlayerStructures`, `startPlayerStructureScanner`, `startPlayerStructureWatcher`, `escapeSpawnZone`, `escapeProtectedZone`
+
+`skills.js` is now a 12-line pure re-export barrel. All 56 public exports intact; all external callers (`agent.js`, `commands/actions.js`, `modes.js`, `auto_recovery.js`) import unchanged.
+
+**Test suite.** New `tests/` tree with Vitest: `tests/helpers/mock-bot.js` (`createMockBot` factory), `tests/skills/contract.test.js` (all 56 exports verified), plus per-domain unit tests (`crafting`, `combat`, `social`, `blocks`, `movement`, `inventory`, `exploration`, `zones`). 128 tests, 9 files, all green.
+
+**Key architectural decisions preserved:**
+- Barrel uses **named re-exports** for `_shared.js` (not `export *`) to avoid leaking private helpers as public symbols.
+- `_sealHole` / `_findSealBlock` stay in `inventory.js` by encapsulation — they only serve `safeToss`/`safeTossBatch`.
+- `autoLight` stays in `blocks.js` (called from `_impl_collectBlock`, not exploration).
+- Cross-domain imports work cleanly: `crafting.js` → `blocks.js` + `movement.js`, `combat.js` → `movement.js` + `blocks.js`, etc.
+- `world.js` still imports `createMovements` from the barrel (`skills.js`) — the circular reference is safe in ESM (import only dereferenced at call time).
+
+**Status:** ✅ 128 tests green on `develop`. Awaiting merge and live verification (next `node main.js` cold boot).
+
+---
 
 ### #6. Strategic torch placement underground — strict left-wall convention (`ccf3f53`, 2026-04-20)
 
